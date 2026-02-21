@@ -1,0 +1,138 @@
+#!/bin/bash
+# Pre-commit hook for AI-assisted development
+# Fast checks that run before each commit
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Track if any checks fail
+FAILED=0
+
+# ============================================================================
+# 1. Secrets Detection
+# ============================================================================
+echo "  • Checking for secrets..."
+if command -v detect-secrets >/dev/null 2>&1; then
+    if [ -f ".secrets.baseline" ]; then
+        if ! detect-secrets scan --baseline .secrets.baseline 2>/dev/null; then
+            echo "    ✗ Potential secrets detected!"
+            echo "      Review findings and update .secrets.baseline if needed"
+            FAILED=1
+        fi
+    else
+        echo "    ⚠ No .secrets.baseline found. Run: detect-secrets scan --baseline .secrets.baseline"
+    fi
+else
+    echo "    ⚠ detect-secrets not installed (optional but recommended)"
+fi
+
+# ============================================================================
+# 2. Large Files
+# ============================================================================
+echo "  • Checking for large files..."
+large_files=$(git diff --cached --name-only --diff-filter=d | while read file; do
+    if [ -f "$file" ]; then
+        size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "0")
+        if [ "$size" -gt 5242880 ]; then  # 5MB
+            echo "$file ($((size / 1048576))MB)"
+        fi
+    fi
+done)
+
+if [ -n "$large_files" ]; then
+    echo "    ✗ Large files detected (>5MB):"
+    echo "$large_files" | sed 's/^/      /'
+    echo "      Consider using Git LFS or excluding from repo"
+    FAILED=1
+fi
+
+# ============================================================================
+# 3. Merge Conflict Markers
+# ============================================================================
+echo "  • Checking for merge conflict markers..."
+if git diff --cached | grep -E '^(<<<<<<<|=======|>>>>>>>)' >/dev/null; then
+    echo "    ✗ Merge conflict markers found"
+    FAILED=1
+fi
+
+# ============================================================================
+# 4. Language-Specific Checks
+# ============================================================================
+
+# Rust
+if [ -f "Cargo.toml" ]; then
+    echo "  • Rust: Checking format..."
+    if ! cargo fmt -- --check 2>/dev/null; then
+        echo "    ✗ Code not formatted. Run: cargo fmt"
+        FAILED=1
+    fi
+
+    echo "  • Rust: Running clippy (fast checks)..."
+    if ! cargo clippy --all-targets -- -D warnings -W clippy::all 2>/dev/null; then
+        echo "    ✗ Clippy warnings found"
+        FAILED=1
+    fi
+fi
+
+# JavaScript/TypeScript
+if [ -f "package.json" ]; then
+    echo "  • JS/TS: Checking format..."
+    if command -v npx >/dev/null 2>&1; then
+        if ! npx prettier --check . 2>/dev/null; then
+            echo "    ✗ Code not formatted. Run: npx prettier --write ."
+            FAILED=1
+        fi
+
+        echo "  • JS/TS: Running linter..."
+        if ! npx eslint . 2>/dev/null; then
+            echo "    ✗ ESLint warnings found"
+            FAILED=1
+        fi
+    fi
+fi
+
+# Python
+if [ -f "setup.py" ] || [ -f "pyproject.toml" ]; then
+    echo "  • Python: Checking format..."
+    if command -v black >/dev/null 2>&1; then
+        if ! black --check . 2>/dev/null; then
+            echo "    ✗ Code not formatted. Run: black ."
+            FAILED=1
+        fi
+    fi
+
+    if command -v ruff >/dev/null 2>&1; then
+        echo "  • Python: Running ruff..."
+        if ! ruff check . 2>/dev/null; then
+            echo "    ✗ Ruff checks failed"
+            FAILED=1
+        fi
+    fi
+fi
+
+# .NET
+if [ -f "*.csproj" ] || [ -f "*.sln" ]; then
+    echo "  • .NET: Checking format..."
+    if command -v dotnet >/dev/null 2>&1; then
+        if ! dotnet format --verify-no-changes 2>/dev/null; then
+            echo "    ✗ Code not formatted. Run: dotnet format"
+            FAILED=1
+        fi
+    fi
+fi
+
+# ============================================================================
+# Result
+# ============================================================================
+if [ $FAILED -eq 1 ]; then
+    echo ""
+    echo "❌ Pre-commit checks failed"
+    echo "   Fix the issues above or use --no-verify to bypass (not recommended)"
+    echo "   CI will re-run these checks and enforce them."
+    exit 1
+else
+    echo ""
+    echo "✅ Pre-commit checks passed"
+    exit 0
+fi
