@@ -11,17 +11,20 @@ This document covers deployment, monitoring, cost management, and operational ru
 CogWorks ships as a single Rust binary. Domain services are separate processes — each may be a separate binary, a container, or a script. The Rust domain service may be distributed alongside CogWorks for convenience but runs as a separate process.
 
 **Required runtime dependencies:**
+
 - GitHub API access (token or GitHub App credentials)
 - LLM API access (Anthropic API key)
 - At least one registered domain service (running and reachable via configured transport)
 - Network access (GitHub API, LLM API)
 
 **Domain service dependencies (owned by each domain service, NOT by CogWorks):**
+
 - Working copy management (git clone, checkout, etc.)
 - Domain-specific toolchains (e.g., Rust toolchain for Rust domain service, KiCad for KiCad domain service)
 - Domain-specific fixtures and test infrastructure
 
 **No required infrastructure:**
+
 - No database
 - No message queue
 - No cache server
@@ -198,12 +201,14 @@ Remaining                269,200    $6.56
 **Symptom**: Pipeline fails with "domain service unreachable" or health check failure during pre-flight.
 
 **Diagnosis**:
+
 1. Run `cogworks health <service-name>` to check the specific domain service.
 2. Verify the domain service process is running (`ps`, `systemctl status`, etc.).
 3. Check the configured socket path or URL in `.cogworks/services.toml`.
 4. Check domain service logs for crash or startup failure.
 
 **Resolution**:
+
 1. Restart the domain service process.
 2. Verify the socket/port is not in use by another process.
 3. If the service was never started, start it with the appropriate command for that domain.
@@ -216,11 +221,13 @@ Remaining                269,200    $6.56
 **Symptom**: `cogworks health` returns unhealthy for a service, or pipeline logs show "version mismatch" or "missing capabilities".
 
 **Diagnosis**:
+
 1. Run `cogworks health <service-name>` — check reported version and capabilities.
 2. Compare reported Extension API version against CogWorks' required version.
 3. Check which capabilities the pipeline requires vs. what the service reports.
 
 **Resolution**:
+
 1. If version mismatch: update the domain service to a compatible Extension API version.
 2. If missing capabilities: the domain service may not support all operations CogWorks needs. Either update the domain service or limit work items to operations it supports.
 3. After updating, verify with `cogworks health <service-name>`.
@@ -232,11 +239,13 @@ Remaining                269,200    $6.56
 **Symptom**: Pipeline fails during architecture or review stage with "interface registry validation error".
 
 **Diagnosis**:
+
 1. Check the error message — it will identify the specific TOML file and issue (schema error, conflict, unknown domain).
 2. Review the `.cogworks/interfaces/` directory.
 3. Validate TOML syntax with a standalone TOML validator.
 
 **Resolution**:
+
 1. If schema error: fix the TOML file to match the interface definition schema.
 2. If parameter conflict: resolve conflicting definitions across files for the same interface parameter.
 3. If unknown domain: either register the missing domain service in `.cogworks/services.toml` or remove the interface definition referencing it.
@@ -249,10 +258,12 @@ Remaining                269,200    $6.56
 **Symptom**: Work item has `cogworks:processing` label but no progress.
 
 **Diagnosis**:
+
 1. Check the timestamp comment associated with the processing label.
 2. If > 30 minutes old, the previous invocation likely crashed.
 
 **Resolution**:
+
 1. Remove `cogworks:processing` label.
 2. Re-invoke: `cogworks process <issue-url>`.
 3. The system will read GitHub state and resume from the last completed step.
@@ -264,6 +275,7 @@ Remaining                269,200    $6.56
 **Symptom**: Work item has `cogworks:stage:failed` label.
 
 **Diagnosis**:
+
 1. Read the failure comment on the work item.
 2. Check the stage and specific error.
 
@@ -285,6 +297,7 @@ Remaining                269,200    $6.56
 **Symptom**: A sub-work-item PR was closed or changes requested.
 
 **Resolution**:
+
 1. Address review comments on the PR (or close it).
 2. Apply `cogworks:status:pending` label to the sub-work-item issue.
 3. Re-invoke: `cogworks process <parent-issue-url>`.
@@ -297,10 +310,12 @@ Remaining                269,200    $6.56
 **Symptom**: CogWorks logs show rate limit warnings or the CLI exits with a rate-limit error.
 
 **Diagnosis**:
+
 1. Check `X-RateLimit-Reset` time in the logs.
 2. Determine if other tools are sharing the same token.
 
 **Resolution**:
+
 1. Wait for rate limit reset.
 2. If recurring, use a dedicated GitHub App installation token for CogWorks.
 3. Review pipeline for unnecessary API calls.
@@ -312,11 +327,13 @@ Remaining                269,200    $6.56
 **Symptom**: Cost report shows high token usage.
 
 **Diagnosis**:
+
 1. Check per-stage breakdown. Which stage consumed the most tokens?
 2. Check retry counts. High retries indicate the LLM is struggling with the task.
 3. Check context sizes. Large context = more input tokens per call.
 
 **Resolution**:
+
 1. If retries are high: improve prompt templates, clarify interfaces/specifications.
 2. If context is large: review what's being included. Consider more targeted context assembly.
 3. If the work item is inherently complex: break it into smaller work items.
@@ -329,11 +346,13 @@ Remaining                269,200    $6.56
 **Symptom**: Sub-work-item fails scenario validation with satisfaction score below threshold.
 
 **Diagnosis**:
+
 1. Check the scenario validation results in the audit trail.
 2. Identify which scenarios failed and which trajectories did not satisfy acceptance criteria.
 3. Review the observed behaviors for failing trajectories.
 
 **Resolution**:
+
 1. If the same scenario fails consistently: the generated code has a genuine issue. Remediation will feed the failures back to the code generator.
 2. If failures are sporadic (different trajectories fail on each run): non-deterministic behavior. Investigate the source (race condition, timing dependency, external state).
 3. If all trajectories for all scenarios fail: likely an environment or Digital Twin issue, not a code issue. Check twin status and environment configuration.
@@ -345,12 +364,14 @@ Remaining                269,200    $6.56
 **Symptom**: Scenario validation fails with "twin failed to start" or similar error.
 
 **Diagnosis**:
+
 1. Check the twin provisioner logs.
 2. Verify the twin binary exists at the configured path.
 3. Check for port conflicts (twin may require specific ports).
 4. Attempt to start the twin manually to see detailed error output.
 
 **Resolution**:
+
 1. If twin binary is missing: file a work item to build the twin using the twin specification.
 2. If port conflict: identify and stop the conflicting process, or configure the twin to use a different port range.
 3. If twin crashes on startup: review twin logs, fix the twin code, and rebuild.
@@ -362,11 +383,13 @@ Remaining                269,200    $6.56
 **Symptom**: Warnings about stale summaries in logs, or unexpectedly large context allocations.
 
 **Diagnosis**:
+
 1. Check summary cache directory (`.cogworks/summaries/` by default).
 2. Compare file modification times between source modules and cached summaries.
 3. Check summary regeneration configuration (`regenerate_on` setting).
 
 **Resolution**:
+
 1. If many summaries are stale: trigger a batch regeneration (if `regenerate_on` is manual, run the summary generation job).
 2. If summaries are missing entirely: summaries are optional. Context assembly will fall back to including full files or excluding them. Not an error, but reduces context efficiency.
 3. If regeneration is taking too long: summaries are cached to avoid this. Check if the summary generation job is configured correctly and using an appropriate (cheap, fast) model.
@@ -378,12 +401,14 @@ Remaining                269,200    $6.56
 **Operation**: Adding or updating scenario specifications.
 
 **Process**:
+
 1. Scenario specifications are version-controlled in `.cogworks/scenarios/` (or configured directory).
 2. Scenarios are authored and maintained by humans, not generated by CogWorks.
 3. Each scenario file declares which modules/interfaces it covers.
 4. After adding/updating scenarios, no CogWorks action is needed—scenarios are loaded automatically on next pipeline run for applicable sub-work-items.
 
 **Best practices**:
+
 - Keep scenarios focused (one behavior per scenario).
 - Use deterministic assertions where possible (cheaper, faster, more reliable than LLM-as-judge).
 - Document explicit failure criteria for safety-critical conditions (e.g., "motor never exceeds safe angle").
@@ -396,12 +421,14 @@ Remaining                269,200    $6.56
 **Operation**: Building, updating, or deprecating Digital Twins.
 
 **Process**:
+
 1. Twins are built and maintained via the standard CogWorks pipeline (file a work item with the twin specification).
 2. Each twin includes a conformance test suite that validates behavior against the specification.
 3. Periodically (recommended: weekly or on upstream service releases), run conformance tests against the real service to detect drift.
 4. When drift is detected, file a work item to update the twin.
 
 **Best practices**:
+
 - Prioritize twins for high-volume or high-failure-risk dependencies (e.g., hardware simulators, rate-limited APIs).
 - Document twin fidelity requirements clearly (which behaviors must match exactly, which can be simplified).
 - Twins should be fast (support 100+ concurrent scenarios).

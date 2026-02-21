@@ -26,6 +26,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 ```
 
 **Untrusted inputs:**
+
 1. GitHub Issue body and title (user-supplied, arbitrary content)
 2. LLM responses (non-deterministic, potentially nonsensical or adversarial)
 3. Repository source code (could contain adversarial patterns)
@@ -34,6 +35,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 6. Interface registry definitions (human-authored but could be malformed)
 
 **Trusted inputs:**
+
 1. Prompt templates (version-controlled by CogWorks maintainers)
 2. Output schemas (version-controlled by CogWorks maintainers)
 3. Extension API schemas (version-controlled by CogWorks maintainers)
@@ -50,6 +52,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: LLM produces output that bypasses safety constraints, generates malicious code, or leaks system prompt content.
 
 **Mitigations**:
+
 1. **Schema validation**: All LLM outputs are validated against strict JSON schemas. Even if the LLM is manipulated, the output must conform to the expected structure. Freeform text fields in the schema are limited to specific purposes (rationale, description) and are never executed.
 2. **Output is never executed**: CogWorks never executes LLM output as code within its own process. Generated code is written to files and validated by external tools (compiler, linter).
 3. **Prompt structure**: Issue body is clearly delimited in the prompt template (e.g., inside XML/Markdown tags) and framed as data, not instructions.
@@ -66,6 +69,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Generated code contains vulnerabilities introduced through context manipulation.
 
 **Mitigations**:
+
 1. **Security review pass**: The review gate includes a dedicated security review that checks for common vulnerability patterns (injection, TOCTOU, buffer issues, etc.).
 2. **Architecture compliance review**: Verifies generated code matches the approved specification — unauthorized additions would be flagged as unplanned.
 3. **Schema-validated output**: The LLM must produce output matching a defined schema. Arbitrary code execution instructions won't match the schema.
@@ -82,6 +86,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Unauthorized repository access, branch protection bypass, or data exfiltration.
 
 **Mitigations**:
+
 1. **Minimum-privilege token**: The token must have only: `issues:write`, `pull_requests:write`, `contents:write` (for specific repos), and no admin or organization-level permissions.
 2. **GitHub App (preferred)**: Use a GitHub App installation token scoped to specific repositories, rather than a Personal Access Token. App tokens have more granular permissions and automatic rotation.
 3. **No token in context**: The token is never included in LLM context packages, audit trails, or generated code. It is used only by the GitHub Client infrastructure module.
@@ -96,6 +101,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Unauthorized LLM usage, potentially large bills.
 
 **Mitigations**:
+
 1. **Environment variable only**: API key loaded from environment variable, never from configuration files or command-line arguments (which may be visible in process listings).
 2. **No key in logs**: Structured logging must redact any field matching known secret patterns.
 3. **No key in context**: Context assembly explicitly excludes environment variables and credentials from context packages.
@@ -110,6 +116,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Excessive LLM costs.
 
 **Mitigations**:
+
 1. **Cost budget**: Per-pipeline cost budget (REQ-CODE-004). Pipeline halts when budget exceeded.
 2. **Retry budget**: Per-sub-work-item retry limit (REQ-CODE-003). Escalation when exceeded.
 3. **Scope threshold**: Scope estimation triggers escalation for large work items (REQ-CLASS-003).
@@ -125,6 +132,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Generated artifacts bypass validation checks; malicious diagnostic messages manipulate LLM behavior during retry loops.
 
 **Mitigations**:
+
 1. **Response schema validation**: All domain service responses are validated against the Extension API JSON Schema. Responses that don't conform are rejected.
 2. **Structured diagnostics only**: Diagnostics fields (message, artifact, location) are treated as data, never as instructions. They are included in LLM context as structured data with clear delimiters.
 3. **Domain service isolation**: Domain services run as separate processes. A compromised domain service cannot access CogWorks' memory, secrets, or GitHub token.
@@ -142,6 +150,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Work item is permanently stuck until manual intervention.
 
 **Mitigations**:
+
 1. **Timestamp tracking**: When applying the processing label, post a comment recording the timestamp. On subsequent invocations, check if the lock is older than a configurable timeout (default: 30 minutes).
 2. **Stale lock override**: If the lock is stale, remove it and proceed. Log a warning.
 3. **Cleanup on exit**: The step function removes the processing label in a `finally` / drop guard, even on error.
@@ -155,6 +164,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Service degradation for other GitHub integrations using the same token.
 
 **Mitigations**:
+
 1. **Proactive tracking**: Read `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers from every GitHub API response. If remaining budget drops below a configurable threshold (default: 500), slow down or pause.
 2. **Efficient API usage**: Batch reads, avoid redundant calls within a single invocation.
 3. **Dedicated token**: Use a dedicated GitHub App installation token for CogWorks, not shared with other tools.
@@ -169,6 +179,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Pipeline stalls or fails; work items cannot be processed for the affected domain.
 
 **Mitigations**:
+
 1. **Health check before use**: CogWorks calls `health_check` on each required domain service before starting a pipeline step. Unhealthy services cause early failure with a clear diagnostic.
 2. **Operation timeouts**: Every Extension API call has a configurable timeout. Hung domain services are detected and the operation fails gracefully.
 3. **Progress polling timeout**: Long-running operations that stop reporting progress are terminated after a configurable inactivity timeout.
@@ -184,6 +195,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Unauthorized actors could intercept domain service traffic, inject false validation results, or exfiltrate repository content.
 
 **Mitigations**:
+
 1. **Unix socket default**: The default transport is Unix domain socket, which is inherently local and protected by filesystem permissions. This eliminates network-level attacks for local deployments.
 2. **TLS for network transport**: When HTTP/gRPC transport is configured, TLS is required. Plaintext network transport must not be supported in production configurations.
 3. **Authentication (future)**: The Extension API design must not preclude adding authentication (e.g., mutual TLS, API tokens) in a future release. The protocol envelope includes reserved fields for auth metadata.
@@ -200,6 +212,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 **Impact**: Artifacts that violate intended cross-domain contracts are accepted by the pipeline.
 
 **Mitigations**:
+
 1. **Version-controlled**: Interface definitions live in the repository and are subject to normal code review and branch protection rules.
 2. **Schema validation**: CogWorks validates all interface definitions against a strict JSON/TOML schema. Malformed definitions are rejected with clear error messages.
 3. **Audit trail**: Changes to interface definitions are tracked in git history. CogWorks logs which interface definitions were loaded for each pipeline run.
