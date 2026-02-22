@@ -1,0 +1,435 @@
+# Operations
+
+This document covers deployment, monitoring, cost management, and operational runbook for CogWorks.
+
+---
+
+## Deployment Model
+
+### CogWorks Binary + Domain Services
+
+CogWorks ships as a single Rust binary. Domain services are separate processes — each may be a separate binary, a container, or a script. The Rust domain service may be distributed alongside CogWorks for convenience but runs as a separate process.
+
+**Required runtime dependencies:**
+
+- GitHub API access (token or GitHub App credentials)
+- LLM API access (Anthropic API key)
+- At least one registered domain service (running and reachable via configured transport)
+- Network access (GitHub API, LLM API)
+
+**Domain service dependencies (owned by each domain service, NOT by CogWorks):**
+
+- Working copy management (git clone, checkout, etc.)
+- Domain-specific toolchains (e.g., Rust toolchain for Rust domain service, KiCad for KiCad domain service)
+- Domain-specific fixtures and test infrastructure
+
+**No required infrastructure:**
+
+- No database
+- No message queue
+- No cache server
+- No container orchestration (for CLI mode)
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `COGWORKS_GITHUB_TOKEN` | Yes | GitHub API token (PAT or App installation token) |
+| `COGWORKS_LLM_API_KEY` | Yes | Anthropic API key |
+| `COGWORKS_LOG_LEVEL` | No | Log verbosity (default: `info`) |
+| `COGWORKS_LOG_FORMAT` | No | Log format: `json` (default) or `text` (for local dev) |
+| `COGWORKS_TEMP_DIR` | No | Base directory for temporary files (default: system temp) |
+| `COGWORKS_DOMAIN_SERVICES_CONFIG` | No | Path to domain service registration config (default: `.cogworks/services.toml`) |
+
+Domain service configuration is specified in a registration file (default `.cogworks/services.toml`) rather than environment variables, to support multiple services with varying transports:
+
+```toml
+# .cogworks/services.toml
+
+[[services]]
+name = "rust"
+transport = "unix"
+path = "/tmp/cogworks-rust.sock"
+# health_check_timeout_ms = 5000  # optional, default: 5000
+
+[[services]]
+name = "kicad"
+transport = "http"
+url = "http://localhost:9100"
+```
+
+### CLI Interface
+
+```
+cogworks process <issue-url>     # Process a single work item (one step)
+cogworks process-all <repo>      # Scan repo for trigger labels, process each
+cogworks status <issue-url>      # Display current pipeline state (read-only)
+cogworks cost-report <issue-url> # Display cost report for a pipeline
+cogworks health                  # Check health of all registered domain services
+cogworks health <service-name>   # Check health of a specific domain service
+```
+
+### Future: Poll Mode
+
+```
+cogworks poll <repo> --interval 60   # Check every 60 seconds for work items
+```
+
+Wraps `process-all` in a timer loop. Same core logic.
+
+### Future: Webhook Mode
+
+```
+cogworks serve --port 8080    # Listen for GitHub App webhook events
+```
+
+Wraps `process` in an HTTP handler. Each webhook event triggers one step function invocation.
+
+---
+
+## Monitoring and Observability
+
+### Structured Logging
+
+All log output is structured JSON. Every log entry includes:
+
+```json
+{
+  "timestamp": "2026-02-16T14:30:00Z",
+  "level": "info",
+  "pipeline_id": 42,
+  "stage": "code_generation",
+  "sub_work_item": 5,
+  "action": "llm_call",
+  "result": "success",
+  "duration_ms": 3200,
+  "tokens_input": 4500,
+  "tokens_output": 1200,
+  "message": "Generated code for sub-work-item #5"
+}
+```
+
+### Key Metrics (for future service mode)
+
+When running as a service, expose these metrics:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `cogworks_pipelines_active` | Gauge | Number of pipelines currently in progress |
+| `cogworks_pipelines_completed_total` | Counter | Pipelines completed (by status: success/failed/escalated) |
+| `cogworks_stage_duration_seconds` | Histogram | Time spent in each stage |
+| `cogworks_llm_calls_total` | Counter | LLM API calls (by stage, model, result) |
+| `cogworks_llm_tokens_total` | Counter | Tokens consumed (by stage, model, direction) |
+| `cogworks_llm_cost_dollars` | Counter | Accumulated LLM cost |
+| `cogworks_github_api_calls_total` | Counter | GitHub API calls (by endpoint, status) |
+| `cogworks_github_rate_limit_remaining` | Gauge | Remaining GitHub API budget |
+| `cogworks_retries_total` | Counter | Retry attempts (by stage, reason) |
+| `cogworks_escalations_total` | Counter | Escalations (by reason) |
+| `cogworks_domain_service_calls_total` | Counter | Domain service calls (by service, method, result) |
+| `cogworks_domain_service_latency_seconds` | Histogram | Domain service call latency (by service, method) |
+| `cogworks_domain_service_health` | Gauge | Domain service health status (by service: 1=healthy, 0=unhealthy) |
+| `cogworks_constraint_validation_total` | Counter | Constraint validation runs (by result: pass, warning, block) |
+
+For CLI mode, these are logged as structured events. For service mode, they are exposed as Prometheus metrics.
+
+### Audit Trail on GitHub
+
+Every pipeline run produces an audit trail posted as comments on the parent work item:
+
+1. **Stage entry comment**: When entering a new stage, post a summary of what will be done.
+2. **Stage completion comment**: When a stage completes, post a summary of what was done (LLM calls made, validations passed, artifacts created).
+3. **Failure comment**: When a stage fails, post a structured failure report.
+4. **Cost comment**: On pipeline completion (or failure), post a cost report.
+
+---
+
+## Cost Management
+
+### Budget Configuration
+
+```toml
+# .cogworks/config.toml
+
+[budgets]
+pipeline_max_tokens = 500000        # Total tokens per pipeline
+pipeline_max_cost_dollars = 10.00   # Total cost per pipeline
+sub_work_item_max_retries = 5       # Retries per sub-work-item
+review_max_remediation_cycles = 3   # Review→fix cycles per sub-work-item
+```
+
+### Cost Tracking
+
+Costs are tracked in-memory during a pipeline run and written to GitHub on completion:
+
+```
+Pipeline #42 Cost Report
+========================
+Stage                    Tokens      Cost
+─────────────────────────────────────────
+1. Task Classification     2,300    $0.03
+2. Architecture           15,000    $0.22
+3. Interface Design        8,500    $0.12
+4. Planning               12,000    $0.18
+5. Code Generation
+   SWI #1                 45,000    $0.67
+   SWI #2                 38,000    $0.57
+   SWI #3                 52,000    $0.78
+6. Review
+   SWI #1 (4 passes)      20,000    $0.30
+   SWI #2 (4 passes)      18,000    $0.27
+   SWI #3 (4 passes + 1 remediation)
+                           27,000    $0.40
+─────────────────────────────────────────
+Total                    230,800    $3.44
+Budget                   500,000   $10.00
+Remaining                269,200    $6.56
+```
+
+### Cost Alerts
+
+- **50% consumed**: Informational log entry.
+- **75% consumed**: Warning log entry + comment on work item.
+- **90% consumed**: Warning log entry + comment on work item with remaining budget.
+- **100% consumed**: Pipeline halts. Failure report posted.
+
+---
+
+## Operational Runbook
+
+### Domain Service Unavailable
+
+**Symptom**: Pipeline fails with "domain service unreachable" or health check failure during pre-flight.
+
+**Diagnosis**:
+
+1. Run `cogworks health <service-name>` to check the specific domain service.
+2. Verify the domain service process is running (`ps`, `systemctl status`, etc.).
+3. Check the configured socket path or URL in `.cogworks/services.toml`.
+4. Check domain service logs for crash or startup failure.
+
+**Resolution**:
+
+1. Restart the domain service process.
+2. Verify the socket/port is not in use by another process.
+3. If the service was never started, start it with the appropriate command for that domain.
+4. Re-invoke: `cogworks process <issue-url>`.
+
+---
+
+### Domain Service Health Check Failure
+
+**Symptom**: `cogworks health` returns unhealthy for a service, or pipeline logs show "version mismatch" or "missing capabilities".
+
+**Diagnosis**:
+
+1. Run `cogworks health <service-name>` — check reported version and capabilities.
+2. Compare reported Extension API version against CogWorks' required version.
+3. Check which capabilities the pipeline requires vs. what the service reports.
+
+**Resolution**:
+
+1. If version mismatch: update the domain service to a compatible Extension API version.
+2. If missing capabilities: the domain service may not support all operations CogWorks needs. Either update the domain service or limit work items to operations it supports.
+3. After updating, verify with `cogworks health <service-name>`.
+
+---
+
+### Interface Registry Validation Failure
+
+**Symptom**: Pipeline fails during architecture or review stage with "interface registry validation error".
+
+**Diagnosis**:
+
+1. Check the error message — it will identify the specific TOML file and issue (schema error, conflict, unknown domain).
+2. Review the `.cogworks/interfaces/` directory.
+3. Validate TOML syntax with a standalone TOML validator.
+
+**Resolution**:
+
+1. If schema error: fix the TOML file to match the interface definition schema.
+2. If parameter conflict: resolve conflicting definitions across files for the same interface parameter.
+3. If unknown domain: either register the missing domain service in `.cogworks/services.toml` or remove the interface definition referencing it.
+4. Re-invoke: `cogworks process <issue-url>`.
+
+---
+
+### Pipeline is Stuck (Processing Lock)
+
+**Symptom**: Work item has `cogworks:processing` label but no progress.
+
+**Diagnosis**:
+
+1. Check the timestamp comment associated with the processing label.
+2. If > 30 minutes old, the previous invocation likely crashed.
+
+**Resolution**:
+
+1. Remove `cogworks:processing` label.
+2. Re-invoke: `cogworks process <issue-url>`.
+3. The system will read GitHub state and resume from the last completed step.
+
+---
+
+### Pipeline Failed
+
+**Symptom**: Work item has `cogworks:stage:failed` label.
+
+**Diagnosis**:
+
+1. Read the failure comment on the work item.
+2. Check the stage and specific error.
+
+**Resolution by failure type**:
+
+| Failure | Resolution |
+|---------|-----------|
+| Retry budget exceeded | Review the error summary. Modify the sub-work-item description or interfaces to be clearer. Re-trigger. |
+| Cost budget exceeded | Increase budget in config if the work is legitimate. Consider breaking into smaller work items. |
+| Scope threshold exceeded | Review the scope estimate. Confirm or reject by commenting and removing the failed label. |
+| Configuration error | Fix `.cogworks/config.toml` and re-trigger. |
+| GitHub API error | Check token permissions and rate limits. Re-trigger. |
+| LLM API error | Check API key and provider status. Re-trigger. |
+
+---
+
+### Sub-Work-Item PR Rejected
+
+**Symptom**: A sub-work-item PR was closed or changes requested.
+
+**Resolution**:
+
+1. Address review comments on the PR (or close it).
+2. Apply `cogworks:status:pending` label to the sub-work-item issue.
+3. Re-invoke: `cogworks process <parent-issue-url>`.
+4. The system will detect the pending sub-work-item and re-generate code incorporating the review feedback.
+
+---
+
+### Rate Limit Exhaustion
+
+**Symptom**: CogWorks logs show rate limit warnings or the CLI exits with a rate-limit error.
+
+**Diagnosis**:
+
+1. Check `X-RateLimit-Reset` time in the logs.
+2. Determine if other tools are sharing the same token.
+
+**Resolution**:
+
+1. Wait for rate limit reset.
+2. If recurring, use a dedicated GitHub App installation token for CogWorks.
+3. Review pipeline for unnecessary API calls.
+
+---
+
+### LLM Cost Unexpectedly High
+
+**Symptom**: Cost report shows high token usage.
+
+**Diagnosis**:
+
+1. Check per-stage breakdown. Which stage consumed the most tokens?
+2. Check retry counts. High retries indicate the LLM is struggling with the task.
+3. Check context sizes. Large context = more input tokens per call.
+
+**Resolution**:
+
+1. If retries are high: improve prompt templates, clarify interfaces/specifications.
+2. If context is large: review what's being included. Consider more targeted context assembly.
+3. If the work item is inherently complex: break it into smaller work items.
+4. Consider using a cheaper model for high-retry stages (code generation iterations).
+
+---
+
+### Scenario Validation Failures
+
+**Symptom**: Sub-work-item fails scenario validation with satisfaction score below threshold.
+
+**Diagnosis**:
+
+1. Check the scenario validation results in the audit trail.
+2. Identify which scenarios failed and which trajectories did not satisfy acceptance criteria.
+3. Review the observed behaviors for failing trajectories.
+
+**Resolution**:
+
+1. If the same scenario fails consistently: the generated code has a genuine issue. Remediation will feed the failures back to the code generator.
+2. If failures are sporadic (different trajectories fail on each run): non-deterministic behavior. Investigate the source (race condition, timing dependency, external state).
+3. If all trajectories for all scenarios fail: likely an environment or Digital Twin issue, not a code issue. Check twin status and environment configuration.
+
+---
+
+### Digital Twin Issues
+
+**Symptom**: Scenario validation fails with "twin failed to start" or similar error.
+
+**Diagnosis**:
+
+1. Check the twin provisioner logs.
+2. Verify the twin binary exists at the configured path.
+3. Check for port conflicts (twin may require specific ports).
+4. Attempt to start the twin manually to see detailed error output.
+
+**Resolution**:
+
+1. If twin binary is missing: file a work item to build the twin using the twin specification.
+2. If port conflict: identify and stop the conflicting process, or configure the twin to use a different port range.
+3. If twin crashes on startup: review twin logs, fix the twin code, and rebuild.
+
+---
+
+### Pyramid Summary Cache Issues
+
+**Symptom**: Warnings about stale summaries in logs, or unexpectedly large context allocations.
+
+**Diagnosis**:
+
+1. Check summary cache directory (`.cogworks/summaries/` by default).
+2. Compare file modification times between source modules and cached summaries.
+3. Check summary regeneration configuration (`regenerate_on` setting).
+
+**Resolution**:
+
+1. If many summaries are stale: trigger a batch regeneration (if `regenerate_on` is manual, run the summary generation job).
+2. If summaries are missing entirely: summaries are optional. Context assembly will fall back to including full files or excluding them. Not an error, but reduces context efficiency.
+3. If regeneration is taking too long: summaries are cached to avoid this. Check if the summary generation job is configured correctly and using an appropriate (cheap, fast) model.
+
+---
+
+### Maintaining Scenarios
+
+**Operation**: Adding or updating scenario specifications.
+
+**Process**:
+
+1. Scenario specifications are version-controlled in `.cogworks/scenarios/` (or configured directory).
+2. Scenarios are authored and maintained by humans, not generated by CogWorks.
+3. Each scenario file declares which modules/interfaces it covers.
+4. After adding/updating scenarios, no CogWorks action is needed—scenarios are loaded automatically on next pipeline run for applicable sub-work-items.
+
+**Best practices**:
+
+- Keep scenarios focused (one behavior per scenario).
+- Use deterministic assertions where possible (cheaper, faster, more reliable than LLM-as-judge).
+- Document explicit failure criteria for safety-critical conditions (e.g., "motor never exceeds safe angle").
+- Review scenario coverage periodically—ensure all critical interfaces are covered.
+
+---
+
+### Maintaining Digital Twins
+
+**Operation**: Building, updating, or deprecating Digital Twins.
+
+**Process**:
+
+1. Twins are built and maintained via the standard CogWorks pipeline (file a work item with the twin specification).
+2. Each twin includes a conformance test suite that validates behavior against the specification.
+3. Periodically (recommended: weekly or on upstream service releases), run conformance tests against the real service to detect drift.
+4. When drift is detected, file a work item to update the twin.
+
+**Best practices**:
+
+- Prioritize twins for high-volume or high-failure-risk dependencies (e.g., hardware simulators, rate-limited APIs).
+- Document twin fidelity requirements clearly (which behaviors must match exactly, which can be simplified).
+- Twins should be fast (support 100+ concurrent scenarios).
+- Include failure injection profiles for common degraded-mode scenarios (timeout, malformed response, rate limit).

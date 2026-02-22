@@ -1,0 +1,82 @@
+#!/bin/bash
+# Commit message validation hook
+# Ensures commits include sufficient context
+
+commit_msg_file=$1
+commit_msg=$(cat "$commit_msg_file")
+
+# Skip merge commits
+if echo "$commit_msg" | grep -q "^Merge"; then
+    exit 0
+fi
+
+# Skip revert commits
+if echo "$commit_msg" | grep -q "^Revert"; then
+    exit 0
+fi
+
+echo "🔍 Validating commit message..."
+
+FAILED=0
+
+# ============================================================================
+# 1. Minimum length check
+# ============================================================================
+msg_length=${#commit_msg}
+if [ $msg_length -lt 15 ]; then
+    echo "  ✗ Commit message too short ($msg_length chars, need 15+)"
+    echo "    Provide context: what changed and why"
+    FAILED=1
+fi
+
+# ============================================================================
+# 2. Check for lazy/vague messages
+# ============================================================================
+first_line=$(echo "$commit_msg" | head -n1)
+if echo "$first_line" | grep -qiE '^(fix|update|change|wip|refactor|stuff|things|misc)$'; then
+    echo "  ✗ Commit message too vague: '$first_line'"
+    echo "    Be specific: 'fix login validation' not just 'fix'"
+    FAILED=1
+fi
+
+# ============================================================================
+# 3. Check for required ADR references (infrastructure/schema changes)
+# ============================================================================
+changed_files=$(git diff --cached --name-only)
+
+# Check if infrastructure/schema files changed
+if echo "$changed_files" | grep -qE '(migration|schema|terraform|\.sql$|infrastructure/)'; then
+    if ! echo "$commit_msg" | grep -qiE '(ADR-[0-9]+|adr[- ]|decision record|see docs/)'; then
+        echo "  ⚠ Infrastructure/schema change detected"
+        echo "    Consider referencing relevant ADR: 'See ADR-XXXX' or 'See docs/adr/...'"
+        # Warning only, don't fail
+    fi
+fi
+
+# ============================================================================
+# 4. Suggest adding 'why' for single-line commits
+# ============================================================================
+line_count=$(echo "$commit_msg" | wc -l | tr -d ' ')
+if [ "$line_count" -eq 1 ] && [ $msg_length -lt 60 ]; then
+    echo "  ℹ Single-line commit. Consider adding:"
+    echo "    - Why this change is needed"
+    echo "    - What alternatives were considered"
+    echo "    Example:"
+    echo "      Fix login validation"
+    echo ""
+    echo "      The previous regex allowed invalid emails. Switched to"
+    echo "      email-validator library for RFC compliance."
+fi
+
+# ============================================================================
+# Result
+# ============================================================================
+if [ $FAILED -eq 1 ]; then
+    echo ""
+    echo "❌ Commit message validation failed"
+    echo "   Update your message or use --no-verify to bypass (not recommended)"
+    exit 1
+else
+    echo "✅ Commit message validated"
+    exit 0
+fi
