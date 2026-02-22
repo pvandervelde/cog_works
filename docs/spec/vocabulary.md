@@ -287,6 +287,7 @@ A lightweight concurrency control using the `cogworks:processing` label.
 - Applied: Before a CLI invocation starts processing a work item
 - Checked: If already present, the invocation backs off (another instance is working on it)
 - Removed: After the invocation completes its action
+- Stale-lock override: If the label was applied more than a configurable duration ago (default: 60 minutes) and no active pipeline run is detectable, a new invocation may remove the stale label and proceed
 - Limitation: Race condition window between check and set; acceptable for expected concurrency levels
 
 ### Branch Convention
@@ -357,7 +358,7 @@ The protocol by which external domain services register with and are invoked by 
 
 The configuration by which a domain service declares its identity and capabilities to CogWorks.
 
-- Declared in: `.cogworks/config.toml` under `[[domain_services]]`
+- Declared in: `.cogworks/services.toml` under `[[services]]` (separate from the main `.cogworks/config.toml`)
 - Contains: Service name, domain covered, socket/URL, supported capabilities, artifact types handled, interface types the service can validate against
 - Multiple services: Multiple domain services may be registered simultaneously
 - Selection: CogWorks routes operations to the appropriate service based on artifact types and domains

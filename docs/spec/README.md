@@ -10,6 +10,7 @@ Start with **overview.md** for the big picture, then **vocabulary.md** to unders
 |----------|---------|
 | [overview.md](overview.md) | System context, scope, design philosophy, high-level data flow |
 | [vocabulary.md](vocabulary.md) | Domain concepts with precise definitions and constraints |
+| [requirements.md](requirements.md) | Functional requirements (REQ-* IDs) — what the system must do |
 | [responsibilities.md](responsibilities.md) | CRC-style responsibility breakdown for each component |
 | [architecture.md](architecture.md) | Clean architecture boundaries — business logic, abstractions, infrastructure |
 | [assertions.md](assertions.md) | Behavioral assertions (Given/When/Then) for key system behaviors |
@@ -22,7 +23,7 @@ Start with **overview.md** for the big picture, then **vocabulary.md** to unders
 
 ## Source Requirements
 
-These documents are derived from the user requirements, which define ~50 requirements across 12 categories.
+Functional requirements are defined in [requirements.md](requirements.md), which catalogues ~50 requirements across 14 categories (PIPE, CLASS, ARCH, PLAN, CODE, SCEN, REVIEW, INT, AUDIT, BOUND, DTU, EXT, XDOM, XVAL). Each `REQ-*` identifier in `assertions.md` traces to a corresponding entry in `requirements.md`.
 
 ## Key Capabilities
 

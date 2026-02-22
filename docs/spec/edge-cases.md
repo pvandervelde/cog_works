@@ -146,11 +146,11 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Expected behavior**: Retry with exponential backoff (up to a configurable maximum). If retries are exhausted, fail the current step and exit with a retriable exit code.
 **Key requirement**: Transient API errors are retried; persistent errors cause the step to fail gracefully.
 
-### EDGE-021: Git Clone Fails (Network, Auth, Disk Space)
+### EDGE-021: Repository Clone Fails (Network, Auth, Disk Space)
 
-**Scenario**: The shallow clone operation fails due to network issues, authentication problems, or insufficient disk space.
-**Expected behavior**: Log the specific error. Post a failure comment on the work item. Exit with a non-zero exit code.
-**Key requirement**: Infrastructure failures produce clear diagnostics, not cryptic internal errors.
+**Scenario**: The shallow clone operation delegated to a domain service fails due to network issues, authentication problems, or insufficient disk space on the domain service host.
+**Expected behavior**: The domain service returns a structured error identifying the failure type (network/auth/disk) and the failed URL. CogWorks receives the structured error, posts a failure comment on the work item with the diagnostic, and exits with a non-zero exit code.
+**Key requirement**: Domain service infrastructure failures produce structured diagnostics that CogWorks can relay without parsing free-form text.
 
 ### EDGE-022: Domain Service Operation Hangs
 
@@ -208,7 +208,7 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Expected behavior**: This is detected externally (periodic conformance runs against the real service). When detected, a work item should be filed to update the twin. Scenarios that depend on the diverged twin may produce incorrect validation results until the twin is fixed.
 **Key requirement**: Twin conformance monitoring is separate from pipeline execution.
 
-### EDGE-030: LLM-as-Judge DisagreesLLM-as-Judge Disagrees with Human Reviewer
+### EDGE-030: LLM-as-Judge Disagrees with Human Reviewer
 
 **Scenario**: Scenario acceptance criteria evaluated via LLM-as-judge produce a different result than a human evaluating the same trajectory.
 **Expected behavior**: The LLM-as-judge is probabilistic and may disagree with humans. If this occurs frequently, the acceptance criteria should be revised to be more objective, or a deterministic assertion should replace LLM-as-judge. The judge model must be different from the code generation model to reduce bias.

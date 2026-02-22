@@ -127,19 +127,19 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 8. Three Separate Review Passes vs. One Combined Review
+## 8. Four Review Passes (One Deterministic + Three LLM) vs. One Combined Review
 
 **Decision**: Four review passes: one deterministic (cross-domain constraint validation) + three LLM passes (quality, architecture, security).
 
-| Factor | Three Passes | One Combined Pass |
-|--------|-------------|------------------|
+| Factor | Four Passes (1 deterministic + 3 LLM) | One Combined Pass |
+|--------|--------------------------------------|------------------|
 | **Focus** | Each pass has a narrow focus → higher quality findings | Broad prompt → may miss depth |
-| **Cost** | 3x LLM calls per sub-work-item | 1x LLM call |
+| **Cost** | 3x LLM calls per sub-work-item (1 deterministic pass is free) | 1x LLM call |
 | **Prompt size** | Smaller, focused prompts | Larger prompt with multiple concerns |
 | **Independent evolution** | Each pass can be tuned independently | One monolithic prompt |
-| **Parallelism** | Can run in parallel (future) | N/A |
+| **Parallelism** | LLM passes can run in parallel (future) | N/A |
 
-**Rationale**: The spec requires three separate passes (REQ-REVIEW-002). The focused approach produces better findings because each review prompt can include specific checklists and examples for its domain. The cost is bounded (3 calls × sub-work-item count × remediation cycles), and the review stage uses a high-quality model anyway.
+**Rationale**: The spec requires four passes — one deterministic constraint check followed by three separate LLM passes — (REQ-REVIEW-002). The focused approach produces better findings because each review prompt can include specific checklists and examples for its domain. The cost is bounded (3 LLM calls × sub-work-item count × remediation cycles), and the review stage uses a high-quality model anyway.
 
 ---
 

@@ -4,7 +4,15 @@ This file provides guidance and context for AI coding assistants working on this
 
 ## Project Overview
 
-> Update this section with your project's purpose and goals
+CogWorks is an AI-assisted software development pipeline that automates the cycle from GitHub work item to Pull Request. Given an issue labelled `cogworks:run`, it classifies the task, generates a specification, designs interfaces, plans sub-tasks, iterates code generation with domain service feedback, validates against scenarios, and runs a multi-pass review gate — all without human intervention except at explicitly gated checkpoints.
+
+Key traits:
+- **Domain-service architecture**: CogWorks itself contains no language- or toolchain-specific logic. All build, simulation, lint, test, and interface-extraction operations are delegated to independently deployed domain services over the Extension API.
+- **Safety-first gates**: Work items touching safety-critical modules always require human approval before any PR can be merged.
+- **Audit trail**: Every LLM call, state transition, and domain service interaction is recorded for post-hoc review.
+- **Cross-domain awareness**: A human-maintained interface registry is validated before every run to detect cross-domain constraint violations early.
+
+See [docs/spec/overview.md](docs/spec/overview.md) for the full system context and [docs/spec/README.md](docs/spec/README.md) for the spec index.
 
 ## Production Software Standards
 
@@ -30,9 +38,9 @@ When implementing features:
 Before implementing features, verify:
 
 1. **Read Specifications**: Check docs/spec/ for relevant documentation
-2. Read docs/constraints.md (tripwires + hard rules)
-3. Read docs/catalog.md (what already exists to reuse)
-4. Read relevant standards in docs/standards/ (language/domain specific)
+2. Read [docs/spec/constraints.md](docs/spec/constraints.md) (implementation rules and tripwires)
+3. Read [docs/spec/requirements.md](docs/spec/requirements.md) (what must be true — use to confirm scope before adding code)
+4. Read relevant standards in [docs/standards/](docs/standards/) (language/domain specific; may be empty early in the project)
 5. **Search Existing Code**: Use semantic_search to find similar implementations
 6. **Check Module Structure**: Determine if code belongs in existing module or needs new one
 7. **Security Review**: Identify sensitive data (tokens, secrets) requiring special handling

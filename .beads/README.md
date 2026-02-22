@@ -61,6 +61,9 @@ Try Beads in your own projects:
 
 ```bash
 # Install Beads
+# WARNING: Review the install script before running it.
+# Piping a remote script directly to bash executes arbitrary code. Inspect the
+# URL first: https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh
 curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 
 # Initialize in your repo

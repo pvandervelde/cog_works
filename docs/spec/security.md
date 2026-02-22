@@ -200,6 +200,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 2. **TLS for network transport**: When HTTP/gRPC transport is configured, TLS is required. Plaintext network transport must not be supported in production configurations.
 3. **Authentication (future)**: The Extension API design must not preclude adding authentication (e.g., mutual TLS, API tokens) in a future release. The protocol envelope includes reserved fields for auth metadata.
 4. **Local-only binding**: Even with HTTP transport, domain services should bind to localhost by default. Remote binding requires explicit opt-in configuration.
+5. **HTTP/gRPC remote transport is not production-ready without authentication**: Until an authentication mechanism is specified and implemented (mutual TLS, bearer tokens, or equivalent), HTTP/gRPC remote transport MUST be treated as a development-only transport and MUST NOT be used in environments where unauthorized access is a concern.
 
 **Note**: Full authentication is deferred (see constraints.md). The design accommodates future addition without breaking changes.
 

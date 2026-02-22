@@ -79,8 +79,8 @@ These constraints MUST be enforced during implementation. They inform the interf
 ## Configuration
 
 - **Configuration file**: `.cogworks/config.toml` in the target repository. Loaded once per CLI invocation.
-- **Mandatory fields**: At minimum: domain service registrations (at least one), LLM model selection (at least a default model).
-- **Domain service registration**: Each domain service declared under `[[domain_services]]` with name, domain, socket/URL, capabilities, artifact types, and interface types.
+- **Mandatory fields**: At minimum: a reference to a domain service registration file and at least one LLM model selection.
+- **Domain service registration file**: Domain services are declared in `.cogworks/services.toml` (overridable via `COGWORKS_DOMAIN_SERVICES_CONFIG`), not in `config.toml`. Each service entry (under `[[services]]`) specifies name, domain, socket/URL, capabilities, artifact types, and interface types.
 - **Interface registry configuration**: `[interfaces]` section specifying registry directory and startup validation flag.
 - **Constraint validation configuration**: `[constraint_validation]` section specifying enabled flag and missing-service behavior.
 - **Sensible defaults**: Every configurable value must have a sensible default. A minimal configuration file should be sufficient to run the pipeline.
