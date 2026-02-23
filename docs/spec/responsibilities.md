@@ -327,7 +327,7 @@ An external process providing domain-specific tooling capabilities. Domain servi
 | `extract_interfaces(artifacts)` | Parse and extract public interface definitions | Context assembly, cross-domain constraint validation, pyramid summaries |
 | `dependency_graph()` | Compute artifact dependency relationships | Context assembly, planning (topological sort) |
 
-**All outputs are structured data** — artifact, location, severity, message — in a common diagnostic format. CogWorks does not interpret results beyond the structured format.
+**All outputs are structured data** — artifact, location, severity, category, message — in a common diagnostic format. CogWorks does not interpret results beyond the structured format.
 
 ---
 
@@ -337,8 +337,8 @@ CogWorks-side client that communicates with external domain service processes vi
 
 **Responsibilities:**
 
-- Knows: Extension API protocol (message envelope, JSON schemas), service socket/URL, API version compatibility
-- Does: Sends method invocations to domain services, receives and validates structured responses, handles connection failures, supports progress polling for long-running operations
+- Knows: Extension API protocol (request/response envelopes, JSON schemas, handshake protocol), service socket/URL, API version compatibility, standardised diagnostic categories and error codes
+- Does: Performs handshake to discover service capabilities and negotiate API version, sends method invocations to domain services, receives and validates structured responses against Extension API schemas, handles connection failures with backoff
 
 **Collaborators:**
 
@@ -347,10 +347,9 @@ CogWorks-side client that communicates with external domain service processes vi
 
 **Roles:**
 
-- Protocol handler: Serialises requests and deserialises responses per Extension API schema
-- Health checker: Verifies service availability and negotiates API version before method calls
-- Progress poller: Monitors long-running operations via polling endpoint (designed for future streaming upgrade)
-- Error mapper: Maps transport errors (connection refused, timeout) to domain-level errors
+- Protocol handler: Serialises requests (with envelope: request_id, api_version, method, caller, repository, params, interface_contracts) and deserialises responses per Extension API schema
+- Handshake coordinator: Performs handshake to discover capabilities, artifact types, interface types, domain, and negotiate API version before method calls
+- Error mapper: Maps transport errors (connection refused, timeout) and Extension API error codes (tool_not_found, tool_failed, etc.) to domain-level errors with retryability information
 
 ---
 
@@ -360,12 +359,12 @@ Manages registered domain services and routes operations to the correct one.
 
 **Responsibilities:**
 
-- Knows: Registered domain services (from configuration), their capabilities, artifact types, domains, and interface types they can validate against
-- Does: Selects the appropriate domain service for given artifacts or operations, determines primary vs. secondary domain services for a sub-work-item, reports unavailable services
+- Knows: Registered domain services (from configuration: name + connection endpoint), their dynamically discovered capabilities (from handshake: domain, artifact types, interface types, supported methods)
+- Does: Performs handshake on each registered service to discover capabilities, selects the appropriate domain service for given artifacts or operations, determines primary vs. secondary domain services for a sub-work-item, caches handshake results and re-queries on error, reports unavailable services
 
 **Collaborators:**
 
-- Configuration Manager (reads `[[domain_services]]` entries from config)
+- Configuration Manager (reads `[[services]]` entries from config)
 - Domain Service Client (routes invocations to selected service)
 
 **Roles:**

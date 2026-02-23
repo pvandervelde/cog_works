@@ -1,8 +1,7 @@
 #!/bin/bash
 # Pre-commit hook for AI-assisted development
 # Fast checks that run before each commit
-
-set -e
+# Compatible with: Linux, macOS, Windows (Git for Windows / Git Bash)
 
 echo "🔍 Running pre-commit checks..."
 
@@ -112,7 +111,7 @@ if [ -f "setup.py" ] || [ -f "pyproject.toml" ]; then
 fi
 
 # .NET
-if [ -f "*.csproj" ] || [ -f "*.sln" ]; then
+if find . -maxdepth 3 \( -name "*.csproj" -o -name "*.sln" \) 2>/dev/null | grep -q .; then
     echo "  • .NET: Checking format..."
     if command -v dotnet >/dev/null 2>&1; then
         if ! dotnet format --verify-no-changes 2>/dev/null; then

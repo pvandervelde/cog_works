@@ -158,7 +158,7 @@ CogWorks needs file access in two distinct modes:
 
 Strategy:
 
-- **Domain services manage their own working copies.** CogWorks does not create or manage local clones directly. Instead, it provides repository information (URL, branch, ref) to domain services via the Extension API, and domain services handle cloning.
+- **Domain services manage their own working copies.** CogWorks does not create or manage local clones directly. Instead, it provides repository information to domain services via the Extension API request envelope (`repository.path` and `repository.ref`). The `path` field is the local filesystem path to the repository root or a clone URL depending on deployment; the `ref` field is the git ref to validate against. Domain services handle cloning or checkout as needed. For co-located services (Unix socket), a shared filesystem path may be used; for remote services (HTTP), the domain service clones from the provided URL.
 - **Shared libraries**: CogWorks publishes shared libraries that domain services can use for common operations: shallow clone management, branch creation, temporary directory lifecycle, commit/push. These are optional — domain services may implement their own.
 - **Branch per artifact**: `cogworks/<work-item-number>/<stage-slug>` (e.g., `cogworks/42/spec`, `cogworks/42/interfaces`, `cogworks/42/swi-3`)
 - **Cleanup**: Temporary directories removed after each domain service operation. Branches cleaned up after PR merge (standard GitHub settings).

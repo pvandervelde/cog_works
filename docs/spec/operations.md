@@ -41,7 +41,7 @@ CogWorks ships as a single Rust binary. Domain services are separate processes �
 | `COGWORKS_TEMP_DIR` | No | Base directory for temporary files (default: system temp) |
 | `COGWORKS_DOMAIN_SERVICES_CONFIG` | No | Path to domain service registration config (default: `.cogworks/services.toml`) |
 
-Domain service configuration is specified in a registration file (default `.cogworks/services.toml`) rather than environment variables, to support multiple services with varying transports:
+Domain service configuration is specified in a registration file (default `.cogworks/services.toml`) rather than environment variables, to support multiple services with varying transports. The config contains only connection information — capabilities, artifact types, interface types, and domain are discovered dynamically via the handshake protocol:
 
 ```toml
 # .cogworks/services.toml
@@ -56,7 +56,15 @@ path = "/tmp/cogworks-rust.sock"
 name = "kicad"
 transport = "http"
 url = "http://localhost:9100"
+# health_check_timeout_ms = 10000  # optional
 ```
+
+On startup, CogWorks performs a handshake with each registered service to discover:
+- `domain` (e.g., "firmware", "electrical")
+- `capabilities` (which Extension API methods the service supports)
+- `artifact_types` (which file extensions the service handles)
+- `interface_types` (which cross-domain interface types the service can validate)
+- `api_version` (for compatibility gating — services with an incompatible API version are rejected at startup and reported as unavailable)
 
 ### CLI Interface
 

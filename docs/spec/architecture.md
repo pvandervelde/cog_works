@@ -238,14 +238,13 @@ Invokes domain service methods through the Extension API protocol.
   - `validate_deps(declarations) → DependencyResult` — Check declared dependencies are valid
   - `extract_interfaces(artifacts) → InterfaceMap` — Parse artifacts and extract public interface definitions
   - `dependency_graph(artifact_list) → DependencyGraph` — Build artifact dependency graph
-  - `health_check() → HealthStatus` — Verify service availability, negotiate API version, discover capabilities
-  - `poll_progress(operation_id) → ProgressStatus` — Check progress of long-running operations (designed for future streaming upgrade)
+  - `health_check() → HealthStatus` — Verify service availability, negotiate API version, discover capabilities and supported artifact types/interface types via handshake protocol
 - **Data flowing across boundary**:
-  - Inbound: structured diagnostics (artifact, location, severity, message), simulation results (name, pass/fail, output), interface definitions, dependency graph, progress updates
+  - Inbound: structured diagnostics (artifact, location, severity, message), simulation results (name, pass/fail, output), interface definitions, dependency graph, handshake results (capabilities, artifact types, interface types, domain, API version)
   - Outbound: artifact paths, test/simulation filters, scenario specifications, environment configuration, relevant interface registry entries
-- **Error cases**: Service unavailable (retryable), API version mismatch (non-retryable), method not supported (non-retryable), transport error (retryable with backoff)
+- **Error cases**: Service unavailable (retryable), API version mismatch (non-retryable), method not supported (non-retryable), transport error (retryable with backoff), tool not found (non-retryable), operation timeout (potentially retryable)
 
-**Note**: The Domain Service Client is the CogWorks-side abstraction. It sends JSON messages over Unix socket (default) or HTTP/gRPC. The actual domain service is an external process that CogWorks does not manage.
+**Note**: The Domain Service Client is the CogWorks-side abstraction. It sends JSON messages over Unix socket (default) or HTTP/gRPC. The actual domain service is an external process that CogWorks does not manage. Capabilities, artifact types, interface types, and domain are discovered dynamically via the handshake — not statically configured. Future API versions may add progress polling or streaming for long-running operations.
 
 ### Interface Registry Loader
 
@@ -340,7 +339,7 @@ Each abstraction has one or more concrete implementations. These are the only mo
 
 - Implements: Domain Service Client
 - Uses: Unix domain socket (default) or HTTP client for transport, JSON serialisation/deserialisation
-- Handles: Connection management, message envelope formatting, response validation against Extension API JSON Schemas, reconnection with backoff, progress polling
+- Handles: Connection management, message envelope formatting, response validation against Extension API JSON Schemas, reconnection with backoff
 - Transport: Configurable per domain service (socket path or URL)
 - Message format: JSON request/response envelopes conforming to published schemas
 - Future: gRPC transport may be added as an additional option; current design does not preclude this

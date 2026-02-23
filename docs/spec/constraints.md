@@ -80,7 +80,7 @@ These constraints MUST be enforced during implementation. They inform the interf
 
 - **Configuration file**: `.cogworks/config.toml` in the target repository. Loaded once per CLI invocation.
 - **Mandatory fields**: At minimum: a reference to a domain service registration file and at least one LLM model selection.
-- **Domain service registration file**: Domain services are declared in `.cogworks/services.toml` (overridable via `COGWORKS_DOMAIN_SERVICES_CONFIG`), not in `config.toml`. Each service entry (under `[[services]]`) specifies name, domain, socket/URL, capabilities, artifact types, and interface types.
+- **Domain service registration file**: Domain services are declared in `.cogworks/services.toml` (overridable via `COGWORKS_DOMAIN_SERVICES_CONFIG`), not in `config.toml`. Each service entry (under `[[services]]`) specifies name, transport, and connection endpoint (socket path or URL). Service capabilities, artifact types, interface types, and domain are discovered dynamically via the handshake (health check) — they are NOT statically configured. This keeps the config minimal and ensures the config can't drift from what the service actually provides.
 - **Interface registry configuration**: `[interfaces]` section specifying registry directory and startup validation flag.
 - **Constraint validation configuration**: `[constraint_validation]` section specifying enabled flag and missing-service behavior.
 - **Sensible defaults**: Every configurable value must have a sensible default. A minimal configuration file should be sufficient to run the pipeline.
@@ -94,9 +94,11 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **API version compatibility**: CogWorks declares supported API versions. Domain services declare their implemented version. Incompatible versions are rejected during health check handshake.
 - **JSON Schema enforcement**: All Extension API messages must conform to published JSON Schemas in `schemas/extension-api/`. Schema changes follow semantic versioning (additive = minor, breaking = major).
 - **Transport flexibility**: Default transport is Unix domain sockets. HTTP/gRPC support is configurable per domain service. The protocol layer must be transport-agnostic so new transports can be added without changing business logic.
-- **Progress polling**: Long-running operations must support progress polling. The protocol must be designed so streaming can be added as an alternative transport in the future without breaking existing domain services.
+- **Progress polling**: The v1 Extension API baseline is synchronous request-response with configurable timeouts. The protocol design must accommodate adding progress polling (via operation IDs) or streaming transport in a future API version without breaking existing domain services. Domain services are NOT required to implement progress polling in v1.
 - **Domain services own their lifecycle**: CogWorks does not start, stop, or manage domain service processes. Services are started independently (systemd, Docker, manually). CogWorks checks health before invocation.
 - **Graceful degradation**: Primary domain service unavailable = halt. Secondary domain service unavailable = continue with warning. This distinction is based on whether the service covers the domain of the artifacts being generated.
+- **Standardised diagnostic categories**: Domain service diagnostics must use the standardised diagnostic category set (`syntax_error`, `type_error`, `constraint_violation`, `interface_mismatch`, `dependency_error`, `style_violation`, `safety_concern`, `performance_concern`, `test_failure`, `completeness`). Domain services may use additional domain-specific categories; consumers treat unknown categories as informational.
+- **Standardised error codes**: Service-level errors (cannot process request) must use the standardised error code set (`tool_not_found`, `tool_failed`, `invalid_request`, `unsupported_method`, `api_version_mismatch`, `timeout`, `artifact_not_found`, `internal_error`). Each code has a defined recoverability (retryable or non-retryable). Consumers use the `recoverable` field to decide retry strategy.
 
 ---
 
