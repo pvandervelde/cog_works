@@ -41,6 +41,8 @@ CogWorks provides advanced validation, context management, and extensibility cap
 
 6. **Extension API** — A protocol for external domain services to register with and be invoked by CogWorks. Supports Unix domain sockets (default) and HTTP/gRPC. Capabilities are discovered dynamically via handshake. Standardised diagnostic categories and error codes enable consumers to process results generically across domains. Any team can build a domain service without modifying CogWorks.
 
+7. **Capability Profiles** — Machine-readable definitions of what a domain service for a specific engineering domain must provide (required methods, artifact types, interface types). Profiles are a development-time tool for domain service authors and a conformance-testing artifact — CogWorks does not enforce profiles at runtime.
+
 ## Key Architectural Decisions
 
 1. **CLI-first execution model** — each invocation is a stateless step function; service modes are additive wrappers

@@ -327,7 +327,7 @@ An external process providing domain-specific tooling capabilities. Domain servi
 | `extract_interfaces(artifacts)` | Parse and extract public interface definitions | Context assembly, cross-domain constraint validation, pyramid summaries |
 | `dependency_graph()` | Compute artifact dependency relationships | Context assembly, planning (topological sort) |
 
-**All outputs are structured data** — artifact, location, severity, message — in a common diagnostic format. CogWorks does not interpret results beyond the structured format.
+**All outputs are structured data** — artifact, location, severity, category, message — in a common diagnostic format. CogWorks does not interpret results beyond the structured format.
 
 ---
 
@@ -364,7 +364,7 @@ Manages registered domain services and routes operations to the correct one.
 
 **Collaborators:**
 
-- Configuration Manager (reads `[[domain_services]]` entries from config)
+- Configuration Manager (reads `[[services]]` entries from config)
 - Domain Service Client (routes invocations to selected service)
 
 **Roles:**

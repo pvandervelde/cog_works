@@ -219,15 +219,15 @@ CogWorks publishes a conformance test suite that domain service authors run agai
 
 ### Coverage
 
-- **Health check**: Returns correct version, capabilities list, and status
-- **Validate**: Accepts artifact, returns structured diagnostics (with severity, location, message)
+- **Health check / handshake**: Returns correct `name`, `service_version`, `api_version`, `domain`, `capabilities`, `artifact_types`, `interface_types`, and `status`
+- **Validate**: Accepts artifact, returns structured diagnostics (with `severity`, `category`, `location`, `message`) in a common diagnostic format
 - **Normalise**: Accepts artifact, returns normalised artifact content or no-change indicator
 - **Review rules**: Accepts artifact, returns domain-specific rule findings
 - **Simulate**: Accepts test specification, returns pass/fail with structured output
 - **Dependency graph**: Accepts artifact set, returns adjacency list
 - **Extract interface surface**: Accepts artifact, returns public interface description
 - **Error responses**: Correct error codes for invalid requests, unsupported capabilities, internal failures
-- **Progress polling**: Long-running operations return operation ID; poll_progress returns correct status transitions
+- **Progress polling** *(Future — v2)*: Long-running operations return operation ID; `poll_progress` returns correct status transitions. Not required in v1 (synchronous request/response only)
 - **Graceful shutdown**: Domain service handles termination signals cleanly
 
 ### Distribution

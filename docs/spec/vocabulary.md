@@ -397,15 +397,16 @@ The standardised wrapper around every Extension API request.
 
 - Contains: `request_id` (UUID, for tracing), `api_version`, `method`, `caller` context (system, stage, work item IDs), `repository` context (path, ref), `params` (method-specific), and optional `interface_contracts` (relevant cross-domain contracts from the registry)
 - The `caller` context allows domain services to include traceability information in their responses without needing to understand the caller's pipeline
-- The `repository` fields provide enough information for the domain service to locate or clone the repository
+- The `repository.path` field is semantically overloaded: for co-located services (Unix socket), it is a local filesystem path to the repository root; for remote services (HTTP), it is a clone URL. Domain service authors must handle both string formats — check for a URL scheme (`http://`, `https://`) to distinguish them
+- The `interface_contracts` field is populated by CogWorks when the invoked method is one that performs cross-domain constraint validation (`validate`, `review_rules`, `extract_interfaces`). It contains the subset of the interface registry contracts relevant to the artifacts being processed. Domain services return `constraint_results` in the response when this field is present
 
 ### Response Envelope
 
 The standardised wrapper around every Extension API response.
 
 - Contains: `request_id` (echoed), `status` (`success` / `failure` / `error`), `result` (method-specific), `diagnostics` (array of structured findings), optional `constraint_results` (when `interface_contracts` were provided), and `metadata` (timing, tool versions, counts)
-- `success`: All checks passed — diagnostics array is empty
-- `failure`: Checks ran but issues found — diagnostics array contains findings
+- `success`: All checks passed — the diagnostics array MAY contain `warning` or `informational` severity findings (e.g. style notes, performance suggestions) that do not constitute failure. A service MUST return `success` when no `blocking` diagnostics were found, even if informational diagnostics are present
+- `failure`: Checks ran and found blocking issues — the diagnostics array contains at least one `blocking`-severity finding
 - `error`: Service-level failure — checks could not run (includes a structured error with code and recoverability)
 
 ### Diagnostic Category

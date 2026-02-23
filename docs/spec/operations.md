@@ -64,7 +64,7 @@ On startup, CogWorks performs a handshake with each registered service to discov
 - `capabilities` (which Extension API methods the service supports)
 - `artifact_types` (which file extensions the service handles)
 - `interface_types` (which cross-domain interface types the service can validate)
-- `api_version` (for compatibility checking)
+- `api_version` (for compatibility gating — services with an incompatible API version are rejected at startup and reported as unavailable)
 
 ### CLI Interface
 

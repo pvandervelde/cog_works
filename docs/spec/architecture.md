@@ -339,7 +339,7 @@ Each abstraction has one or more concrete implementations. These are the only mo
 
 - Implements: Domain Service Client
 - Uses: Unix domain socket (default) or HTTP client for transport, JSON serialisation/deserialisation
-- Handles: Connection management, message envelope formatting, response validation against Extension API JSON Schemas, reconnection with backoff, progress polling
+- Handles: Connection management, message envelope formatting, response validation against Extension API JSON Schemas, reconnection with backoff
 - Transport: Configurable per domain service (socket path or URL)
 - Message format: JSON request/response envelopes conforming to published schemas
 - Future: gRPC transport may be added as an additional option; current design does not preclude this
