@@ -356,12 +356,13 @@ The protocol by which external domain services register with and are invoked by 
 
 ### Domain Service Registration
 
-The configuration by which a domain service declares its identity and capabilities to CogWorks.
+The configuration by which CogWorks knows how to reach a domain service.
 
 - Declared in: `.cogworks/services.toml` under `[[services]]` (separate from the main `.cogworks/config.toml`)
-- Contains: Service name, domain covered, socket/URL, supported capabilities, artifact types handled, interface types the service can validate against
+- Contains: Service name, transport type, and connection endpoint (socket path or URL)
+- Does NOT contain: capabilities, artifact types, interface types, or domain — these are discovered dynamically via the handshake
 - Multiple services: Multiple domain services may be registered simultaneously
-- Selection: CogWorks routes operations to the appropriate service based on artifact types and domains
+- Selection: CogWorks routes operations to the appropriate service based on artifact types and domains discovered during handshake
 
 ### Service Capability
 
@@ -371,20 +372,66 @@ A method that a domain service implements from the Extension API.
 - Optional: Not all domain services need all methods (e.g., a service may support `validate` and `extract_interfaces` but not `normalise`)
 - Discovery: CogWorks queries capabilities during health check handshake
 
-### Domain Service Health Check
+### Domain Service Health Check (Handshake)
 
-A mechanism for CogWorks to verify that a domain service is available and responsive.
+A combined availability check and capability discovery mechanism. The terms "health check" and "handshake" refer to the same operation.
 
-- Includes: API version negotiation, capability discovery
-- Timing: Checked before invoking any domain service method
+- Protocol: JSON request-response (e.g., `POST /api/v1/handshake` for HTTP transport)
+- Returns: Service name, service version, API version, domain, supported capabilities, supported artifact types, supported interface types, and service status
+- Timing: Checked before invoking any domain service method at the start of a pipeline run
+- Caching: Consumers cache handshake results and re-query periodically or on error
 - Failure handling: Primary domain service unavailable → pipeline halts; secondary domain service unavailable → pipeline continues with warning that cross-domain validation was skipped
 
-### Progress Polling
+### Long-Running Operation Handling
 
-The mechanism by which CogWorks monitors long-running domain service operations.
+The mechanism for handling domain service operations that may take extended time (e.g., simulation, FEA).
 
-- Current design: Request/response with polling endpoint for progress updates
-- Domain services may expose a progress endpoint alongside synchronous method invocation
-- Future: Streaming responses may be added as an alternative transport; current design does not preclude this
-- Example: `cogworks/42/spec`, `cogworks/42/interfaces`, `cogworks/42/swi-3`
-- Cleanup: Branches deleted after PR merge
+- v1 baseline: Synchronous request-response with configurable per-method timeouts (default: 10 minutes for `simulate`, 5 minutes for other methods)
+- Future: Progress polling via operation IDs or streaming may be added in a future API version
+- Design constraint: The protocol must not preclude adding asynchronous patterns later
+- Timeout behavior: Operations exceeding the timeout are treated as failures and reported as structured diagnostics
+
+### Request Envelope
+
+The standardised wrapper around every Extension API request.
+
+- Contains: `request_id` (UUID, for tracing), `api_version`, `method`, `caller` context (system, stage, work item IDs), `repository` context (path, ref), `params` (method-specific), and optional `interface_contracts` (relevant cross-domain contracts from the registry)
+- The `caller` context allows domain services to include traceability information in their responses without needing to understand the caller's pipeline
+- The `repository` fields provide enough information for the domain service to locate or clone the repository
+
+### Response Envelope
+
+The standardised wrapper around every Extension API response.
+
+- Contains: `request_id` (echoed), `status` (`success` / `failure` / `error`), `result` (method-specific), `diagnostics` (array of structured findings), optional `constraint_results` (when `interface_contracts` were provided), and `metadata` (timing, tool versions, counts)
+- `success`: All checks passed — diagnostics array is empty
+- `failure`: Checks ran but issues found — diagnostics array contains findings
+- `error`: Service-level failure — checks could not run (includes a structured error with code and recoverability)
+
+### Diagnostic Category
+
+A standardised classification for domain service diagnostic findings, enabling consumers to process diagnostics generically regardless of the originating domain.
+
+- Standard categories: `syntax_error`, `type_error`, `constraint_violation`, `interface_mismatch`, `dependency_error`, `style_violation`, `safety_concern`, `performance_concern`, `test_failure`, `completeness`
+- Domain services map their tool-specific findings to these categories
+- Domain services may use additional domain-specific categories
+- Consumers must handle unknown categories gracefully (treated as informational)
+
+### Extension API Error Code
+
+A standardised code for service-level errors (when the domain service cannot process a request at all).
+
+- Standard codes: `tool_not_found` (non-retryable), `tool_failed` (potentially retryable), `invalid_request` (non-retryable), `unsupported_method` (non-retryable), `api_version_mismatch` (non-retryable), `timeout` (potentially retryable), `artifact_not_found` (non-retryable), `internal_error` (potentially retryable)
+- Each code has a defined recoverability that consumers use to decide retry strategy
+- Distinct from diagnostic findings: error codes mean the operation could not complete; diagnostics mean the operation completed but found issues
+
+### Capability Profile
+
+A machine-readable definition of what a domain service for a specific engineering domain must provide.
+
+- Defines: Required and optional Extension API methods, required validation checks, interface types the domain declares and validates against, supported artifact types
+- Purpose: Domain service developers use profiles to know what to implement; conformance tests verify a service meets its profile’s requirements
+- Examples: firmware profile (requires `validate`, `simulate`, `extract_interfaces`; optional `normalise`, `review_rules`), electrical profile, mechanical profile
+- Published: In the CogWorks repository alongside schemas (`schemas/capability-profiles/`)
+- CogWorks does not enforce profiles at runtime — capability discovery via handshake is the runtime mechanism
+- Profiles are documentation and conformance-testing artifacts, not runtime configuration

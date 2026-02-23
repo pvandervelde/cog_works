@@ -321,9 +321,9 @@ Every Extension API method call MUST have a configurable timeout. Operations exc
 
 The domain service communication layer MUST be transport-agnostic. Unix domain sockets are the default transport; HTTP/gRPC MUST be supported as an alternative.
 
-### REQ-EXT-006: Progress polling
+### REQ-EXT-006: Long-running operation handling
 
-Long-running domain service operations MUST support progress polling via an operation ID. The design MUST NOT preclude adding streaming transport in the future.
+The Extension API baseline is synchronous request-response with configurable timeouts. The protocol design MUST NOT preclude adding progress polling (via operation IDs) or streaming transport in a future API version. When progress polling is added, domain services that support it MUST declare the capability in their handshake response.
 
 ### REQ-EXT-007: Service availability policies
 
@@ -331,7 +331,7 @@ Primary domain service unavailability MUST halt the pipeline with a clear diagno
 
 ### REQ-EXT-008: Structured diagnostics
 
-All domain service diagnostic output MUST be structured data: artifact identifier, location (file, line), severity (error/warning/info), and message. CogWorks MUST NOT parse free-form text from domain services.
+All domain service diagnostic output MUST be structured data: artifact identifier, location (domain-specific JSON object), severity (`blocking`/`warning`/`informational`), category (from the standardised diagnostic category set), and message. CogWorks MUST NOT parse free-form text from domain services.
 
 ### REQ-EXT-009: API version compatibility
 

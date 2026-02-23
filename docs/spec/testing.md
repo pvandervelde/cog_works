@@ -95,7 +95,7 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 - **Mock Issue Tracker**: In-memory issue store; returns configured issues; tracks all mutations (create, label, comment)
 - **Mock PR Manager**: In-memory PR store; returns configured PRs; tracks all mutations
 - **Mock Code Repository**: In-memory file store; returns configured file contents
-- **Mock Domain Service Client**: Returns pre-configured structured responses (diagnostics, simulation results, dependency graphs); can simulate unavailability, API version mismatch, partial capabilities, timeout, and malformed responses
+- **Mock Domain Service Client**: Returns pre-configured structured responses (diagnostics with standard categories, simulation results, dependency graphs); pre-configured handshake responses (capabilities, domain, artifact types, interface types); can simulate unavailability, API version mismatch, partial capabilities, timeout, standardised error codes, and malformed responses
 - **Mock Template Engine**: Returns pre-configured rendered strings; tracks variable usage
 - **Mock Audit Store**: In-memory event log; allows assertions on recorded events
 - **Mock Interface Registry Loader**: Returns pre-configured interface definitions; can simulate missing definitions, schema errors, or conflicts
@@ -183,14 +183,17 @@ Each infrastructure implementation tested against the real external system or a 
 ### Extension API Client
 
 - Use a mock domain service process (test harness that speaks the Extension API protocol)
-- Test: health_check, validate, normalise, review_rules, simulate, dependency_graph, extract_interface_surface
+- Test: health_check (handshake), validate, normalise, review_rules, simulate, dependency_graph, extract_interface_surface
 - Test: Unix domain socket transport — connection, message exchange, disconnection
 - Test: HTTP transport — connection, message exchange, error responses
-- Test: progress polling for long-running operations (poll_progress returns pending, then complete)
+- Test: Handshake response parsing — capabilities, artifact types, interface types, domain, API version discovered correctly
+- Test: Handshake result caching — re-query on error, periodic refresh
 - Test: timeout enforcement — domain service that never responds is terminated after configured timeout
 - Test: malformed response handling — invalid JSON, schema-violating response, unexpected message type
-- Test: API version negotiation — health_check returns incompatible version → graceful rejection
+- Test: API version negotiation — handshake returns incompatible version → graceful rejection
 - Test: domain service crash mid-operation → CogWorks detects disconnection and reports failure
+- Test: standardised error code handling — each error code mapped to correct retryability
+- Test: diagnostic category handling — known and unknown categories parsed correctly
 
 ### Interface Registry Loader
 

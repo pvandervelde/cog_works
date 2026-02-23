@@ -39,7 +39,7 @@ CogWorks provides advanced validation, context management, and extensibility cap
 
 5. **Cross-Domain Interface Registry** — A version-controlled, human-authored repository of interface contracts that span domains (CAN bus, power rails, mounting points, etc.). Enables deterministic validation that changes in one domain respect constraints from others.
 
-6. **Extension API** — A protocol for external domain services to register with and be invoked by CogWorks. Supports Unix domain sockets (default) and HTTP/gRPC. Any team can build a domain service without modifying CogWorks.
+6. **Extension API** — A protocol for external domain services to register with and be invoked by CogWorks. Supports Unix domain sockets (default) and HTTP/gRPC. Capabilities are discovered dynamically via handshake. Standardised diagnostic categories and error codes enable consumers to process results generically across domains. Any team can build a domain service without modifying CogWorks.
 
 ## Key Architectural Decisions
 
