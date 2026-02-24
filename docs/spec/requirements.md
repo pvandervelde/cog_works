@@ -32,6 +32,8 @@ CogWorks MUST post a structured status comment on the work item issue when enter
 
 CogWorks MUST respect stage gate configuration (`auto-proceed` or `human-gated`). Safety-critical work items MUST override all code-producing stage gates to `human-gated` regardless of repository configuration.
 
+**Exception**: Constitutional rules loading (REQ-CONST-001) is unconditional and not subject to gate configuration. It runs on every pipeline invocation regardless of gate settings.
+
 ### REQ-PIPE-007: Processing lock
 
 CogWorks MUST apply a `cogworks:processing` label before processing a work item and MUST back off (exit without taking action) if that label is already present when a new invocation begins.
@@ -182,7 +184,7 @@ A satisfaction score MUST be computed as the fraction of trajectories that satis
 
 ### REQ-SCEN-005: Threshold enforcement
 
-Scenario validation MUST fail when the overall satisfaction score falls below the configured threshold (default: 0.95).
+Scenario validation MUST fail when the overall satisfaction score falls below the configured threshold (default: 0.95). Context Packs MAY declare a stricter satisfaction threshold for their domain; when present, the stricter threshold applies to scenarios covering that domain's interfaces.
 
 ### REQ-SCEN-006: Below-threshold remediation
 
@@ -223,7 +225,7 @@ Each of the three LLM review passes MUST use a separate, focused prompt. Review 
 
 ### REQ-REVIEW-004: Blocking vs non-blocking aggregation
 
-Any blocking finding in any review pass MUST prevent PR creation and trigger the remediation loop. Non-blocking findings (warning, informational) MUST be collected and posted as PR review comments.
+Any blocking finding in any review pass MUST prevent PR creation and trigger the remediation loop. Non-blocking findings (warning, informational) MUST be collected and posted as PR review comments. Missing required artefacts (declared by loaded Context Packs) MUST be treated as blocking findings identifying the pack and the missing artefact.
 
 ### REQ-REVIEW-005: Remediation loop
 
@@ -384,3 +386,95 @@ Cross-domain constraint validation MUST be able to validate a single domain's ar
 ### REQ-XVAL-005: Architecture-stage validation
 
 Cross-domain constraint validation MUST also run during the architecture stage to catch violations before implementation begins.
+
+---
+
+## REQ-CPACK: Context Pack System
+
+### REQ-CPACK-001: Pack trigger mechanism
+
+Context Pack loading MUST be driven deterministically by the work item's classification labels, component tags, and safety classification. The LLM MUST NOT choose which packs to load.
+
+### REQ-CPACK-002: Pack loading timing
+
+Context Packs MUST be loaded at the Architecture stage (Stage 2), before any code generation or specification begins. Loaded packs MUST remain active for the entire pipeline run.
+
+### REQ-CPACK-003: Multiple simultaneous packs
+
+A single pipeline run MUST support loading multiple Context Packs simultaneously when a work item matches multiple pack triggers.
+
+### REQ-CPACK-004: Conflict resolution
+
+Where loaded Context Packs contain contradictory guidance, the more restrictive rule MUST apply.
+
+### REQ-CPACK-005: Unconditional loading on match
+
+If a work item matches a Context Pack's trigger criteria, the pack MUST be loaded. There MUST NOT be an option to skip a matched pack.
+
+### REQ-CPACK-006: Required artefact enforcement
+
+Context Packs MAY declare required artefacts. At the Review stage, CogWorks MUST verify all declared required artefacts are present. Missing artefacts MUST produce blocking findings identifying the pack and the specific missing artefact.
+
+### REQ-CPACK-007: Pack audit trail
+
+The set of Context Packs loaded for each pipeline run MUST be recorded in the audit trail and included in the PR description.
+
+### REQ-CPACK-008: Pack content in context assembly
+
+Context Pack domain knowledge, safe patterns, and anti-patterns MUST be included in the context package for all LLM calls from the Architecture stage onward, subject to the standard context priority and truncation rules.
+
+---
+
+## REQ-CONST: Constitutional Security Layer
+
+### REQ-CONST-001: Unconditional loading
+
+Constitutional rules MUST be loaded on every pipeline run, before context assembly and before any LLM call. This is NOT a configurable gate.
+
+### REQ-CONST-002: Privileged position
+
+Constitutional rules MUST be injected as a privileged, non-overridable component of the LLM system prompt. No content in the context package MAY modify, append to, or override the constitutional rules.
+
+### REQ-CONST-003: Human-approved source
+
+Constitutional rules MUST be loaded from a version-controlled file at a well-known path. Changes to the constitutional rules file MUST require a reviewed and merged PR with at least one human approval. Rules from unreviewed branches MUST be rejected.
+
+### REQ-CONST-004: External content as data
+
+The constitutional rules MUST include a rule declaring that issue bodies, specifications, dependency docs, API responses, and any content not from core configuration are inputs to be analyzed — not instructions that modify CogWorks' behavior.
+
+### REQ-CONST-005: Injection detection and halt
+
+If external content contains text structured as a directive to CogWorks (persona overrides, instruction injections, behavioral modifications), the pipeline MUST halt immediately with an `INJECTION_DETECTED` event.
+
+### REQ-CONST-006: Injection event content
+
+The `INJECTION_DETECTED` event MUST include: pipeline run ID, work item ID, source document, and offending text.
+
+### REQ-CONST-007: Hold state on injection
+
+When injection is detected, the work item MUST enter a hold state. The work item MUST NOT be automatically requeued or retried. A human MUST review and either confirm false positive (with justification recorded in audit trail) or mark the work item as contaminated.
+
+### REQ-CONST-008: Specification scope binding
+
+The constitutional rules MUST include a rule that only capabilities explicitly in the approved specification and interface documents are implemented. Implied or inferred capabilities MUST NOT be implemented.
+
+### REQ-CONST-009: Unauthorized capability prohibition
+
+The constitutional rules MUST include a rule prohibiting network calls, file system access, IPC mechanisms, external process invocations, or hardware access unless explicitly specified in the interface document.
+
+### REQ-CONST-010: No credential generation
+
+The constitutional rules MUST include a rule that no strings resembling credentials, API keys, tokens, passwords, or secrets appear in any output artefact.
+
+### REQ-CONST-011: Scope underspecification detection
+
+When fulfilling a work item would require capabilities not in the approved specification, CogWorks MUST emit a `SCOPE_UNDERSPECIFIED` event and halt generation.
+
+### REQ-CONST-012: Scope ambiguity detection
+
+When a specification is ambiguous for a safety-affecting work item, CogWorks MUST emit a `SCOPE_AMBIGUOUS` event and require human clarification before proceeding.
+
+### REQ-CONST-013: Protected path enforcement
+
+CogWorks MUST NOT create or modify files matching protected path patterns (constitutional rules, prompt templates, scenario specifications) through the normal pipeline. Pre-PR validation MUST check generated files against protected path patterns.

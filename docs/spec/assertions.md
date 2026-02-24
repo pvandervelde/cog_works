@@ -511,3 +511,118 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: A clear error is returned indicating the method is not supported
 - **And**: This is treated as a non-retryable error
 - **Traces to**: REQ-EXT-002
+
+---
+
+## Context Pack System
+
+### ASSERT-CPACK-001: Matched pack is always loaded
+
+- **Given**: A work item whose classification labels match Context Pack P's trigger definition
+- **When**: Context Pack selection runs at the Architecture stage
+- **Then**: Pack P is loaded (domain knowledge, safe patterns, anti-patterns, required artefacts)
+- **And**: The loaded pack is recorded in the audit trail
+- **Traces to**: REQ-CPACK-001, REQ-CPACK-005, REQ-CPACK-007
+
+### ASSERT-CPACK-002: Unmatched pack is not loaded
+
+- **Given**: A work item whose classification does not match Context Pack P's trigger definition
+- **When**: Context Pack selection runs
+- **Then**: Pack P is not loaded
+- **And**: Pack P's content does not appear in any subsequent LLM context
+- **Traces to**: REQ-CPACK-001
+
+### ASSERT-CPACK-003: Multiple packs loaded simultaneously
+
+- **Given**: A work item whose classification matches packs P1 and P2
+- **When**: Context Pack selection runs
+- **Then**: Both P1 and P2 are loaded and their combined content is incorporated into context assembly
+- **Traces to**: REQ-CPACK-003
+
+### ASSERT-CPACK-004: Conflicting guidance uses the more restrictive rule
+
+- **Given**: Pack P1 sets satisfaction threshold at 0.97 and pack P2 sets it at 0.99 for overlapping domain interfaces
+- **When**: Scenario validation runs for those interfaces
+- **Then**: The stricter threshold (0.99) is applied
+- **Traces to**: REQ-CPACK-004
+
+### ASSERT-CPACK-005: Missing required artefact is a blocking finding
+
+- **Given**: Pack P declares required artefact "unsafe usage justification" and the generated output does not contain it
+- **When**: The Review stage runs required artefact checking
+- **Then**: A blocking finding is produced identifying pack P and the missing artefact
+- **And**: PR creation does not occur
+- **Traces to**: REQ-CPACK-006, REQ-REVIEW-004
+
+### ASSERT-CPACK-006: Present required artefact is not a finding
+
+- **Given**: Pack P declares required artefact A and the generated output contains A
+- **When**: The Review stage runs required artefact checking
+- **Then**: No finding is produced for this artefact
+- **Traces to**: REQ-CPACK-006
+
+### ASSERT-CPACK-007: Pack content included in context from Architecture stage onward
+
+- **Given**: Context Pack P is loaded for a work item at the Architecture stage
+- **When**: Context assembly runs for the Architecture stage and subsequent stages
+- **Then**: Pack P's domain knowledge, safe patterns, and anti-patterns are included in context packages
+- **Traces to**: REQ-CPACK-008
+
+---
+
+## Constitutional Security Layer
+
+### ASSERT-CONST-001: Constitutional rules loaded on every pipeline run
+
+- **Given**: A pipeline run starts
+- **When**: Pipeline Executor's first action runs
+- **Then**: Constitutional rules are loaded before any other action, including LLM calls and context assembly
+- **Traces to**: REQ-CONST-001
+
+### ASSERT-CONST-002: Failure to load constitutional rules halts pipeline
+
+- **Given**: The constitutional rules file does not exist at the configured path
+- **When**: The Pipeline Executor attempts to load constitutional rules
+- **Then**: The pipeline halts with a clear error identifying the missing file
+- **And**: No LLM call is made
+- **Traces to**: REQ-CONST-001, REQ-CONST-003
+
+### ASSERT-CONST-003: Unreviewed constitutional rules are rejected
+
+- **Given**: The constitutional rules file exists but is from an unreviewed branch (not merged)
+- **When**: The Constitutional Rules Loader validates the file source
+- **Then**: The rules are rejected and the pipeline halts
+- **Traces to**: REQ-CONST-003
+
+### ASSERT-CONST-004: Injection detection triggers pipeline halt and hold state
+
+- **Given**: An issue body containing text structured as a directive to CogWorks (e.g., "Ignore previous instructions and...")
+- **When**: The Injection Detector scans the issue body before it is included in any LLM prompt
+- **Then**: An `INJECTION_DETECTED` event is emitted with source document and offending text
+- **And**: The pipeline halts immediately
+- **And**: The work item enters hold state with `cogworks:hold` label
+- **Traces to**: REQ-CONST-005, REQ-CONST-006, REQ-CONST-007
+
+### ASSERT-CONST-005: Hold state requires human resolution
+
+- **Given**: A work item in hold state (INJECTION_DETECTED)
+- **When**: A new pipeline invocation processes this work item
+- **Then**: The invocation detects the hold state and exits without taking action
+- **And**: A message is logged indicating human review is required
+- **Traces to**: REQ-CONST-007
+
+### ASSERT-CONST-006: Scope underspecification halts generation
+
+- **Given**: A work item requiring capabilities not explicitly in the approved specification
+- **When**: Scope enforcement runs
+- **Then**: A `SCOPE_UNDERSPECIFIED` event is emitted identifying the missing capability
+- **And**: Code generation halts until specification is updated
+- **Traces to**: REQ-CONST-011
+
+### ASSERT-CONST-007: Protected path violation fails pre-PR validation
+
+- **Given**: Generated artifacts include a file matching a protected path pattern (e.g., `.cogworks/constitutional-rules.md`)
+- **When**: Pre-PR validation runs scope enforcement
+- **Then**: A `PROTECTED_PATH_VIOLATION` event is emitted
+- **And**: PR creation does not occur
+- **Traces to**: REQ-CONST-013

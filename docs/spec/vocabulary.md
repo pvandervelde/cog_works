@@ -130,6 +130,8 @@ A high-fidelity behavioral clone of an external dependency (API, hardware, netwo
 - Lifecycle: Versioned, maintained, updated when real dependency changes
 - Used by: Scenario validation stage provisions twins when scenarios reference external dependencies
 - Properties: Programmatically startable/stoppable, stateless between runs, supports failure injection
+- Conformance status: Whether a twin's conformance tests still pass against the real system. Stale twins (failed conformance) produce "unverified" scenario results (see risk-register.md CW-R08)
+- Fidelity boundary: Each twin specification documents what behaviors are replicated vs. simplified or omitted. Scenarios are tagged with required fidelity level; those requiring higher fidelity than available trigger physical test validation (see risk-register.md CW-R09)
 
 ### Pyramid Summary Levels
 
@@ -195,9 +197,10 @@ The structured output of the Review Gate for a single sub-work-item.
 
 The assembled set of files, documentation, and constraints provided as input to an LLM call.
 
-- Contents vary by stage but may include: specification, interface definitions, prior SWI outputs, ADRs, coding standards, architectural constraints, relevant source code
+- Contents vary by stage but may include: specification, interface definitions, prior SWI outputs, ADRs, coding standards, architectural constraints, relevant source code, Context Pack domain knowledge
 - Constraint: Must fit within target model's context window
 - Truncation: Deterministic priority-based strategy when content exceeds window
+- Note: Constitutional Rules are NOT part of the context package. They are injected separately as a privileged system prompt component. Context Pack content IS included in context packages via the Context Assembler.
 
 ### Context Priority Order
 
@@ -206,8 +209,9 @@ The deterministic ranking used to select context when the full package exceeds t
 1. Current sub-work-item's interface definition (highest priority)
 2. Directly depended-upon sub-work-item outputs
 3. Architectural constraints
-4. Coding standards
-5. Remaining context by import-graph proximity (lowest priority)
+4. Context Pack domain knowledge (from loaded packs)
+5. Coding standards
+6. Remaining context by import-graph proximity (lowest priority)
 
 ### Prompt Template
 
@@ -436,3 +440,98 @@ A machine-readable definition of what a domain service for a specific engineerin
 - Published: In the CogWorks repository alongside schemas (`schemas/capability-profiles/`)
 - CogWorks does not enforce profiles at runtime — capability discovery via handshake is the runtime mechanism
 - Profiles are documentation and conformance-testing artifacts, not runtime configuration
+
+---
+
+## Knowledge and Safety Concepts
+
+### Context Pack
+
+A structured directory containing domain knowledge, safe patterns, anti-patterns, and required artefact definitions for a specific technical domain.
+
+- Located at: `.cogworks/context-packs/<pack-name>/` (configurable)
+- Contains: trigger definition file, domain knowledge document, safe patterns document, anti-patterns document (with explanations of why each pattern is unsafe), required artefacts declaration
+- Loading: Deterministic, driven by work item's component tags, issue labels, and safety classification — not by LLM inference
+- Timing: Loaded at the Architecture stage (Stage 2), before any code generation begins
+- Multiple packs: A single pipeline run may load multiple packs simultaneously
+- Conflict resolution: Where packs contain contradictory guidance, the more restrictive rule applies
+- Versioned: Version-controlled alongside the source code they inform; changes traceable to pipeline runs
+- Extensible: New packs addable without changes to the CogWorks pipeline
+
+### Required Artefact
+
+A specific document section, evidence item, or output element declared by a Context Pack that must be present in the pipeline's output for the pack's domain requirements to be satisfied.
+
+- Declared in: Context Pack's `required-artefacts.toml`
+- Checked at: Review stage (blocking finding if missing)
+- Failure output: Identifies which pack declared the requirement and what artefact is missing (actionable, not generic)
+
+### Constitutional Rules
+
+A set of non-overridable behavioral constraints loaded into CogWorks at the start of every pipeline run, before context assembly and before any LLM call.
+
+- Located at: `.cogworks/constitutional-rules.md` (configurable)
+- Loading: Unconditional on every pipeline run — NOT a configurable gate (exception to general gate configurability)
+- Position: Injected as a privileged, non-overridable component of the LLM system prompt
+- Separation: No content in the context package (issue bodies, specs, external docs) may modify, append to, or override the constitutional rules
+- Change control: Requires a reviewed and merged PR with at least one human approval before taking effect
+- Format: Plain language that a non-specialist reviewer can evaluate
+
+### Prompt Injection
+
+The presence of text in external content (issue bodies, documentation, dependency READMEs) structured to influence LLM behavior as if it were an instruction.
+
+- Examples: Persona override instructions, behavioral modification directives, instruction overrides embedded in code comments
+- Detection: Constitutional layer scans external content for injection patterns
+- Consequence: Pipeline halt with `INJECTION_DETECTED` event
+
+### Scope Violation
+
+CogWorks generating code that implements capabilities, touches files, or introduces dependencies not present in the approved specification and interface documents.
+
+- Types: Unauthorized network calls, file system access, IPC mechanisms, external process invocations, hardware access not in the interface document
+- Detection: Constitutional layer scope enforcement
+- Consequence: Pipeline halt with `SCOPE_UNDERSPECIFIED` or `SCOPE_AMBIGUOUS` event
+
+### Authorised File Set
+
+The set of source files a specific work item is permitted to create or modify, derived from the interface document and specification.
+
+- Source: Interface Design stage output + Specification document
+- Enforcement: Scope enforcer validates generated artifacts against this set
+- Violation: Generating files outside this set is a scope violation
+
+### Hold State
+
+A work item state entered after injection detection. The work item is suspended from all automated processing.
+
+- Entry: `INJECTION_DETECTED` event
+- Behavior: Work item is NOT automatically requeued or retried
+- Exit: Human must explicitly review the flagged content and either confirm false positive (with justification recorded in audit trail) or mark the work item as contaminated
+- Label: `cogworks:hold` (distinct from `cogworks:stage:failed`)
+
+### Pipeline Events (Safety)
+
+Structured events emitted by the constitutional layer and scope enforcer when behavioral boundaries are violated.
+
+- **INJECTION_DETECTED**: External content contains text structured as a directive to CogWorks. Includes: pipeline run ID, work item ID, source document, offending text. Triggers pipeline halt and hold state.
+- **SCOPE_UNDERSPECIFIED**: Fulfilling the work item would require capabilities not in the approved specification. Includes: missing capability description, relevant spec section. Triggers generation halt.
+- **SCOPE_AMBIGUOUS**: Specification is ambiguous for a safety-affecting work item. Includes: ambiguous section, conflicting interpretations. Triggers generation halt and human clarification request.
+- **PROTECTED_PATH_VIOLATION**: Generated artifacts match protected path patterns (constitutional rules, prompt templates, scenarios). Triggers pre-PR validation failure.
+
+### Extraction Completeness
+
+A domain service's assessment of whether it could confidently extract all relevant values when computing actual values for cross-domain constraint validation.
+
+- Reported as: `status: "incomplete"` in the `extract_interfaces` response
+- Consequence: Constraint validation produces a warning requiring human review, not a silent pass
+- Related risk: CW-R07 (Cross-domain constraint false negative)
+
+### Protected Path
+
+A file path pattern identifying files that CogWorks must never create or modify through the normal pipeline.
+
+- Examples: Constitutional rules file, prompt templates, scenario specifications, conformance test suite, output schemas, Extension API schemas
+- Enforcement: Pre-PR validation checks generated files against protected path patterns
+- Change control: Protected paths require human-approved PR via CODEOWNERS or equivalent
+- Related risk: CW-R18 (CogWorks modifies its own prompts or scenarios)
