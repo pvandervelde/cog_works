@@ -20,6 +20,7 @@ Start with **overview.md** for the big picture, then **vocabulary.md** to unders
 | [security.md](security.md) | Threat model and mitigations |
 | [edge-cases.md](edge-cases.md) | Non-standard flows and failure modes |
 | [operations.md](operations.md) | Deployment model, monitoring, cost alerting, runbook |
+| [risk-register.md](risk-register.md) | Risk catalog with mitigations and residual risk assessment |
 
 ## Source Requirements
 
@@ -43,6 +44,10 @@ CogWorks provides advanced validation, context management, and extensibility cap
 
 7. **Capability Profiles** — Machine-readable definitions of what a domain service for a specific engineering domain must provide (required methods, artifact types, interface types). Profiles are a development-time tool for domain service authors and a conformance-testing artifact — CogWorks does not enforce profiles at runtime.
 
+8. **Context Pack System** — Structured, version-controlled domain knowledge packs loaded deterministically before generation begins. Packs contain domain knowledge, safe patterns, anti-patterns, and required artefact declarations. Selection is driven by work item classification labels and component tags, not by LLM inference. Multiple packs may load simultaneously; conflicting guidance resolves to the most restrictive rule.
+
+9. **Constitutional Security Layer** — Non-overridable behavioral rules loaded as a privileged system prompt component on every pipeline run, before context assembly and before any LLM call. Prevents prompt injection, scope violations, and unauthorized capability generation. Injection detection halts the pipeline immediately; work items enter a hold state requiring human review.
+
 ## Key Architectural Decisions
 
 1. **CLI-first execution model** — each invocation is a stateless step function; service modes are additive wrappers
@@ -53,3 +58,5 @@ CogWorks provides advanced validation, context management, and extensibility cap
 6. **Domain services as external processes** — domain services run as separate binaries communicating over Unix sockets (default) or HTTP/gRPC; no built-in privileged path
 7. **Clean architecture** — business logic depends only on abstractions; infrastructure implementations are swappable
 8. **Cross-domain interface registry** — human-authored, version-controlled interface contracts enable deterministic cross-domain constraint validation
+9. **Context Packs for domain knowledge** — structured, versioned domain knowledge loaded deterministically at Architecture stage based on classification
+10. **Constitutional security layer** — non-overridable rules loaded before any LLM call; injection detection halts pipeline; scope enforcement prevents unauthorized capabilities

@@ -18,6 +18,9 @@ This document defines the clean architecture boundaries — what is business log
 │  Label parsing/generation  │  Retry budget tracking                     │
 │  Interface registry valid. │  Cross-domain constraint validation        │
 │  Scenario satisfaction     │  Computed constraint evaluation            │
+│  Context Pack selection    │  Constitutional rules enforcement          │
+│  Injection detection       │  Scope enforcement                         │
+│  Required artefact check   │  Protected path validation                 │
 └─────────────────────┬───────────────────────────────────────────────────┘
                       │ depends on (abstractions only)
                       ▼
@@ -164,6 +167,68 @@ Computes satisfaction scores from trajectory results.
   - Overall score must meet threshold (default 0.95) to proceed
   - Any explicit failure criterion violation → fail immediately regardless of score
   - Missing applicable scenarios → skip validation (not an error)
+  - Context Packs may declare stricter thresholds for their domain; the stricter threshold applies
+
+### Context Pack Selection
+
+Deterministic selection of Context Packs based on work item classification.
+
+- **Input**: Work item classification (labels, component tags, safety classification), available Context Pack trigger definitions
+- **Output**: List of matched Context Pack identifiers and their loaded content (domain knowledge, safe patterns, anti-patterns, required artefacts)
+- **Rules**:
+  - Trigger evaluation is a pure function: classification data in, matched packs out
+  - A work item may match multiple packs simultaneously
+  - A matched pack is always loaded (no option to skip)
+  - Where packs contain contradictory guidance, the more restrictive rule applies
+  - Pack loading occurs at Architecture stage (Stage 2), before any LLM generation call
+
+### Constitutional Rules Enforcement
+
+Validation that constitutional rules are present and correctly positioned.
+
+- **Input**: Constitutional rules document content, LLM prompt being assembled
+- **Output**: Validated prompt with constitutional rules in privileged system prompt position
+- **Rules**:
+  - Rules must be loaded on every pipeline run (no exceptions)
+  - Rules occupy a privileged position in the system prompt — no context content may override them
+  - Required core rules must be present (external content as data, injection detection, scope binding, unauthorized capabilities prohibition, no credential generation)
+  - Rules from unreviewed branches are rejected
+
+### Injection Detection
+
+Pattern matching and analysis of external content for prompt injection attempts.
+
+- **Input**: External content (issue bodies, specifications, dependency docs, API responses)
+- **Output**: Clean (no injection detected) or INJECTION_DETECTED event with source document and offending text
+- **Rules**:
+  - External content is scanned before inclusion in any LLM prompt
+  - Detection of injection patterns triggers immediate pipeline halt
+  - The work item enters hold state (no automatic requeue)
+  - Detection includes: persona overrides, instruction injections, behavioral modifications, system prompt extraction attempts
+  - False positive resolution requires explicit human review with justification
+
+### Scope Enforcement
+
+Validation that generated artifacts stay within the approved specification scope.
+
+- **Input**: Generated artifact paths and content, approved specification scope, interface document, protected path patterns
+- **Output**: Clean (within scope) or scope violation events (SCOPE_UNDERSPECIFIED, SCOPE_AMBIGUOUS, PROTECTED_PATH_VIOLATION)
+- **Rules**:
+  - Generated files must be within the authorised file set derived from spec and interface documents
+  - No unauthorized capabilities (network calls, file system access, IPC, hardware access) unless explicitly specified
+  - No generated files may match protected path patterns (constitutional rules, prompt templates, scenarios)
+  - Scope violations for safety-affecting work items require human clarification
+
+### Required Artefact Checking
+
+Verification that all artefacts declared by loaded Context Packs are present.
+
+- **Input**: Required artefact declarations from loaded Context Packs, generated pipeline output
+- **Output**: Pass (all present) or blocking findings identifying the pack and missing artefact
+- **Rules**:
+  - Checked during the Review stage
+  - Missing artefacts produce blocking findings (preventing PR creation)
+  - Each finding identifies which pack declared the requirement and what is missing
 
 ---
 
@@ -181,6 +246,7 @@ Sends a prompt with a context package and receives a structured response.
   - Inbound: prompt text, context items (strings), output schema (JSON Schema), model identifier
   - Outbound: parsed response (validated against schema), token count (input + output), latency
 - **Error cases**: API failure (retryable), rate limit (retryable with backoff), schema validation failure (retry with error appended), budget exceeded (non-retryable)
+- **Note**: Constitutional rules are injected into the system prompt by the LLM Gateway before calling the LLM Provider. The provider receives the full prompt (including constitutional rules) but is not aware of the constitutional layer — it is a transport concern handled by the gateway.
 
 ### Issue Tracker
 

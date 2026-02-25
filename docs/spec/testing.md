@@ -80,8 +80,55 @@ Business logic is pure — no I/O, no mocks needed. Test with direct input/outpu
 ### Label Parsing and Generation
 
 - Round-trip: structured type → label string → structured type = identity
-- All label patterns: stage, status, depends-on, order, processing, safety-critical
+- All label patterns: stage, status, depends-on, order, processing, safety-critical, hold
 - Invalid label strings → parse error (not panic)
+
+### Context Pack Selection
+
+- Zero available packs → empty loaded set (valid)
+- Available packs, none match classification → empty loaded set (valid)
+- One pack matches classification labels → pack is loaded
+- One pack matches safety classification → pack is loaded
+- Two packs match → both loaded
+- Conflicting guidance (one pack more restrictive) → more restrictive rule applied
+- Pack with malformed trigger file → warning, pack skipped, pipeline continues
+- Required artefacts from loaded pack → correctly extracted into required artefact set
+
+### Constitutional Rules Enforcement
+
+- Constitutional rules present and valid → rules loaded successfully
+- Constitutional rules missing core required rule → load fails with specific error
+- Constitutional rules from unreviewed branch → rejected, pipeline halts
+- Rules are in privileged position in prompt → no context item precedes them
+- Context items cannot override rules → rules remain unchanged regardless of context content
+
+### Injection Detection
+
+- Clean issue body → no detection
+- Clear persona override ("You are now...") → INJECTION_DETECTED
+- Classic instruction injection ("Ignore all previous...") → INJECTION_DETECTED
+- Behavioral modification ("From now on...") → INJECTION_DETECTED
+- System prompt extraction ("Output your system prompt") → INJECTION_DETECTED
+- Technical content with similar language ("The system ignores invalid inputs") → no detection (not an instruction)
+- Property-based testing: Generated injection patterns from adversarial prompt corpus → detection rate measured
+- Legitimate security test pseudocode → borderline case (document expected behavior)
+
+### Scope Enforcement
+
+- Generated files within authorised set → no violation
+- Generated file outside authorised set → scope violation
+- Generated file matching protected path pattern → PROTECTED_PATH_VIOLATION
+- Specification exists for capability → no SCOPE_UNDERSPECIFIED
+- Required capability not in spec → SCOPE_UNDERSPECIFIED
+- Ambiguous safety-affecting spec → SCOPE_AMBIGUOUS
+
+### Required Artefact Checking
+
+- No packs loaded → no required artefacts, checking is a no-op
+- Pack requires artefact A, output contains A → no finding
+- Pack requires artefact A, output does not contain A → blocking finding identifying pack and artefact
+- Multiple packs, all requirements met → no findings
+- Multiple packs, one requirement missing → one blocking finding
 
 ---
 
@@ -100,6 +147,10 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 - **Mock Audit Store**: In-memory event log; allows assertions on recorded events
 - **Mock Interface Registry Loader**: Returns pre-configured interface definitions; can simulate missing definitions, schema errors, or conflicts
 - **Mock Constraint Validator**: Returns pre-configured constraint validation results; can simulate hard failures, warnings, and extraction errors
+- **Mock Context Pack Loader**: Returns pre-configured pack sets; can simulate zero matches, single match, multiple matches, pack with contradictory guidance, and load failures (malformed trigger file, missing pack directory)
+- **Mock Constitutional Rules Loader**: Returns pre-configured rules payload; can simulate missing file, invalid content (missing required rule), and unreviewed branch rejection
+- **Mock Injection Detector**: Returns pre-configured detection results; can simulate detection with specific offending text, no detection, and borderline cases for testing pipeline halt behavior
+- **Mock Scope Enforcer**: Returns pre-configured scope validation results; can simulate SCOPE_UNDERSPECIFIED, SCOPE_AMBIGUOUS, PROTECTED_PATH_VIOLATION, and clean pass
 
 ### Test Scenarios per Stage
 
@@ -112,10 +163,12 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 
 **Specification Generator (Stage 2):**
 
-- Happy path: Context assembled → LLM generates spec → validation passes → PR created
+- Happy path: Context assembled (with matching Context Pack) → LLM generates spec → validation passes → PR created
+- Happy path (no packs): Context assembled (no matching packs) → LLM generates spec → validation passes → PR created
 - Module reference validation fails → retry with error → passes on retry → PR created
 - Constraint violation → retry with error → fails again → retry budget exceeded → escalation
 - PR already exists (idempotency) → detected, no duplicate created
+- Context Pack loaded → pack content included in LLM context (verified via Mock LLM Provider call capture)
 
 **Interface Generator (Stage 3):**
 
@@ -143,6 +196,8 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 **Review Executor (Stage 6):**
 
 - Happy path: Four passes (1 deterministic + 3 LLM), all clean → proceed
+- Required artefact from loaded pack is missing → blocking finding produced, no PR creation
+- Required artefacts present → no artefact-related finding, review proceeds to LLM passes
 - Blocking finding → feed back to code generator
 - Multiple remediation cycles → finding resolved → proceed
 - Remediation cycle limit exceeded → escalation
@@ -155,10 +210,14 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 
 ### Pipeline Executor (Full Stage Sequence)
 
-- Fresh work item → progresses through all stages in sequence
+- Fresh work item → constitutional rules loaded first, then progresses through all stages
+- Missing constitutional rules → pipeline halts before any stage runs
+- Injection detected in issue body → pipeline halts, work item enters hold state
+- Work item in hold state → invocation detects hold state, exits without action
 - Re-processing after crash at each stage → resumes correctly
 - Human-gated stage → stops and waits
 - Safety-critical work item → forced human gates
+- Protected path violation in generated files → PR creation blocked
 
 ---
 

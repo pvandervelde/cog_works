@@ -226,3 +226,60 @@ This document records the significant design alternatives considered and the rat
 | **Complexity** | Simpler domain services | More complex service infrastructure |
 
 **Rationale**: Domain services should not need to know about each other. The interface registry provides the shared vocabulary, and CogWorks provides the relevant contract parameters to each service via the Extension API context. This keeps domain services simple and focused on their domain, with CogWorks handling all orchestration.
+
+---
+
+## 14. Deterministic vs. LLM-Based Injection Detection
+
+**Decision**: Heuristic-only injection detection (LLM-based secondary pass deferred to future enhancement).
+
+| Factor | Heuristic / Regex | LLM-Based |
+|--------|------------------|-----------|
+| **Speed** | Fast (sub-millisecond) | Slow (LLM latency) |
+| **Determinism** | Deterministic — same input, same result | Non-deterministic |
+| **Coverage** | Limited to known patterns | Theoretically broader |
+| **Adversarial resistance** | Can be evaded by novel patterns | Better generalization |
+| **Cost** | Free | Token cost per call |
+| **False positives** | Pattern-dependent | May have different false positive profile |
+
+**Rationale**: Heuristic detection (regex + known pattern matching) is applied first: it is fast, deterministic, and catches the majority of obvious injection attempts. The constitutional rules themselves are the true primary defense — even if detection misses an injection, the behavioral rules limit what the LLM can be induced to do.
+
+**Key constraint**: Heuristic detection does not provide guarantees. The constitutional layer (system-level behavioral rules) is the true primary defense; detection is an early-warning system that enables halting before generation, not a correctness guarantee.
+
+**LLM-based secondary pass**: An LLM-based secondary detection pass for borderline cases is *deferred as a future enhancement*. Injection Detection is classified as pure Business Logic (zero I/O), and an LLM secondary pass would require I/O, violating this boundary. If introduced in a future version, it must be delegated through an `InjectionDetector` abstraction (not inline I/O in business logic) and its non-determinism must be explicitly accepted.
+
+---
+
+## 15. Context Pack Loading: Architecture Stage vs. Every Stage
+
+**Decision**: Context Packs are loaded once at the Architecture stage (Stage 2) and their content persists for the entire pipeline run.
+
+| Factor | Load Once at Architecture | Load at Every Stage |
+|--------|--------------------------|---------------------|
+| **Consistency** | Same packs throughout run | Could vary per stage |
+| **API calls** | One load per pipeline | Multiple loads |
+| **Content currency** | Based on original classification | Could reflect updates |
+| **Determinism** | Deterministic per run | Could change if packs are updated mid-run |
+| **Auditability** | Single recorded pack set | Multiple pack sets to audit |
+
+**Rationale**: Packs are loaded once and remain consistent for the entire pipeline run. This ensures that the code generator and reviewer see the same domain knowledge, anti-patterns, and required artefacts. Loading packs at each stage would complicate auditing (which packs were active when?) and could introduce inconsistency if a pack is updated between stages. The classification that triggers pack loading does not change during a pipeline run, so reloading would produce the same result anyway.
+
+**Trade-off accepted**: Required artefact declarations from newly committed packs will not take effect for in-progress pipeline runs. This is acceptable — pack updates are rare and take effect on subsequent runs.
+
+---
+
+## 16. Constitutional Rules: System Prompt vs. Context Injection
+
+**Decision**: Constitutional rules are injected as a privileged system prompt component, not as a regular context item.
+
+| Factor | System Prompt | Context Item |
+|--------|---------------|--------------|
+| **Override resistance** | Non-overridable by design (model API) | Can be buried by subsequent context |
+| **Position stability** | Always first, before any context | Depends on context assembly ordering |
+| **Context window cost** | Fixed overhead per call | Counted against context budget |
+| **Truncation resistance** | Not subject to truncation | Could be truncated under pressure |
+| **Implementation** | Uses model API's system/user separation | Standard context assembly |
+
+**Rationale**: The primary goal of the constitutional rules is that they cannot be overridden by external content. Placing them in the system prompt (separate from the user-role context) provides the strongest available boundary using the model API's own separation mechanism. A context-injected rule could theoretically be overridden or buried by subsequent items assembled from untrusted sources. System prompt placement is also not subject to context truncation — the rules are always present in full.
+
+**Key constraint**: Constitutional rules token cost is not counted against the per-call context budget. They are overhead the system must absorb. This means effective context budget = model_context_window - constitutional_rules_tokens - output_reservation_tokens.

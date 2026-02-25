@@ -60,6 +60,7 @@ url = "http://localhost:9100"
 ```
 
 On startup, CogWorks performs a handshake with each registered service to discover:
+
 - `domain` (e.g., "firmware", "electrical")
 - `capabilities` (which Extension API methods the service supports)
 - `artifact_types` (which file extensions the service handles)
@@ -137,6 +138,12 @@ When running as a service, expose these metrics:
 | `cogworks_domain_service_latency_seconds` | Histogram | Domain service call latency (by service, method) |
 | `cogworks_domain_service_health` | Gauge | Domain service health status (by service: 1=healthy, 0=unhealthy) |
 | `cogworks_constraint_validation_total` | Counter | Constraint validation runs (by result: pass, warning, block) |
+| `cogworks_injection_detected_total` | Counter | INJECTION_DETECTED events (should be zero in normal operation; alert if non-zero) |
+| `cogworks_scope_violations_total` | Counter | Scope violation events (by type: underspecified, ambiguous, protected_path) |
+| `cogworks_context_packs_loaded` | Gauge | Number of Context Packs loaded per pipeline run (by pipeline) |
+| `cogworks_required_artefact_failures_total` | Counter | Required artefact blocking findings at Review stage (by pack name) |
+| `cogworks_hold_state_total` | Counter | Work items entering hold state (injection detection events) |
+| `cogworks_constitutional_load_failures_total` | Counter | Constitutional rules load failures (should be zero; alert if non-zero) |
 
 For CLI mode, these are logged as structured events. For service mode, they are exposed as Prometheus metrics.
 
@@ -163,6 +170,17 @@ pipeline_max_tokens = 500000        # Total tokens per pipeline
 pipeline_max_cost_dollars = 10.00   # Total cost per pipeline
 sub_work_item_max_retries = 5       # Retries per sub-work-item
 review_max_remediation_cycles = 3   # Review→fix cycles per sub-work-item
+
+[context_packs]
+# Path to context packs directory (default: .cogworks/context-packs/)
+directory = ".cogworks/context-packs/"
+
+[constitutional]
+# Path to constitutional rules file (default: .cogworks/constitutional-rules.md)
+rules_file = ".cogworks/constitutional-rules.md"
+# Protected path patterns: CogWorks NEVER generates files matching these patterns
+# These defaults cannot be removed, only extended
+protected_paths_extra = []  # Additional patterns beyond the built-in defaults
 ```
 
 ### Cost Tracking
@@ -403,6 +421,81 @@ Remaining                269,200    $6.56
 3. If regeneration is taking too long: summaries are cached to avoid this. Check if the summary generation job is configured correctly and using an appropriate (cheap, fast) model.
 
 ---
+
+### Injection Detected (Hold State)
+
+**Symptom**: Work item has `cogworks:hold` label and audit trail shows `INJECTION_DETECTED` event.
+
+**Diagnosis**:
+
+1. Read the failure comment on the work item — it will include the source document and offending text.
+2. Review the flagged content critically: is it a genuine injection attempt or a false positive?
+3. Common false positives: security test pseudocode, examples of injection patterns in training documentation, or technical content that uses imperative language.
+
+**Resolution**:
+
+- **If genuine injection attempt**: Mark the work item as contaminated. Remove the `cogworks:run` label and add a comment documenting the contamination. Do not remove the `cogworks:hold` label. Notify the team about the injection attempt origin.
+- **If false positive**: Remove the `cogworks:hold` label with a comment documenting why the flagged content is legitimate (e.g., "False positive — security test pseudocode, not an injection attempt"). Include the reviewer's name. Re-invoke: `cogworks process <issue-url>`.
+
+**Alert recommendation**: Integrate `cogworks_injection_detected_total` metric with an alert. Any non-zero value warrants immediate review.
+
+---
+
+### Scope Underspecified or Ambiguous
+
+**Symptom**: Pipeline fails with `SCOPE_UNDERSPECIFIED` or `SCOPE_AMBIGUOUS` event in audit trail.
+
+**Diagnosis**:
+
+1. Read the event details — it will identify the missing capability or ambiguous specification section.
+2. `SCOPE_UNDERSPECIFIED`: The work item requires a capability not in the approved specification or interface document.
+3. `SCOPE_AMBIGUOUS`: A safety-affecting specification section is ambiguous and cannot be implemented without clarification.
+
+**Resolution**:
+
+1. Review the specification and interface documents.
+2. For `SCOPE_UNDERSPECIFIED`: Update the specification PR or interface document to explicitly include the needed capability.
+3. For `SCOPE_AMBIGUOUS`: Clarify the ambiguous specification section by updating the spec PR with a more explicit definition.
+4. After updating the specification, the Interface Design stage may need to be re-run to update the interface document.
+5. Re-invoke: `cogworks process <issue-url>`.
+
+---
+
+### Context Pack Not Loading
+
+**Symptom**: LLM is generating code that ignores domain-specific safety patterns or best practices. Audit trail shows zero packs loaded for a work item that should match a pack.
+
+**Diagnosis**:
+
+1. Check the audit trail for pack loading events — it will list which packs were evaluated and why each did or did not match.
+2. Check that `.cogworks/context-packs/` exists and contains the expected pack directory.
+3. Check the pack's `trigger.toml` for the affected component tags or classification labels.
+4. Verify the work item's classification output matches the expected tags/labels.
+
+**Resolution**:
+
+1. If the pack directory is missing: create it with the required pack structure.
+2. If the trigger definition is wrong: update `trigger.toml` to match the correct classification output.
+3. If the work item is being misclassified: check the classification stage output and the safety-critical module registry.
+4. After updating pack content, no CogWorks action needed — packs are loaded automatically on next pipeline run.
+
+---
+
+### Required Artefact Missing (Context Pack Enforcement)
+
+**Symptom**: Review stage fails with blocking finding referencing a Context Pack and a missing artefact.
+
+**Diagnosis**:
+
+1. Read the blocking finding — it identifies the pack name and the specific required artefact.
+2. Check the output artifacts to understand what was generated and what the pack expected.
+3. Common causes: the work item is in a domain with strict documentation requirements (embedded safety, ISO 9001) and the LLM didn't generate the required documentation section.
+
+**Resolution**:
+
+1. The blocking finding is fed back to the Code Generator automatically (standard remediation loop).
+2. If the LLM cannot produce the required artefact within the retry budget: escalate. The missing artefact likely requires domain expert input.
+3. If the required artefact declaration in the pack is incorrect: update the pack's `required-artefacts.toml` via a PR.
 
 ### Maintaining Scenarios
 

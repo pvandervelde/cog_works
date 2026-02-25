@@ -51,6 +51,8 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **Pyramid summary accuracy**: Summaries must be regenerated when source changes. Staleness check must be deterministic (file hash comparison). Stale summaries must never be used for context assembly decisions.
 - **Extension API conformance tests**: A published conformance test suite must exist that any domain service can run to verify it correctly implements the Extension API. The Rust domain service must pass this suite.
 - **Cross-domain constraint validation tests**: The constraint validator must have tests for all contract parameter types (numeric with tolerance, exact, enumerated, boolean, reference, computed).
+- **Property-based testing for constitutional layer**: Injection detection and scope enforcement logic must be tested with property-based tests covering a broad range of injection patterns (persona overrides, instruction injections, behavioral modifications). Relying solely on example-based tests is insufficient given the adversarial nature of the problem.
+- **Context Pack selection tests**: Pack trigger evaluation must be tested with fixtures covering: classification that matches zero packs, one pack, multiple packs, conflicting guidance between packs, and packs with safety-classification-specific triggers.
 
 ---
 
@@ -70,7 +72,9 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **No secrets in context packages**: LLM API keys, GitHub tokens, and any other credentials must never appear in context packages, audit trails, or generated code.
 - **No secrets in generated code**: Code generation must use placeholder values for secrets, with documentation on what needs to be configured.
 - **Domain service isolation**: Domain services run as separate processes. CogWorks does not pass secrets to domain services. Domain services receive only the Extension API context (work item info, stage, repository path, relevant interface contracts).
-- **Prompt injection awareness**: Issue bodies and repository content are untrusted input. The system must validate all LLM outputs against schemas — never execute LLM output as code or commands within the CogWorks process itself.
+- **Prompt injection awareness**: Issue bodies and repository content are untrusted input. The constitutional layer is the primary defense; schema validation of LLM outputs is the secondary defense. Neither is sufficient alone.
+- **Constitutional rules are mandatory**: Constitutional rules MUST be loaded before any LLM call on every pipeline run. No configuration option may disable this. Failure to load constitutional rules halts the pipeline. This is not a security option — it is a hard constraint.
+- **Protected paths**: CogWorks MUST NOT create or modify files matching protected path patterns through the normal pipeline. Protected paths include at minimum: the constitutional rules file, prompt template files, scenario specification files, and Extension API schemas. The protected path list is version-controlled and configurable.
 - **Rate limit respect**: The system must respect GitHub API rate limits (5000/hr for authenticated requests). Track remaining budget from response headers, back off proactively.
 - **Extension API authentication**: For Unix domain sockets, file system permissions provide access control. For HTTP/gRPC transport, authentication mechanism is to be determined but the design must not preclude adding authentication later (e.g., bearer tokens, mutual TLS).
 
@@ -107,6 +111,32 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **Structured logging**: All log output must be structured (JSON). Each log entry must include: `pipeline_id` (work item number), `stage`, `sub_work_item` (if applicable), `action`, `result`, `duration_ms`.
 - **Audit trail completeness**: Every LLM call, validation result, state transition, and cost event must appear in the audit trail. The trail must be sufficient to reconstruct the full decision history.
 - **Cost visibility**: Token usage and cost must be tracked per-call, per-stage, and per-pipeline. The final cost report must be posted as a comment on the work item.
+- **Constitutional event visibility**: Every INJECTION_DETECTED, SCOPE_UNDERSPECIFIED, SCOPE_AMBIGUOUS, and PROTECTED_PATH_VIOLATION event must appear in the audit trail with full context (work item ID, source document, offending content or missing capability). These events are never silently suppressed.
+- **Context Pack audit**: The names, version (git ref), and trigger match reasons for all loaded Context Packs must be recorded in the audit trail and included in the PR description.
+
+---
+
+## Context Pack Constraints
+
+- **Pack structure is enforced**: Context Pack directories must contain a valid `trigger.toml`. Packs without a valid trigger file are skipped with a warning, not ignored silently.
+- **Pack content is trusted as configuration**: Loaded Context Pack content is treated as configuration-level input (higher trust than user-supplied content) but lower trust than CogWorks' own constitutional rules. Pack content cannot override constitutional rules.
+- **Pack loading is deterministic**: The same classification input must always produce the same set of loaded packs. Pack selection must be a pure function with no randomness or LLM involvement.
+- **Pack directory is version-controlled**: Context Pack files in `.cogworks/context-packs/` are subject to normal code review and branch protection. Changes are tracked in git.
+- **Pack content never includes executable code**: Pack files are Markdown and TOML documents. They must not contain scripts, compiled artifacts, or anything that could be executed by CogWorks.
+- **Required artefact declarations are validated at load time**: The `required-artefacts.toml` file must conform to the required artefacts schema. Malformed declarations are reported as configuration errors, not silently ignored.
+- **Stricter thresholds are pack-declared**: Context Packs may declare stricter satisfaction thresholds for their domain. These override the global threshold for affected scenarios. They cannot relax the global threshold.
+
+---
+
+## Constitutional Layer Constraints
+
+- **Constitutional rules loading is unconditional**: There MUST NOT be a configuration option to skip constitutional rules loading. Any code path that calls the LLM without loading constitutional rules first is a defect.
+- **Constitutional rules position is fixed**: The constitutional rules are always the first component of the system prompt. No business logic may prepend content before them or demote them in the prompt order.
+- **Constitutional rules are not context items**: Constitutional rules are NOT subject to context truncation. They are not in the context priority queue. They are always present in full.
+- **Constitutional rules change requires human approval**: Changes to `.cogworks/constitutional-rules.md` must be made via a reviewed PR. Unreviewed changes must be detected and rejected at load time. This constraint is enforced by checking that the file's current content matches a reviewed commit.
+- **Injection detection is pre-prompt**: Injection detection runs before any external content is assembled into the LLM prompt. Detecting injection after prompt assembly is insufficient.
+- **Hold state is enforced by label**: Work items in hold state have `cogworks:hold` label. All pipeline invocations must check for this label and exit without action. The label can only be removed by a human.
+- **Protected paths are configurable but non-empty**: At minimum, the constitutional rules file, prompt template directory, scenario directory, and Extension API schemas are always in the protected path set, regardless of configuration. These defaults cannot be removed via configuration.
 
 ---
 

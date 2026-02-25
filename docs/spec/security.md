@@ -40,6 +40,8 @@ This document identifies security threats to CogWorks and specifies mitigations.
 2. Output schemas (version-controlled by CogWorks maintainers)
 3. Extension API schemas (version-controlled by CogWorks maintainers)
 4. CogWorks source code itself
+5. Constitutional rules (version-controlled, human-reviewed, required before any LLM call)
+6. Context Pack content (version-controlled in `.cogworks/context-packs/`, subject to code review)
 
 ---
 
@@ -53,12 +55,14 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 **Mitigations**:
 
-1. **Schema validation**: All LLM outputs are validated against strict JSON schemas. Even if the LLM is manipulated, the output must conform to the expected structure. Freeform text fields in the schema are limited to specific purposes (rationale, description) and are never executed.
-2. **Output is never executed**: CogWorks never executes LLM output as code within its own process. Generated code is written to files and validated by external tools (compiler, linter).
-3. **Prompt structure**: Issue body is clearly delimited in the prompt template (e.g., inside XML/Markdown tags) and framed as data, not instructions.
-4. **Human review**: Stage gates (especially for safety-critical work items) provide human checkpoints before any generated code is merged.
+1. **Constitutional layer (primary defense)**: Non-overridable behavioral rules are loaded before any LLM call and declare that external content is data, not instructions. The constitutional rules include explicit injection detection guidance and a rule that if injection is detected, the pipeline halts.
+2. **Injection detection and halt**: External content is scanned for injection patterns before inclusion in any LLM prompt. Detection triggers immediate pipeline halt with `INJECTION_DETECTED` event; the work item enters hold state.
+3. **Schema validation (secondary defense)**: All LLM outputs are validated against strict JSON schemas. Even if the LLM is manipulated, the output must conform to the expected structure. Freeform text fields in the schema are limited to specific purposes (rationale, description) and are never executed.
+4. **Output is never executed**: CogWorks never executes LLM output as code within its own process. Generated code is written to files and validated by external tools (compiler, linter).
+5. **Prompt structure**: Issue body is clearly delimited in the prompt template (e.g., inside XML/Markdown tags) and framed as data, not instructions.
+6. **Human review**: Stage gates (especially for safety-critical work items) provide human checkpoints before any generated code is merged.
 
-**Residual risk**: The LLM could produce subtly incorrect or backdoored code that passes schema validation and automated review. Mitigated by multi-dimensional review (security pass) and human gates.
+**Residual risk**: The constitutional layer reduces risk but cannot guarantee zero false negatives. A sufficiently sophisticated injection might evade detection. Mitigated by schema validation, multi-dimensional review (security pass), and human gates.
 
 ---
 
@@ -135,9 +139,10 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 1. **Response schema validation**: All domain service responses are validated against the Extension API JSON Schema. Responses that don't conform are rejected.
 2. **Structured diagnostics only**: Diagnostics fields (message, artifact, location) are treated as data, never as instructions. They are included in LLM context as structured data with clear delimiters.
-3. **Domain service isolation**: Domain services run as separate processes. A compromised domain service cannot access CogWorks' memory, secrets, or GitHub token.
-4. **Human gates for safety-critical**: Safety-critical work items require human review — even if all automated validation passes, a human inspects the final PR.
-5. **Audit trail**: All domain service responses are recorded in the audit trail for post-hoc review.
+3. **Injection detection for domain service content**: Domain service diagnostic messages (which are included in LLM retry prompts) are scanned by the injection detector before inclusion. Detection triggers the same halt-and-hold response as issue body injection.
+4. **Domain service isolation**: Domain services run as separate processes. A compromised domain service cannot access CogWorks' memory, secrets, or GitHub token.
+5. **Human gates for safety-critical**: Safety-critical work items require human review — even if all automated validation passes, a human inspects the final PR.
+6. **Audit trail**: All domain service responses are recorded in the audit trail for post-hoc review.
 
 **Residual risk**: A domain service that consistently reports false positives (everything passes) would allow bad artifacts through. Mitigated by the multi-dimensional review gate (LLM reviews catch issues domain services miss) and human review.
 
@@ -221,6 +226,101 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 ---
 
+### THREAT-012: Correlated LLM Failure Across Review Passes
+
+**Description**: The same LLM model is used for all three review passes. A systematic failure mode, bias, or blind spot in the model affects all passes simultaneously, giving false confidence that three independent reviews occurred.
+
+**Impact**: Vulnerabilities or quality defects that the model is systematically unable to detect pass all three review passes as if they were cleared by independent reviewers.
+
+**Mitigations**:
+
+1. **Different models for generation and review**: The review stage uses a different model (or a different model configuration) from the code generation stage. This reduces systematic correlation.
+2. **Focused pass prompts**: Each review pass uses a narrow, focused prompt. A model with a specific blind spot for one category is less likely to have the same blind spot for different categories.
+3. **Human gates for safety-critical**: Safety-critical PRs require human review regardless of automated results.
+4. **Scenario validation**: Independent of LLM review — tests actual behavior, not what the LLM says about the code.
+
+**Residual risk**: True independence is not achieved with a single-provider LLM. Multi-provider review (using different companies' models) would reduce correlation further but is not required at current autonomy levels.
+
+---
+
+### THREAT-013: Scope Creep via Context Inference
+
+**Description**: The LLM infers additional capabilities from contextual hints in included files (comments, documentation, dependency READMEs) and implements them without explicit specification.
+
+**Impact**: Generated code contains network calls, file system access, or other unauthorized capabilities that were not in the approved specification.
+
+**Mitigations**:
+
+1. **Constitutional scope binding rule**: The constitutional rules explicitly prohibit implementing capabilities not in the approved specification. Scope enforcement runs before PR creation.
+2. **Architecture compliance review**: Review pass specifically checks that generated code matches the approved specification with no unplanned dependencies.
+3. **Authorised file set validation**: The review gate validates that generated files are within the authorised file set derived from the interface document.
+4. **SCOPE_UNDERSPECIFIED event**: When generation would require capabilities not in the spec, the scope enforcer emits an event and halts rather than proceeding.
+
+---
+
+### THREAT-014: Adversarial Injection via Context Pack Content
+
+**Description**: An attacker with write access to the repository introduces adversarial content into a Context Pack file that influences LLM behavior — e.g., a "safe pattern" that is actually a backdoor pattern.
+
+**Impact**: Generated code follows injected "guidance" from a Context Pack, producing subtly malicious artifacts.
+
+**Mitigations**:
+
+1. **Code review**: Context Pack files in `.cogworks/context-packs/` are subject to normal code review before merge. Changes to pack content require PR review.
+2. **Constitutional layer primacy**: Constitutional rules take priority over Context Pack content and cannot be overridden by pack content.
+3. **Security review pass**: The security review pass checks generated code for vulnerability patterns — it is not guided by Context Pack content (it uses a separate focused prompt).
+4. **Pack content is Markdown/TOML only**: Context Packs cannot contain executable code, scripts, or structured commands — only documentation.
+5. **Audit trail**: Loaded pack identifiers and versions (git ref) are recorded. If malicious pack content is discovered, affected pipeline runs can be identified.
+
+---
+
+### THREAT-015: Constitutional Rules File Tampering
+
+**Description**: An attacker modifies the `.cogworks/constitutional-rules.md` file to weaken or remove injection detection rules, scope binding rules, or other safety boundaries.
+
+**Impact**: Subsequent pipeline runs operate without the intended behavioral constraints. Injection attacks succeed. Scope violations are not detected.
+
+**Mitigations**:
+
+1. **Version-controlled with human review required**: Changes to the constitutional rules file require a reviewed and merged PR with at least one human approval.
+2. **Unreviewed branch rejection**: The Constitutional Rules Loader validates that the file comes from a reviewed/merged commit. Rules from unreviewed branches are rejected.
+3. **Protected path**: The constitutional rules file is in the protected path set. CogWorks cannot generate a PR that modifies it.
+4. **CODEOWNERS**: The constitutional rules file should be listed in CODEOWNERS to require review from specific trusted reviewers.
+
+---
+
+### THREAT-016: Credential Scope Creep in Generated Code
+
+**Description**: The LLM generates code that requests broader OAuth scopes, API permissions, or filesystem access than the work item requires — either by inference from context or from prompt injection.
+
+**Impact**: Deployed code has wider access than intended, increasing blast radius if compromised.
+
+**Mitigations**:
+
+1. **Constitutional prohibition**: The constitutional rules prohibit generating unauthorized capabilities including network accesses not in the spec.
+2. **Security review pass**: Specifically checks for over-broad permission requests, OAuth scope inflation, and unnecessary filesystem access.
+3. **Scope enforcement**: The scope enforcer validates that generated artifacts don't introduce unauthorized capabilities.
+4. **Human gates for safety-critical**: For work items touching security-sensitive modules, human review catches scope inflation.
+
+---
+
+### THREAT-017: CogWorks Modifies Its Own Behavioral Configuration
+
+**Description**: The CogWorks pipeline generates a PR that modifies its own prompt templates, constitutional rules, scenario specifications, or output schemas — subtly making future generation or review more permissive.
+
+**Impact**: CogWorks' behavioral guardrails are gradually eroded by its own output. Later pipeline runs may be more susceptible to injection, generate lower-quality code, or have weaker security constraints.
+
+**Mitigations**:
+
+1. **Protected paths**: Prompt templates, constitutional rules, scenario specifications, output schemas, and Extension API schemas are all in the protected path set. Pre-PR validation rejects PRs that touch these files.
+2. **Scope enforcement**: The scope enforcer validates generated file paths before PR creation. Files outside the authorised file set (including protected paths) cause pipeline failure.
+3. **REQ-CONST-003**: Constitutional rules file changes require human-reviewed PR. Changes on unreviewed branches are rejected.
+4. **CODEOWNERS**: All protected files should be listed in CODEOWNERS so changes trigger required review from specific trusted maintainers.
+
+**Residual risk**: Protection relies on correct protected path configuration. If a path is accidentally omitted from the protected list, CogWorks could modify it. Mitigation: the protected path defaults (constitutional rules, prompt templates) cannot be removed via configuration.
+
+---
+
 ## Security Requirements Summary
 
 | Requirement | Description | Enforcement |
@@ -235,3 +335,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 | Interface registry validation | Definitions validated against schema | Unit tests for registry loader |
 | Rate limit respect | Proactive tracking and backoff | Integration tests for GitHub client |
 | Cost budget enforcement | Per-pipeline token budget | Unit tests for budget logic |
+| Constitutional rules loaded | Non-overridable rules before any LLM call | Unit test: missing rules file halts pipeline |
+| Injection detection | External content scanned before prompt inclusion | Property-based tests for injection patterns |
+| Protected path enforcement | Generated files never modify behavioral config | Unit tests for scope enforcer, pre-PR validation |
+| Constitutional rules change control | Human-reviewed PR required for rule changes | Constitutional Rules Loader branch validation |

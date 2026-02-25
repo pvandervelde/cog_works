@@ -10,11 +10,12 @@ The central coordinator. Knows the stage sequence and decides what to do next.
 
 **Responsibilities:**
 
-- Knows: Stage sequence (1-7), stage gate configuration (auto/human per stage), current pipeline state (reconstructed from GitHub)
-- Does: Determines the next action for a given work item, delegates to the appropriate stage executor, enforces stage gate rules, manages the processing lock
+- Knows: Stage sequence (1-7), stage gate configuration (auto/human per stage), current pipeline state (reconstructed from GitHub), constitutional rules file path
+- Does: Loads constitutional rules at the start of every run (unconditional, before any other action), determines the next action for a given work item, delegates to the appropriate stage executor, enforces stage gate rules, manages the processing lock
 
 **Collaborators:**
 
+- Constitutional Rules Loader (loads constitutional rules from well-known path)
 - GitHub Client (reads current state: labels, issues, PRs)
 - Stage Executors (delegates execution of each stage)
 - Audit Recorder (logs stage transitions)
@@ -25,9 +26,11 @@ The central coordinator. Knows the stage sequence and decides what to do next.
 - Orchestrator: Coordinates the pipeline flow
 - State machine: Enforces valid stage transitions
 - Lock manager: Applies/removes processing lock
+- Constitutional enforcer: Ensures constitutional rules are loaded before any LLM interaction
 
 **Key behavior:**
 
+- Load constitutional rules before any other action (REQ-CONST-001) — failure to load is a pipeline-halting error
 - Given a work item, reconstruct its pipeline state from GitHub (labels, sub-issues, PR status)
 - Determine which stage the pipeline is in
 - Determine whether the current stage gate has been passed
@@ -75,12 +78,13 @@ Produces a technical specification document from the classified work item.
 
 **Responsibilities:**
 
-- Knows: Specification document structure, architectural constraint rules
-- Does: Assembles context, invokes LLM to generate spec, validates references and dependency changes, runs cross-domain constraint validation against interface registry at architecture stage, creates specification PR
+- Knows: Specification document structure, architectural constraint rules, Context Pack trigger rules
+- Does: Loads applicable Context Packs based on classification labels/tags, assembles context (including loaded pack knowledge), invokes LLM to generate spec, validates references and dependency changes, runs cross-domain constraint validation against interface registry at architecture stage, creates specification PR
 
 **Collaborators:**
 
-- Context Assembler (builds context package from repo files, ADRs, constraints)
+- Context Pack Loader (loads domain knowledge packs based on classification labels and component tags)
+- Context Assembler (builds context package from repo files, ADRs, constraints, and loaded Context Pack knowledge)
 - LLM Gateway (sends spec generation prompt, receives Markdown)
 - Constraint Validator (checks proposed architecture against cross-domain interface contracts)
 - GitHub Client (creates branch, commits spec, creates PR, updates labels)
@@ -91,6 +95,7 @@ Produces a technical specification document from the classified work item.
 - Validator: Ensures referenced modules exist and dependency changes are valid
 - Constraint checker: Verifies proposed architecture doesn't violate cross-domain contracts
 - Retry coordinator: Feeds validation errors back to LLM on failure
+- Pack loader: Triggers deterministic Context Pack loading based on classification
 
 ---
 
@@ -183,8 +188,8 @@ Performs multi-dimensional review of generated artifacts.
 
 **Responsibilities:**
 
-- Knows: Four review dimensions (cross-domain constraint validation, quality, architecture compliance, security), severity levels (blocking/warning/informational), aggregation rules
-- Does: Runs deterministic cross-domain constraint validation first, then three independent LLM review passes, aggregates results, determines overall pass/fail, feeds blocking findings back to Code Generator for remediation
+- Knows: Four review dimensions (cross-domain constraint validation, quality, architecture compliance, security), severity levels (blocking/warning/informational), aggregation rules, required artefacts declared by loaded Context Packs
+- Does: Runs deterministic cross-domain constraint validation first, verifies all required artefacts declared by loaded Context Packs are present (missing artefacts produce blocking findings), then three independent LLM review passes, aggregates results, determines overall pass/fail, feeds blocking findings back to Code Generator for remediation
 
 **Collaborators:**
 
@@ -195,6 +200,7 @@ Performs multi-dimensional review of generated artifacts.
 **Roles:**
 
 - Constraint checker: Runs deterministic cross-domain constraint validation before LLM reviews (cheapest check first)
+- Artefact checker: Verifies required artefacts from Context Packs are present (blocking if missing)
 - Reviewer: Executes three independent LLM review passes
 - Aggregator: Combines results deterministically (any blocking = fail)
 - Feedback provider: Routes blocking findings back to Code Generator with context
@@ -233,12 +239,12 @@ Creates Pull Requests for completed sub-work-items.
 
 ## LLM Gateway
 
-Thin abstraction over LLM API calls with validation, cost tracking, and budget enforcement.
+Thin abstraction over LLM API calls with validation, cost tracking, budget enforcement, and constitutional rules injection.
 
 **Responsibilities:**
 
-- Knows: Model capabilities (context window size, token limits), cost per token per model, output schemas for each stage, rate limits
-- Does: Sends prompts to LLM API, validates responses against output schemas, tracks token usage and cost, enforces pipeline cost budget, retries on API failures and schema validation failures, routes to different models per stage configuration
+- Knows: Model capabilities (context window size, token limits), cost per token per model, output schemas for each stage, rate limits, loaded constitutional rules
+- Does: Injects constitutional rules as a privileged, non-overridable component of the system prompt before any other context, sends prompts to LLM API, validates responses against output schemas, tracks token usage and cost, enforces pipeline cost budget, retries on API failures and schema validation failures, routes to different models per stage configuration
 
 **Collaborators:**
 
@@ -262,8 +268,8 @@ Deterministic service that builds context packages for LLM calls. Contains **zer
 
 **Responsibilities:**
 
-- Knows: Pyramid summary levels (1-4), context priority order (per vocabulary.md), token budget per model, file relevance rules, scenario separation rules
-- Does: Identifies relevant files based on affected modules, loads constraint documents (ADRs, standards, architectural rules), computes transitive dependencies via domain service dependency graph, selects appropriate summary level per module based on dependency distance, applies priority-based truncation when context exceeds window, enforces scenario holdout (never includes scenarios in code generation context), includes relevant interface registry entries for cross-domain context
+- Knows: Pyramid summary levels (1-4), context priority order (per vocabulary.md), token budget per model, file relevance rules, scenario separation rules, loaded Context Pack content
+- Does: Identifies relevant files based on affected modules, loads constraint documents (ADRs, standards, architectural rules), incorporates loaded Context Pack knowledge (domain knowledge, safe patterns, anti-patterns) as high-priority context, computes transitive dependencies via domain service dependency graph, selects appropriate summary level per module based on dependency distance, applies priority-based truncation when context exceeds window, enforces scenario holdout (never includes scenarios in code generation context), includes relevant interface registry entries for cross-domain context
 
 **Collaborators:**
 
@@ -277,6 +283,7 @@ Deterministic service that builds context packages for LLM calls. Contains **zer
 
 - File selector: Determines which files are relevant to a given stage/sub-work-item
 - Constraint injector: Loads and includes project rules as hard requirements
+- Pack injector: Includes loaded Context Pack domain knowledge, safe patterns, and anti-patterns
 - Summary selector: Chooses appropriate detail level per module (Level 1/2/3/4 based on dependency distance)
 - Truncator: Applies deterministic priority-based truncation with progressive level demotion to fit context window
 - Holdout enforcer: Ensures scenario specifications are never included in code generation context
@@ -570,8 +577,8 @@ Records all pipeline activity for traceability and debugging.
 
 **Responsibilities:**
 
-- Knows: Audit event schema, formatting conventions
-- Does: Records LLM calls (model, input hash, output, tokens, latency), validation results, state transitions, cost data, scenario validation results (satisfaction scores, trajectory outcomes); writes audit trail to GitHub
+- Knows: Audit event schema, formatting conventions, constitutional event types
+- Does: Records LLM calls (model, input hash, output, tokens, latency), validation results, state transitions, cost data, scenario validation results (satisfaction scores, trajectory outcomes), constitutional layer events (INJECTION_DETECTED, SCOPE_UNDERSPECIFIED, SCOPE_AMBIGUOUS, PROTECTED_PATH_VIOLATION), Context Pack loading events (which packs loaded, trigger matches); writes audit trail to GitHub
 
 **Collaborators:**
 
@@ -582,3 +589,125 @@ Records all pipeline activity for traceability and debugging.
 - Logger: Records every significant event in the pipeline
 - Formatter: Produces human-readable summaries from structured data
 - Writer: Persists audit trail to GitHub (issue comments or artifacts)
+- Safety event recorder: Records all constitutional layer events with full context for post-hoc review
+
+---
+
+## Context Pack Loader
+
+Loads domain knowledge packs based on work item classification. Contains zero LLM logic.
+
+**Responsibilities:**
+
+- Knows: Context Pack directory structure, trigger file schema, well-known pack path (default: `.cogworks/context-packs/`), trigger matching rules
+- Does: Scans available packs, evaluates each pack's trigger definition against the work item's classification labels, component tags, and safety classification, loads matching packs (domain knowledge, safe patterns, anti-patterns, required artefacts), reports loaded packs to audit trail
+
+**Collaborators:**
+
+- Configuration Manager (reads pack directory path)
+- GitHub Client (reads pack files from repository)
+- Audit Recorder (records which packs were loaded and why)
+
+**Roles:**
+
+- Scanner: Discovers available Context Packs from the configured directory
+- Trigger evaluator: Matches trigger rules against classification output deterministically
+- Loader: Reads and parses pack contents into structured domain knowledge
+- Reporter: Reports loaded packs for audit and PR description inclusion
+
+**Key behavior:**
+
+- Loading is deterministic: same classification always loads same packs
+- Multiple packs may match simultaneously
+- A matched pack is always loaded (no option to skip)
+- Trigger evaluation is a pure function: classification data in, list of matched packs out
+
+---
+
+## Constitutional Rules Loader
+
+Loads and validates the constitutional rules file. Contains zero LLM logic.
+
+**Responsibilities:**
+
+- Knows: Constitutional rules file path (default: `.cogworks/constitutional-rules.md`), file format expectations, minimum required rule set
+- Does: Reads constitutional rules from the well-known path, validates that the file exists and contains the required core rules, validates that the file comes from a reviewed/merged branch (not an unreviewed branch), produces the rules payload to be injected into the LLM system prompt
+
+**Collaborators:**
+
+- GitHub Client (reads constitutional rules file, verifies branch/merge status)
+- Configuration Manager (reads constitutional rules file path)
+
+**Roles:**
+
+- Loader: Reads the constitutional rules document
+- Validator: Ensures required rules are present and the source is from a reviewed branch
+- Formatter: Produces the system prompt component for injection by LLM Gateway
+
+**Key behavior:**
+
+- Loading is unconditional — runs on every pipeline invocation
+- Failure to load (file missing, validation failed, unreviewed source) halts the pipeline immediately
+- The loaded rules are treated as immutable for the duration of the pipeline run
+- No content in the context package can override the rules
+
+---
+
+## Injection Detector
+
+Analyzes external content for prompt injection patterns. May use heuristic and/or LLM-based detection.
+
+**Responsibilities:**
+
+- Knows: Known injection patterns (persona overrides, instruction injections, behavioral modifications), detection heuristics, LLM-based detection prompt (if used)
+- Does: Scans external content (issue bodies, specs, dependency docs, API responses) for injection patterns, emits `INJECTION_DETECTED` event when patterns found, triggers pipeline halt and hold state
+
+**Collaborators:**
+
+- Constitutional Rules Loader (provides the boundary definition between instructions and data)
+- Audit Recorder (records injection detection events with full context)
+- Pipeline Executor (receives halt signal)
+
+**Roles:**
+
+- Pattern scanner: Checks external content against known injection patterns
+- Event emitter: Produces structured INJECTION_DETECTED events with source document, offending text
+- Halt trigger: Signals the pipeline to stop and put the work item into hold state
+
+**Key behavior:**
+
+- Invoked before external content is included in any LLM prompt
+- Detection triggers immediate pipeline halt (not a warning)
+- Work item enters hold state — no automatic requeue
+- False positive resolution requires explicit human review with justification recorded
+
+---
+
+## Scope Enforcer
+
+Validates that generated artifacts stay within the approved specification scope.
+
+**Responsibilities:**
+
+- Knows: Approved specification scope, interface document, authorised file set (derived from spec and interface documents), protected path patterns
+- Does: Validates generated artifacts against the authorised file set, checks for unauthorized capabilities (network calls, file system access, IPC, etc.), validates generated files do not match protected path patterns, emits SCOPE_UNDERSPECIFIED or SCOPE_AMBIGUOUS events when scope issues are detected
+
+**Collaborators:**
+
+- Configuration Manager (reads protected path patterns)
+- Audit Recorder (records scope enforcement events)
+- Pipeline Executor (receives halt signal for scope violations)
+
+**Roles:**
+
+- File set validator: Checks generated files against the authorised file set
+- Capability scanner: Detects unauthorized capabilities in generated artifacts
+- Protected path checker: Ensures no generated file matches protected patterns (pre-PR validation)
+- Event emitter: Produces structured scope violation events
+
+**Key behavior:**
+
+- Runs before PR creation to catch scope violations
+- SCOPE_UNDERSPECIFIED: specification incomplete for the work item's needs — halt and request human input
+- SCOPE_AMBIGUOUS: safety-affecting specification is ambiguous — halt and request human clarification
+- PROTECTED_PATH_VIOLATION: generated artifacts touch protected paths — fail pre-PR validation

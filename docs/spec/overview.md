@@ -18,6 +18,8 @@ These principles are load-bearing — they constrain every architectural decisio
 
 5. **Follows the human process.** Design → contracts → plan → implement → review. Each stage produces a human-recognisable artifact.
 
+6. **Constitutional boundaries.** External content is data, not instructions. Non-overridable behavioral rules are loaded before any context assembly or LLM call. The boundary between trusted instructions and untrusted input is explicit and enforced.
+
 ## Execution Model: CLI-First
 
 CogWorks is a **CLI-first** application. Each invocation is a stateless step function:
@@ -85,11 +87,11 @@ To ensure CLI-first doesn't block future service mode:
     ┌─────────┴─────────┐ │ ├──────────────┤ │  ┌─────────┴─────────┐
     │  Prompt Templates │ │ │ Future:      │ │  │  Repo Config      │
     │  Output Schemas   │ │ │ KiCad, etc.  │ │  │  (.cogworks/)     │
-    │  (version-ctrl'd) │ │ └──────────────┘ │  │  Constraints      │
-    └───────────────────┘ └──────────────────┘  │  Interface Registry│
-                               ▲                │  ADRs, Standards  │
-                               │                └───────────────────┘
-                    ┌──────────┴──────────┐
+    │  Constitutional   │ │ └──────────────┘ │  │  Constraints      │
+    │   Rules           │ └──────────────────┘  │  Interface Registry│
+    │  (version-ctrl'd) │      ▲                │  Context Packs    │
+    └───────────────────┘      │                │  ADRs, Standards  │
+                    ┌──────────┴──────────┐     └───────────────────┘
                     │  Extension API      │
                     │  (Unix socket/HTTP) │
                     │  JSON messages      │
@@ -141,7 +143,7 @@ Each stage produces an artifact that flows into subsequent stages:
 | Stage | Input | Output | Storage |
 |-------|-------|--------|---------|
 | 1. Intake | GitHub Issue | Classification result | Issue comment + labels |
-| 2. Architecture | Classification + repo context | Specification document (Markdown) | Pull Request |
+| 2. Architecture | Classification + repo context + loaded Context Packs | Specification document (Markdown) | Pull Request |
 | 3. Interface Design | Approved spec + repo context | Interface definition files (source code) | Pull Request |
 | 4. Planning | Approved spec + approved interfaces | Sub-work-item issues with dependency graph | GitHub Issues |
 | 5. Code Generation | Sub-work-item + spec + interfaces + prior SWI outputs | Implementation code + tests | Working branch |
