@@ -52,6 +52,16 @@ The constitutional rules document must include:
 - Work item enters hold state — no automatic requeue
 - Human must review and either confirm false positive (with justification) or mark contaminated
 
+### Injection Detection Signature List — Deferred to Implementation
+
+The exact format, storage, and lifecycle of the injection detection signature list is **deferred to implementation** with the following constraints:
+
+- **Format**: Implementation may choose regex patterns, structured grammar, or embedding-based matching, but the chosen format must be documented and version-controlled.
+- **Storage**: The signature list must be stored in a version-controlled file within the repository (not hardcoded in source). The well-known path (e.g., `.cogworks/injection-patterns.toml`) must be documented alongside the constitutional rules path.
+- **Change control**: Additions and removals to the signature list require the same review process as constitutional rules changes — a reviewed and merged PR with at least one human approval.
+- **Ambiguity handling**: The implementation must define what "ambiguous" means operationally (e.g., confidence threshold for heuristic scoring). Ambiguous cases default to halting (fail-closed). The definition of the ambiguity threshold must be documented and version-controlled alongside the signature list.
+- **Testability**: The implementation must provide a test corpus of known-injection and known-clean samples. Property-based tests (required by constraints.md) must run against this corpus.
+
 ### Scope Enforcement Behavior
 
 - `SCOPE_UNDERSPECIFIED` emitted when fulfilling a work item would require capabilities not in the approved specification

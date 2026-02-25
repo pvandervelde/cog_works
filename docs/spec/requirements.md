@@ -397,7 +397,7 @@ Context Pack loading MUST be driven deterministically by the work item's classif
 
 ### REQ-CPACK-002: Pack loading timing
 
-Context Packs MUST be loaded at the Architecture stage (Stage 2), before any code generation or specification begins. Loaded packs MUST remain active for the entire pipeline run.
+Context Packs MUST be loaded at the Architecture stage (Stage 2), before any LLM call in the Architecture stage begins. Loaded packs MUST remain active for the entire pipeline run.
 
 ### REQ-CPACK-003: Multiple simultaneous packs
 

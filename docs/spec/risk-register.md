@@ -469,14 +469,14 @@ The following spec documents contain mitigations or design decisions informed by
 |------|----------------------|
 | CW-R01 | constraints.md (testing), requirements.md (REQ-REVIEW-006, REQ-CLASS-002) |
 | CW-R02 | constraints.md (security), requirements.md (REQ-CONST) |
-| CW-R03 | security.md (THREAT-003, THREAT-014), requirements.md (REQ-REVIEW-002) |
+| CW-R03 | security.md (THREAT-001, THREAT-002, THREAT-014), requirements.md (REQ-REVIEW-002) |
 | CW-R05 | vocabulary.md (Processing Lock), operations.md (runbook) |
 | CW-R06 | edge-cases.md (EDGE-043, EDGE-044), testing.md (conformance tests) |
 | CW-R07 | architecture.md (Cross-Domain Constraint Validation), requirements.md (REQ-XVAL) |
 | CW-R08–09 | vocabulary.md (Digital Twin), operations.md (twin maintenance) |
 | CW-R10 | requirements.md (REQ-CODE-004), operations.md (cost management) |
 | CW-R11 | security.md (THREAT-003, THREAT-004), constraints.md (security) |
-| CW-R12 | security.md (THREAT-016), requirements.md (REQ-CONST) |
+| CW-R12 | security.md (THREAT-001, THREAT-015), requirements.md (REQ-CONST) |
 | CW-R13 | requirements.md (REQ-AUDIT), operations.md (audit trail) |
 | CW-R15 | constraints.md (pyramid summary accuracy), vocabulary.md (Pyramid Summary Levels) |
 | CW-R18 | requirements.md (REQ-CONST), security.md (THREAT-015) |

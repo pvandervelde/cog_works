@@ -36,6 +36,42 @@ Each Context Pack is a directory at a well-known path (default: `.cogworks/conte
 - **anti-patterns.md** — Patterns to avoid with explanations of why each is unsafe
 - **required-artefacts.toml** — Artefacts that must be present in pipeline output for the pack's domain requirements to be satisfied
 
+### Trigger File Schema
+
+`trigger.toml` is a structured TOML file with the following schema. All top-level condition fields are optional; a pack is loaded when **all specified conditions are satisfied** (logical AND across condition types; logical OR within a list value).
+
+```toml
+# trigger.toml — example for the rust-embedded-safety pack
+
+[trigger]
+# Pack is loaded if the work item has ANY of these component tags (OR matching within the list).
+component_tags = ["firmware", "bootloader"]
+
+# Pack is loaded if the work item has ANY of these issue labels (OR matching within the list).
+labels = ["component:firmware", "component:bootloader"]
+
+# Pack is loaded if the work item's safety classification matches.
+# If true, the pack loads for any safety-affecting work item regardless of tags/labels.
+# If false (or omitted), safety classification is not a trigger criterion.
+safety_affecting = true
+
+# Pack is loaded if the primary language matches any entry in the list (OR matching).
+# Optional field; omit if the pack is language-agnostic.
+languages = ["rust"]
+```
+
+**Matching semantics:**
+
+- `component_tags` and `labels` both use OR matching within the list — the pack loads if the work item has *any* matching entry.
+- Conditions across different fields are combined with AND — specifying both `component_tags` and `safety_affecting = true` loads the pack only for safety-affecting work items that also have a matching component tag.
+- A `trigger.toml` with no fields defined is invalid (silently skipping an unconstrained pack would load it for every work item — a misconfiguration, not an intent).
+
+### Reference Documents
+
+Context Pack content (`domain-knowledge.md`, `safe-patterns.md`, `anti-patterns.md`) may reference external documents for additional background. Referenced documents are not automatically loaded — only the pack files themselves are included in the context window. If a referenced document is intended as the primary source for a section, its key content must be summarised directly in the pack file.
+
+Documents in `docs/standards/` are candidate source material for pack domain knowledge. They follow the same content lifecycle as context packs (version-controlled, reviewed in PRs) but are maintained separately to allow multiple packs to reference the same standards document. Once completed, their content is incorporated into the relevant pack's `domain-knowledge.md` rather than loaded by reference.
+
 ### Loading Rules
 
 1. **Deterministic selection** — Pack loading is driven by the work item's classification labels, component tags, and safety classification. The LLM does not choose which packs to load.

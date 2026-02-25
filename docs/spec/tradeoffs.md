@@ -242,9 +242,11 @@ This document records the significant design alternatives considered and the rat
 | **Cost** | Free | Token cost per call |
 | **False positives** | Pattern-dependent | May have different false positive profile |
 
-**Rationale**: Heuristic detection (regex + known pattern matching) is applied first: it is fast, deterministic, and catches the majority of obvious injection attempts. LLM-based detection adds coverage for novel patterns but introduces non-determinism and cost. The combination provides defense-in-depth. The constitutional rules themselves are a third layer — even if both detection layers miss an injection, the behavioral rules limit what the LLM can be induced to do.
+**Rationale**: Heuristic detection (regex + known pattern matching) is applied first: it is fast, deterministic, and catches the majority of obvious injection attempts. The constitutional rules themselves are the true primary defense — even if detection misses an injection, the behavioral rules limit what the LLM can be induced to do.
 
-**Key constraint**: Neither detection method provides guarantees. The constitutional layer (system-level behavioral rules) is the true primary defense; detection is an early-warning system that enables halting before generation, not a correctness guarantee.
+**Key constraint**: Heuristic detection does not provide guarantees. The constitutional layer (system-level behavioral rules) is the true primary defense; detection is an early-warning system that enables halting before generation, not a correctness guarantee.
+
+**LLM-based secondary pass**: An LLM-based secondary detection pass for borderline cases is *deferred as a future enhancement*. Injection Detection is classified as pure Business Logic (zero I/O), and an LLM secondary pass would require I/O, violating this boundary. If introduced in a future version, it must be delegated through an `InjectionDetector` abstraction (not inline I/O in business logic) and its non-determinism must be explicitly accepted.
 
 ---
 
