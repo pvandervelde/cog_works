@@ -60,6 +60,7 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | CW-R01-M3 | Implement property-based testing (proptest) for all safety-critical modules. Properties include: angle never exceeds physical limits, velocity never exceeds safe threshold, watchdog always triggers on comms loss, brake always engages on fault. | Detective | Planned |
 | CW-R01-M4 | Scenario validation with satisfaction threshold ≥ 0.99 for safety-critical modules (stricter than the default 0.95). Failure criteria violations are always blocking. | Detective | Planned |
 | CW-R01-M5 | Formal invariant specifications for critical control loops, checked by model checking or static analysis tools, not by LLM. | Detective | Future |
+| CW-R01-M6 | Constitutional scope-binding rules prevent the LLM from implementing capabilities not in the approved specification. This reduces the probability of the LLM introducing unspecified behaviour (e.g., adding undocumented control paths) that could manifest as a subtle logic error in safety-critical code. | Preventive | Planned |
 
 **Residual Risk:** Moderate. No automated system can guarantee absence of subtle errors. Defence-in-depth (multiple independent detection mechanisms) reduces probability but does not eliminate it. Human review of safety-critical code remains essential. Physical validation by downstream external systems is expected before any safety-critical firmware change is deployed to production hardware.
 
@@ -467,7 +468,7 @@ The following spec documents contain mitigations or design decisions informed by
 
 | Risk | Primary Spec Reference |
 |------|----------------------|
-| CW-R01 | constraints.md (testing), requirements.md (REQ-REVIEW-006, REQ-CLASS-002) |
+| CW-R01 | constraints.md (testing), requirements.md (REQ-REVIEW-006, REQ-CLASS-002, REQ-CONST) |
 | CW-R02 | constraints.md (security), requirements.md (REQ-CONST) |
 | CW-R03 | security.md (THREAT-001, THREAT-002, THREAT-014), requirements.md (REQ-REVIEW-002) |
 | CW-R05 | vocabulary.md (Processing Lock), operations.md (runbook) |

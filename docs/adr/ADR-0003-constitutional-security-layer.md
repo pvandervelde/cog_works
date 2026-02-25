@@ -29,6 +29,7 @@ CogWorks will implement a **Constitutional Layer**: a set of non-overridable beh
 - **Unconditional** — Constitutional rules are loaded on every pipeline run. This is NOT a configurable gate (exception to REQ-PIPE-006's general gate configurability principle).
 - **Source** — Version-controlled file at a well-known path (default: `.cogworks/constitutional-rules.md`).
 - **Human-approved only** — Changes to the constitutional rules file require a reviewed and merged PR with at least one human approval. Rules from unreviewed branches are rejected.
+- **Branch validation mechanism** — "Unreviewed branches" is enforced by fetching the constitutional rules file content from the repository's **default branch HEAD** via the GitHub API at pipeline startup. The on-disk file (in the working copy or workflow environment) is compared byte-for-byte against the fetched content. If they differ, the pipeline halts with a `CONSTITUTIONAL_RULES_TAMPERED` event before any LLM call. This approach is used (rather than inspecting git metadata) because it is reliable in all GitHub Actions contexts including detached HEAD, shallow clones, and merge commits.
 - **Privileged position** — Rules are injected as a privileged, non-overridable component of the LLM system prompt. No content in the context package may modify, append to, or override them.
 
 ### Required Rules

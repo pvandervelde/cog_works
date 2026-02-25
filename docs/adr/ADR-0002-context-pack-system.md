@@ -79,6 +79,55 @@ Documents in `docs/standards/` are candidate source material for pack domain kno
 3. **Conflict resolution** — Where packs contain contradictory guidance, the more restrictive rule applies.
 4. **Unconditional when matched** — If a work item matches a pack's trigger, that pack is loaded. There is no option to skip it.
 
+### Required Artefact File Schema
+
+`required-artefacts.toml` declares the artefacts the Review stage must verify are present in the pipeline output. Each artefact entry has three fields:
+
+```toml
+# required-artefacts.toml — example for the rust-embedded-safety pack
+
+[[artefact]]
+# Human-readable name used in blocking findings when the artefact is missing.
+name = "Unsafe block justification"
+
+# Type classifies how presence is verified.
+# "file" — a file matching the path_pattern must exist in the generated output.
+# "section" — a Markdown section matching the heading_pattern must exist in the named file.
+# "annotation" — every instance of code_pattern in the output must have an adjacent annotation_pattern.
+type = "annotation"
+
+# code_pattern: regex matched against generated source files. Required for type "annotation".
+code_pattern = 'unsafe\s*\{'
+
+# annotation_pattern: regex that must appear within N lines of each code_pattern match.
+# Required for type "annotation".
+annotation_pattern = '# SAFETY:'
+
+[[artefact]]
+name = "Panic path analysis document"
+type = "file"
+
+# path_pattern: glob matched against the generated output file set. Required for type "file".
+path_pattern = "docs/safety/panic-path-analysis*.md"
+
+[[artefact]]
+name = "Stack usage analysis"
+type = "section"
+
+# file_pattern: glob identifying which output file to inspect. Required for type "section".
+file_pattern = "docs/safety/*.md"
+
+# heading_pattern: regex matched against Markdown headings (## ...) in the target file.
+heading_pattern = 'Stack (Usage|Budget) Analysis'
+```
+
+**Verification semantics:**
+
+- `file` — at least one file in the generated output matches the glob. Missing → blocking finding.
+- `section` — at least one file matching `file_pattern` contains a heading matching `heading_pattern`. Missing → blocking finding.
+- `annotation` — every occurrence of `code_pattern` in the generated source has `annotation_pattern` within 5 lines (configurable). Any unadorned occurrence → blocking finding.
+- Malformed `required-artefacts.toml` (missing required fields for the declared type) is a configuration error reported at pack load time, not at review time.
+
 ### Required Artefact Enforcement
 
 Each pack may declare required artefacts. At the Review stage, CogWorks verifies all declared artefacts are present. Missing artefacts produce blocking findings identifying the pack and the missing artefact.

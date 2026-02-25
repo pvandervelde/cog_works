@@ -231,7 +231,7 @@ This document records the significant design alternatives considered and the rat
 
 ## 14. Deterministic vs. LLM-Based Injection Detection
 
-**Decision**: Heuristic-first injection detection, with LLM-based detection as a secondary pass for borderline cases.
+**Decision**: Heuristic-only injection detection (LLM-based secondary pass deferred to future enhancement).
 
 | Factor | Heuristic / Regex | LLM-Based |
 |--------|------------------|-----------|
