@@ -124,7 +124,7 @@ Each pipeline run MUST have a dedicated working directory — a git worktree che
 
 ### REQ-EXEC-002: Pipeline state machine
 
-The orchestrator MUST maintain a state machine for each pipeline run tracking: current active nodes, completed nodes with outputs, pending nodes, failed nodes with error info, per-cycle traversal counts, and cumulative cost. The state machine MUST be representable as a JSON document and MUST be written to a GitHub comment on the parent work item at each node boundary.
+The orchestrator MUST maintain a state machine for each pipeline run tracking: current active nodes, completed nodes with outputs, pending nodes (inputs not yet available), blocked nodes (upstream dependency failed — inputs will never arrive), failed nodes with error info, per-cycle traversal counts, and cumulative cost. The state machine MUST be representable as a JSON document and MUST be written to a GitHub comment on the parent work item at each node boundary.
 
 ### REQ-EXEC-003: Node execution lifecycle
 
