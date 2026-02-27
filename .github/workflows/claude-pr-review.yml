@@ -5,6 +5,9 @@ on:
 
 jobs:
     review:
+        if: >-
+            github.event.pull_request.user.login != 'renovate[bot]' &&
+            github.event.pull_request.user.login != 'release-plz-pvandervelde[bot]'
         runs-on: ubuntu-latest
         permissions:
             contents: read
