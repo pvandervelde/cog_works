@@ -153,8 +153,9 @@ Deterministic selection of context items when the full package exceeds the model
   1. Current sub-work-item's interface definition
   2. Directly depended-upon sub-work-item outputs
   3. Architectural constraints document
-  4. Coding standards document
-  5. Remaining items ranked by import-graph proximity to affected modules
+  4. Context Pack domain knowledge (from loaded packs)
+  5. Coding standards document
+  6. Remaining items ranked by import-graph proximity to affected modules
 
 ### Label Parsing and Generation
 

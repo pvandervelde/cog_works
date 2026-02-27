@@ -758,3 +758,22 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: Node C is terminated (in-progress LLM calls allowed to complete)
 - **And**: The pipeline enters an error state for the failed sub-graph
 - **Traces to**: REQ-EXEC-006
+
+### ASSERT-GRAPH-014: Dead-end node triggers pipeline halt with clear error
+
+- **Given**: Node A completes successfully
+- **When**: All outgoing edges from A have conditions that evaluate to false
+- **Then**: No downstream nodes are activated
+- **And**: The pipeline posts a warning comment identifying A as a dead-end node
+- **And**: The pipeline halts with a structured error (not silently stalls)
+- **Traces to**: REQ-EXEC-003, EDGE-064
+
+### ASSERT-GRAPH-015: Graph traversal state is fully restored on resume
+
+- **Given**: A pipeline run is interrupted mid-graph and has persisted its state to GitHub
+- **When**: The pipeline is reinvoked for the same work item
+- **Then**: The orchestrator reads the persisted pipeline state JSON from the GitHub issue
+- **And**: Per-node traversal counts (rework cycle counts) are restored
+- **And**: Fan-out completion state is restored (which upstream nodes have finished)
+- **And**: Execution resumes from the failed or incomplete node, not from the start
+- **Traces to**: REQ-EXEC-004, ASSERT-PSM-009

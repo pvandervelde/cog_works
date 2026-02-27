@@ -2,9 +2,9 @@ name: Quality Checks
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ master, main, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ master, main, develop ]
 
 jobs:
   fast-checks:
@@ -14,9 +14,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-
-      # Task tracking validation (if Beads is used)
+        uses: actions/checkout@v4
       - name: Check task tracking
         continue-on-error: true
         run: |
@@ -57,11 +55,11 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-
-
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
-        with:
-          fail_ci_if_error: true
+      # Add test execution and coverage upload here when production code exists.
+      # Example:
+      #   - name: Run tests
+      #     run: cargo test
+      #   - name: Upload coverage
+      #     uses: codecov/codecov-action@v4

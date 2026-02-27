@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-02-25
-**Deciders:** Architecture
+**Deciders:** CogWorks maintainers
 **Supersedes:** Portions of REQ-PIPE-003 (fixed linear sequence)
 
 ---

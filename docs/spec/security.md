@@ -331,7 +331,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 1. **Pipeline configuration in protected paths**: `.cogworks/pipeline.toml` must be added to the CODEOWNERS protected path set. Changes require human approval via required review.
 2. **Load-time schema validation**: Pipeline configuration is validated against a strict JSON Schema at load time. Invalid configurations are rejected before any node executes.
-3. **Node registry restriction**: Only built-in node types (LLM, deterministic-builtin, spawning) or pre-approved domain service names may appear in node definitions. Unknown identifiers cause load-time rejection.
+3. **Node registry restriction**: User-supplied pipeline configurations (`pipeline.toml`) may only use `domain_service` or `builtin` execution methods for Deterministic nodes. The `script` execution method (arbitrary shell command) is prohibited in externally-configurable pipelines — it would allow an attacker to run arbitrary commands with CogWorks' process credentials. Script-method nodes are only permitted in CogWorks' own built-in pipeline definitions, which are not user-controllable. Unknown node type identifiers cause load-time rejection.
 4. **Audit log**: Pipeline configuration hash is recorded in the audit trail at pipeline start. Unexpected changes are detectable.
 5. **Rework loop cap enforcement**: Max traversal limits are enforced even if the configuration specifies an unusually high value (hard cap in code, not just validation).
 

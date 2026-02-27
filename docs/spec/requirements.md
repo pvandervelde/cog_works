@@ -72,7 +72,7 @@ Each node in the graph MUST have a unique name within the pipeline configuration
 
 ### REQ-GRAPH-003: Default linear pipeline
 
-If a repository has no pipeline configuration file, the orchestrator MUST use a default pipeline equivalent to the original 7-node linear sequence: Intake → Architecture → Interface Design → Planning → Code Generation → Review → Integration. Default properties: all edges unconditional, review failure loops back to Code Generation (retry budget: 5), safety-classified work items require human approval at Architecture, Interface Design, and Review, no parallel execution.
+If a repository has no pipeline configuration file, the orchestrator MUST use a default pipeline equivalent to the original 7-node linear sequence: Intake → Architecture → Interface Design → Planning → Code Generation → Review → Integration. Default properties: all edges unconditional, review-to-code-generation rework edge has `max_traversals: 3` (matching REQ-REVIEW-005's default remediation cycle limit), safety-classified work items require human approval at Architecture, Interface Design, and Review, no parallel execution.
 
 ### REQ-GRAPH-004: Pipeline configuration file
 

@@ -71,7 +71,7 @@ A transition between two nodes in the pipeline graph.
 - Contains: Source node, target node, optional condition
 - Unconditional edges: Always taken (condition omitted)
 - Conditional edges: Taken only when the condition evaluates to true
-- Evaluation modes (per source node): `all-matching` (fan-out to all true edges), `first-matching` (exclusive routing), or `explicit` (node output names edges to take)
+- Evaluation modes (per source node): `all-matching` (fan-out to all true edges), `first-matching` (exclusive routing), or `explicit` (node output includes a `next_edges` field — a list of edge IDs — that the orchestrator uses to determine exactly which edges to activate; the node's output schema must declare this field)
 
 ### Edge Condition
 
@@ -407,7 +407,8 @@ A file from an external repository included as read-only context for code genera
 
 The structured representation of a pipeline run's progress, maintained by the orchestrator.
 
-- Contains: Active nodes (currently executing), completed nodes with outputs, pending nodes (inputs not yet available), failed nodes with error info, per-cycle traversal counts, cumulative cost
+- Contains: Active nodes (currently executing), completed nodes with outputs, pending nodes (inputs not yet available, waiting for upstream to finish), blocked nodes (an upstream dependency failed — cannot proceed without human intervention or rerouting), failed nodes with error info, per-cycle traversal counts, cumulative cost
+- Node state distinctions: `pending` waits for upstream to complete normally; `blocked` means upstream has failed and this node's inputs will never arrive — requires escalation rather than waiting
 - Format: JSON document, written to a GitHub comment on the parent work item at each node boundary
 - Purpose: Human visibility and crash recovery
 - Recovery: On re-invocation, the orchestrator reads this state and resumes from where it left off

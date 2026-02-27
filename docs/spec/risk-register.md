@@ -505,4 +505,4 @@ The following spec documents contain mitigations or design decisions informed by
 | CW-R13 | requirements.md (REQ-AUDIT), operations.md (audit trail) |
 | CW-R15 | constraints.md (pyramid summary accuracy), vocabulary.md (Pyramid Summary Levels) |
 | CW-R18 | requirements.md (REQ-CONST), security.md (THREAT-015) |
-| CW-R19 | edge-cases.md (EDGE-057, EDGE-058, EDGE-064), constraints.md (Pipeline Graph), assertions.md (ASSERT-GRAPH-004, ASSERT-GRAPH-006), security.md (THREAT-018) |
+| CW-R19 | edge-cases.md (EDGE-006a, EDGE-006b, EDGE-057, EDGE-058, EDGE-064), constraints.md (Pipeline Graph), assertions.md (ASSERT-GRAPH-004, ASSERT-GRAPH-005, ASSERT-GRAPH-006, ASSERT-GRAPH-014), security.md (THREAT-018) |
