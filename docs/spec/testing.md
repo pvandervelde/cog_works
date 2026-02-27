@@ -11,7 +11,7 @@ This document defines how CogWorks itself is tested. Not how CogWorks tests gene
             │  E2E    │   Few: Full pipeline against real GitHub + LLM
             │  Tests  │
            ─┼─────────┼─
-          │  Integration  │  Moderate: Stage executors with mock services
+          │  Integration  │  Moderate: Node implementations with mock services
           │    Tests      │
          ─┼───────────────┼─
         │    Unit Tests       │  Many: Business logic, pure input/output
@@ -27,12 +27,19 @@ Business logic is pure — no I/O, no mocks needed. Test with direct input/outpu
 
 ### Pipeline State Machine
 
-- All valid stage transitions (stage N → stage N+1)
-- Invalid transitions (skip a stage, go backwards)
+- All valid node transitions via edge conditions
+- Invalid transitions (node activated without inputs available)
 - Human-gated vs. auto-proceed behavior
 - Safety-critical gate override
 - Processing lock detection (back off when another instance is active)
-- Sub-work-item ordering within stages 5-7
+- Sub-work-item ordering within code-generation/review/integration nodes
+- Default linear pipeline used when no configuration file exists
+- Fan-out: multiple downstream nodes activated when conditions met
+- Fan-in: downstream node waits until all upstream nodes complete
+- Rework edge traversal count enforcement (max traversals)
+- Cycle termination: pipeline halts when rework budget exhausted
+- Pipeline resume from failed node using persisted state
+- Pipeline cancellation: active nodes terminated, state written to GitHub
 
 ### Classification Rules
 
@@ -67,7 +74,8 @@ Business logic is pure — no I/O, no mocks needed. Test with direct input/outpu
 - Cost within budget → approved
 - Cost exactly at budget → approved (boundary condition)
 - Cost exceeding budget → denied with cost report
-- Cost report structure (per-stage, per-sub-work-item breakdown)
+- Cost report structure (per-node, per-sub-work-item breakdown)
+- Parallel budget atomicity: two concurrent nodes cannot both be approved if combined cost exceeds budget
 
 ### Context Priority and Truncation
 
@@ -80,7 +88,7 @@ Business logic is pure — no I/O, no mocks needed. Test with direct input/outpu
 ### Label Parsing and Generation
 
 - Round-trip: structured type → label string → structured type = identity
-- All label patterns: stage, status, depends-on, order, processing, safety-critical, hold
+- All label patterns: node, status, depends-on, order, processing, safety-critical, hold
 - Invalid label strings → parse error (not panic)
 
 ### Context Pack Selection
@@ -132,9 +140,9 @@ Business logic is pure — no I/O, no mocks needed. Test with direct input/outpu
 
 ---
 
-## Integration Tests (Stage Executors with Mocks)
+## Integration Tests (Node Implementations with Mocks)
 
-Stage executors orchestrate calls between business logic and abstractions. Test them with mock implementations of abstraction traits.
+Node implementations orchestrate calls between business logic and abstractions. Test them with mock implementations of abstraction traits.
 
 ### Mock Implementations
 
@@ -152,16 +160,16 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 - **Mock Injection Detector**: Returns pre-configured detection results; can simulate detection with specific offending text, no detection, and borderline cases for testing pipeline halt behavior
 - **Mock Scope Enforcer**: Returns pre-configured scope validation results; can simulate SCOPE_UNDERSPECIFIED, SCOPE_AMBIGUOUS, PROTECTED_PATH_VIOLATION, and clean pass
 
-### Test Scenarios per Stage
+### Test Scenarios per Node
 
-**Task Classifier (Stage 1):**
+**Task Classifier (Intake Node):**
 
 - Happy path: Issue body → LLM classification → safety cross-validation → labels applied
 - LLM returns invalid schema → retry with error → valid response → proceed
 - Safety override triggered → safety-critical label applied
 - Scope exceeded → escalation produced
 
-**Specification Generator (Stage 2):**
+**Specification Generator (Architecture Node):**
 
 - Happy path: Context assembled (with matching Context Pack) → LLM generates spec → validation passes → PR created
 - Happy path (no packs): Context assembled (no matching packs) → LLM generates spec → validation passes → PR created
@@ -170,20 +178,20 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 - PR already exists (idempotency) → detected, no duplicate created
 - Context Pack loaded → pack content included in LLM context (verified via Mock LLM Provider call capture)
 
-**Interface Generator (Stage 3):**
+**Interface Generator (Interface Design Node):**
 
 - Happy path: Spec read → context assembled → LLM generates interfaces → domain service validates → PR created
 - Validation fails → retry with error → passes on retry → PR created
 - Parse error in generated code → retry with error
 
-**Work Planner (Stage 4):**
+**Work Planner (Planning Node):**
 
 - Happy path: Decomposition → validation → sub-issues created
 - Cycle detected → retry with error → acyclic plan → sub-issues created
 - Too many sub-work-items → escalation
 - Missing interface coverage → retry with error
 
-**Code Generator (Stage 5):**
+**Code Generator (Code Generation Node):**
 
 - Happy path: Generate → normalise → validate → review_rules → simulate → pass
 - Validation failure → feedback → retry → pass
@@ -193,7 +201,7 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 - Cost budget exceeded mid-generation → halt with report
 - Domain service unavailable → early failure with diagnostic
 
-**Review Executor (Stage 6):**
+**Review Executor (Review Node):**
 
 - Happy path: Four passes (1 deterministic + 3 LLM), all clean → proceed
 - Required artefact from loaded pack is missing → blocking finding produced, no PR creation
@@ -202,22 +210,29 @@ Stage executors orchestrate calls between business logic and abstractions. Test 
 - Multiple remediation cycles → finding resolved → proceed
 - Remediation cycle limit exceeded → escalation
 
-**Integration Manager (Stage 7):**
+**Integration Manager (Integration Node):**
 
 - Happy path: PR created with correct references and comments
 - Non-blocking findings posted as inline comments
 - PR already exists (idempotency) → detected
 
-### Pipeline Executor (Full Stage Sequence)
+### Pipeline Executor (Graph Traversal)
 
-- Fresh work item → constitutional rules loaded first, then progresses through all stages
-- Missing constitutional rules → pipeline halts before any stage runs
+- Fresh work item → constitutional rules loaded first, then progresses through all nodes
+- Missing constitutional rules → pipeline halts before any node runs
 - Injection detected in issue body → pipeline halts, work item enters hold state
 - Work item in hold state → invocation detects hold state, exits without action
-- Re-processing after crash at each stage → resumes correctly
-- Human-gated stage → stops and waits
+- Re-processing after crash at each node → resumes from failed node using persisted state
+- Human-gated node → stops and waits
 - Safety-critical work item → forced human gates
 - Protected path violation in generated files → PR creation blocked
+- Custom pipeline graph → correct traversal order
+- Fan-out → parallel nodes activated and execute concurrently
+- Fan-in → downstream node waits for all upstreams
+- Rework edge → re-executes node with preserved/discarded outputs per configuration
+- Rework max traversals reached → escalation or overflow edge
+- Pipeline cancellation → active nodes terminated, state persisted
+- Duplicate pipeline trigger → rejected with comment
 
 ---
 
@@ -308,7 +323,7 @@ Full pipeline tests against real GitHub and real LLM API. These are expensive an
 
 ### Scenarios
 
-- **Happy path**: Create issue → apply trigger label → verify all stages complete → verify PRs created with correct content
+- **Happy path**: Create issue → apply trigger label → verify all nodes complete → verify PRs created with correct content
 - **Safety-critical path**: Create issue touching safety-critical module → verify human gates enforced
 - **Escalation path**: Create issue with scope exceeding threshold → verify escalation comment posted
 - **Re-trigger path**: Fail a sub-work-item intentionally → re-trigger → verify recovery
@@ -328,9 +343,9 @@ The test suite requires several fixture types:
 - **Fixture domain projects**: Small, valid projects for each supported domain (e.g., Rust crate, KiCad schematic) with known validation results, simulation results, and interface surfaces. Stored in `tests/fixtures/domains/`.
 - **Fixture interface registries**: Hand-crafted `.cogworks/interfaces/` directories with known valid, invalid, and conflicting TOML definitions. Stored in `tests/fixtures/interfaces/`.
 - **GitHub API response fixtures**: Recorded or hand-crafted JSON responses for GitHub API calls. Stored in `tests/fixtures/github/`.
-- **LLM response fixtures**: Recorded or hand-crafted LLM responses for each stage's output schema. Stored in `tests/fixtures/llm/`.
+- **LLM response fixtures**: Recorded or hand-crafted LLM responses for each node type's output schema. Stored in `tests/fixtures/llm/`.
 - **Extension API message fixtures**: Hand-crafted JSON request/response pairs for each Extension API method. Stored in `tests/fixtures/extension_api/`.
-- **Configuration fixtures**: Various `.cogworks/config.toml` files exercising different configuration options (including domain service registration). Stored in `tests/fixtures/config/`.
+- **Configuration fixtures**: Various `.cogworks/config.toml` files exercising different configuration options (including domain service registration). Stored in `tests/fixtures/config/`.\n- **Pipeline configuration fixtures**: Various `.cogworks/pipeline.toml` files exercising: default linear pipeline, custom graph with fan-out/fan-in, graph with rework loops, graph with conditional edges (deterministic and LLM-evaluated), graph with spawning nodes, multiple named pipelines, invalid graphs (unterminated cycles, orphan nodes, duplicate names). Stored in `tests/fixtures/pipelines/`.
 
 ---
 
@@ -339,7 +354,7 @@ The test suite requires several fixture types:
 | Layer | Coverage Target | Measured By |
 |-------|----------------|-------------|
 | Business logic | 100% line coverage | `cargo tarpaulin` or `grcov` |
-| Stage executors | 90% line coverage | `cargo tarpaulin` or `grcov` |
+| Node implementations | 90% line coverage | `cargo tarpaulin` or `grcov` |
 | Infrastructure | 80% line coverage | `cargo tarpaulin` or `grcov` |
 | E2E | Key scenarios covered | Manual checklist |
 

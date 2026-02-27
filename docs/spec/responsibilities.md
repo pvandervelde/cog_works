@@ -4,43 +4,122 @@ This document uses CRC-style (Class-Responsibility-Collaborator) notes to define
 
 ---
 
-## Pipeline Executor
+## Pipeline Executor (Graph Executor)
 
-The central coordinator. Knows the stage sequence and decides what to do next.
+The central coordinator. Knows the pipeline graph structure and executes it by traversing nodes and evaluating edge conditions.
 
 **Responsibilities:**
 
-- Knows: Stage sequence (1-7), stage gate configuration (auto/human per stage), current pipeline state (reconstructed from GitHub), constitutional rules file path
-- Does: Loads constitutional rules at the start of every run (unconditional, before any other action), determines the next action for a given work item, delegates to the appropriate stage executor, enforces stage gate rules, manages the processing lock
+- Knows: Pipeline graph definition (nodes, edges, conditions), node gate configuration (auto/human per node), current pipeline state (reconstructed from GitHub), constitutional rules file path, shift work boundary per classification, maximum concurrent LLM calls limit
+- Does: Loads constitutional rules at the start of every run (unconditional, before any other action), loads pipeline configuration (or falls back to default linear pipeline), determines the next action(s) for a given work item by traversing the graph, delegates to the appropriate node implementations, evaluates edge conditions to determine downstream activation, manages parallel fan-out and fan-in synchronisation, enforces node gate rules, manages the processing lock, writes pipeline state to GitHub at each node boundary, supports resume from failed node
 
 **Collaborators:**
 
 - Constitutional Rules Loader (loads constitutional rules from well-known path)
-- GitHub Client (reads current state: labels, issues, PRs)
-- Stage Executors (delegates execution of each stage)
-- Audit Recorder (logs stage transitions)
-- Configuration Manager (reads gate configuration)
+- Pipeline Configuration Manager (loads and validates pipeline graph definition)
+- Edge Condition Evaluator (evaluates edge conditions to determine downstream node activation)
+- GitHub Client (reads current state: labels, issues, PRs; writes pipeline state comments)
+- Node Implementations (delegates execution of each node)
+- Audit Recorder (logs node transitions, edge evaluations, pipeline state)
+- Configuration Manager (reads gate configuration, shift work boundary)
 
 **Roles:**
 
-- Orchestrator: Coordinates the pipeline flow
-- State machine: Enforces valid stage transitions
+- Orchestrator: Coordinates pipeline flow through graph traversal
+- State machine: Enforces valid node transitions based on edge conditions and input availability
+- Parallel coordinator: Manages concurrent execution of independent nodes as async tasks
 - Lock manager: Applies/removes processing lock
 - Constitutional enforcer: Ensures constitutional rules are loaded before any LLM interaction
+- Recovery manager: Reconstructs pipeline state from GitHub and resumes from failed node
 
 **Key behavior:**
 
 - Load constitutional rules before any other action (REQ-CONST-001) — failure to load is a pipeline-halting error
-- Given a work item, reconstruct its pipeline state from GitHub (labels, sub-issues, PR status)
-- Determine which stage the pipeline is in
-- Determine whether the current stage gate has been passed
-- If the gate is passed, advance to the next stage by delegating to the appropriate executor
-- If the gate is pending (human-gated), do nothing (exit and wait for next invocation)
-- Handle the special case of stages 5-7 looping over sub-work-items in dependency order
+- Load pipeline configuration from `.cogworks/pipeline.toml` or fall back to default linear pipeline
+- Given a work item, reconstruct its pipeline state from GitHub (labels, sub-issues, PR status, state comments)
+- Determine which node(s) are eligible for execution (inputs available, edge conditions satisfied)
+- For each eligible node: check gate configuration; if auto-proceed, delegate to node implementation; if human-gated, do nothing (exit and wait)
+- When multiple nodes are eligible simultaneously, execute them concurrently (respecting max concurrent LLM calls)
+- On node completion: evaluate outgoing edge conditions, activate eligible downstream nodes
+- Write pipeline state to GitHub after each node boundary (crash-recovery point)
+- Handle fan-in: a node requiring inputs from multiple upstream nodes stays pending until all are complete
+- Track per-cycle traversal counts for rework edges and enforce termination conditions
 
 ---
 
-## Task Classifier (Stage 1 Executor)
+## Edge Condition Evaluator
+
+Evaluates edge conditions to determine which downstream nodes to activate after a node completes.
+
+**Responsibilities:**
+
+- Knows: Edge condition types (deterministic, LLM-evaluated, composite), expression language for deterministic conditions, fallback behavior for LLM failures
+- Does: Evaluates deterministic conditions against pipeline state, invokes LLM for natural-language conditions (with fallback), combines results for composite conditions (AND/OR/NOT), records all evaluations in audit trail
+
+**Collaborators:**
+
+- LLM Gateway (for LLM-evaluated conditions)
+- Audit Recorder (records all edge condition evaluations)
+- Pipeline Executor (receives evaluation results to determine next nodes)
+
+**Roles:**
+
+- Expression evaluator: Evaluates deterministic conditions against pipeline state
+- LLM condition evaluator: Assesses natural-language conditions via LLM
+- Combiner: Evaluates composite conditions from boolean combinations
+- Fallback handler: Applies deterministic fallback when LLM is unavailable or ambiguous
+- Audit recorder: Ensures every evaluation is recorded for traceability
+
+---
+
+## Pipeline Configuration Manager
+
+Loads, validates, and provides access to pipeline graph definitions.
+
+**Responsibilities:**
+
+- Knows: Pipeline configuration schema, configuration file location (`.cogworks/pipeline.toml`), default linear pipeline definition, graph validation rules (cycle termination, reachability, node uniqueness)
+- Does: Loads pipeline configuration from the repository, validates graph structure (no cycles without termination conditions, all nodes reachable, all edges have valid source/target), selects the correct named pipeline based on classification output, falls back to default linear pipeline when no configuration exists
+
+**Collaborators:**
+
+- GitHub Client (reads configuration file from repository)
+- Configuration Manager (reads configuration file path)
+
+**Roles:**
+
+- Loader: Reads and parses pipeline configuration from TOML
+- Validator: Ensures graph structure is well-formed (no orphan nodes, cycles have termination, all node names unique)
+- Selector: Chooses the correct named pipeline based on work item classification
+- Default provider: Supplies the built-in 7-node linear pipeline when no configuration file exists
+
+---
+
+## Spawning Node Executor
+
+Executes spawning nodes that create derivative work items without blocking the pipeline.
+
+**Responsibilities:**
+
+- Knows: Issue creation template, label configuration, linking rules
+- Does: Analyzes pipeline context (via LLM prompt or deterministic script) to determine what derivative work items to create, creates GitHub Issues for each, links them to the parent work item, applies configured labels, records created issues in audit trail
+
+**Collaborators:**
+
+- LLM Gateway (for LLM-based analysis of what issues to create)
+- GitHub Client (creates issues, applies labels, links to parent)
+- Audit Recorder (logs spawned issues)
+
+**Roles:**
+
+- Analyzer: Determines what derivative work items to create from pipeline context
+- Issue creator: Creates well-structured GitHub Issues with proper templates
+- Linker: Links spawned issues to the parent work item
+- Non-blocking executor: Pipeline continues regardless of spawning outcome
+
+---
+
+## Task Classifier (Intake Node Implementation)
 
 Analyzes a work item to determine its type, scope, and safety impact.
 
@@ -68,18 +147,18 @@ Analyzes a work item to determine its type, scope, and safety impact.
 - Invoke LLM with classification prompt and validate response against schema
 - If LLM says "not safety-affecting" but affected modules include a registered safety-critical module → override to safety-affecting
 - If estimated scope exceeds threshold → escalate (don't proceed)
-- Post classification summary as issue comment, apply stage and safety labels
+- Post classification summary as issue comment, apply node and safety labels
 
 ---
 
-## Specification Generator (Stage 2 Executor)
+## Specification Generator (Architecture Node Implementation)
 
 Produces a technical specification document from the classified work item.
 
 **Responsibilities:**
 
 - Knows: Specification document structure, architectural constraint rules, Context Pack trigger rules
-- Does: Loads applicable Context Packs based on classification labels/tags, assembles context (including loaded pack knowledge), invokes LLM to generate spec, validates references and dependency changes, runs cross-domain constraint validation against interface registry at architecture stage, creates specification PR
+- Does: Loads applicable Context Packs based on classification labels/tags, assembles context (including loaded pack knowledge), invokes LLM to generate spec, validates references and dependency changes, runs cross-domain constraint validation against interface registry at architecture node, creates specification PR
 
 **Collaborators:**
 
@@ -99,7 +178,7 @@ Produces a technical specification document from the classified work item.
 
 ---
 
-## Interface Generator (Stage 3 Executor)
+## Interface Generator (Interface Design Node Implementation)
 
 Produces concrete interface definitions in the target domain's artifact format.
 
@@ -123,7 +202,7 @@ Produces concrete interface definitions in the target domain's artifact format.
 
 ---
 
-## Work Planner (Stage 4 Executor)
+## Work Planner (Planning Node Implementation)
 
 Decomposes the approved spec and interfaces into sub-work-items.
 
@@ -147,14 +226,14 @@ Decomposes the approved spec and interfaces into sub-work-items.
 
 ---
 
-## Code Generator (Stage 5 Executor)
+## Code Generator (Code Generation Node Implementation)
 
 Generates implementation artifacts for a single sub-work-item through an iterative refinement loop.
 
 **Responsibilities:**
 
 - Knows: Iterative refinement loop (generate → validate → simulate → retry), retry budget
-- Does: Assembles context (spec + interfaces + prior SWI outputs + sub-work-item description), invokes LLM to generate artifacts, runs deterministic checks via domain service, feeds errors back to LLM, iterates until pass or budget exhausted
+- Does: Assembles context (spec + interfaces + prior SWI outputs + sub-work-item description), invokes LLM to generate artifacts, writes output to pipeline working directory, runs deterministic checks via domain service, feeds errors back to LLM, iterates until pass or budget exhausted
 
 **Collaborators:**
 
@@ -177,12 +256,12 @@ Generates implementation artifacts for a single sub-work-item through an iterati
 4. If deterministic checks fail → feed structured errors to LLM, retry from step 2
 5. If deterministic checks pass → run simulation/tests via domain service `simulate`
 6. If simulation fails → assess if failure is self-explanatory (deterministic heuristic); if yes, feed directly to LLM; if no, invoke LLM to interpret failure, then retry from step 2
-7. If simulation passes → hand off to Review Executor
+7. If simulation passes → node completes, outputs available for downstream edges
 8. If retry budget exceeded → escalate
 
 ---
 
-## Review Executor (Stage 6 Executor)
+## Review Executor (Review Node Implementation)
 
 Performs multi-dimensional review of generated artifacts.
 
@@ -214,7 +293,7 @@ Performs multi-dimensional review of generated artifacts.
 
 ---
 
-## Integration Manager (Stage 7 Executor)
+## Integration Manager (Integration Node Implementation)
 
 Creates Pull Requests for completed sub-work-items.
 
@@ -243,14 +322,14 @@ Thin abstraction over LLM API calls with validation, cost tracking, budget enfor
 
 **Responsibilities:**
 
-- Knows: Model capabilities (context window size, token limits), cost per token per model, output schemas for each stage, rate limits, loaded constitutional rules
-- Does: Injects constitutional rules as a privileged, non-overridable component of the system prompt before any other context, sends prompts to LLM API, validates responses against output schemas, tracks token usage and cost, enforces pipeline cost budget, retries on API failures and schema validation failures, routes to different models per stage configuration
+- Knows: Model capabilities (context window size, token limits), cost per token per model, output schemas for each node type, rate limits, loaded constitutional rules, maximum concurrent LLM calls limit
+- Does: Injects constitutional rules as a privileged, non-overridable component of the system prompt before any other context, sends prompts to LLM API, validates responses against output schemas, tracks token usage and cost, enforces pipeline cost budget (atomic across parallel nodes), retries on API failures and schema validation failures, routes to different models per node configuration
 
 **Collaborators:**
 
 - LLM API provider (external: Anthropic initially)
 - Budget Tracker (reports token usage per call)
-- Configuration Manager (reads model selection per stage)
+- Configuration Manager (reads model selection per node)
 
 **Roles:**
 
@@ -269,7 +348,7 @@ Deterministic service that builds context packages for LLM calls. Contains **zer
 **Responsibilities:**
 
 - Knows: Pyramid summary levels (1-4), context priority order (per vocabulary.md), token budget per model, file relevance rules, scenario separation rules, loaded Context Pack content
-- Does: Identifies relevant files based on affected modules, loads constraint documents (ADRs, standards, architectural rules), incorporates loaded Context Pack knowledge (domain knowledge, safe patterns, anti-patterns) as high-priority context, computes transitive dependencies via domain service dependency graph, selects appropriate summary level per module based on dependency distance, applies priority-based truncation when context exceeds window, enforces scenario holdout (never includes scenarios in code generation context), includes relevant interface registry entries for cross-domain context
+- Does: Identifies relevant files based on affected modules, loads constraint documents (ADRs, standards, architectural rules), incorporates loaded Context Pack knowledge (domain knowledge, safe patterns, anti-patterns) as high-priority context, computes transitive dependencies via domain service dependency graph, selects appropriate summary level per module based on dependency distance, applies priority-based truncation when context exceeds window, enforces scenario holdout (never includes scenarios in code generation context), includes relevant interface registry entries for cross-domain context, reads intermediate artifacts from pipeline working directory when available
 
 **Collaborators:**
 
@@ -281,7 +360,7 @@ Deterministic service that builds context packages for LLM calls. Contains **zer
 
 **Roles:**
 
-- File selector: Determines which files are relevant to a given stage/sub-work-item
+- File selector: Determines which files are relevant to a given node/sub-work-item
 - Constraint injector: Loads and includes project rules as hard requirements
 - Pack injector: Includes loaded Context Pack domain knowledge, safe patterns, and anti-patterns
 - Summary selector: Chooses appropriate detail level per module (Level 1/2/3/4 based on dependency distance)
@@ -408,7 +487,7 @@ Loads, validates, and provides access to the cross-domain interface registry.
 **Key behavior:**
 
 - Registry validation is deterministic (no LLM involved)
-- Runs before any pipeline stage on every pipeline invocation
+- Runs before any pipeline node on every pipeline invocation
 - CogWorks MUST NOT create or modify interface definitions autonomously
 - CogWorks MAY suggest interface additions as recommendations for human review
 
@@ -439,7 +518,7 @@ Performs deterministic cross-domain constraint validation against the interface 
 
 **Key behavior:**
 
-- Runs during review gate (first pass, before LLM reviews) and during architecture stage validation
+- Runs during review gate (first pass, before LLM reviews) and during architecture node validation
 - Validates against registry contracts only — does not require other domain services to be running
 - Hard constraint violations (min/max bounds) are blocking; nominal value violations are warnings
 - Works even with a single domain service registered (validates that domain's artifacts against declared contracts)
@@ -470,26 +549,27 @@ Handles all GitHub API interaction. The system's sole interface to durable state
 
 ## Working Copy Manager (Shared Library)
 
-Provides shared working copy management capabilities that domain services can use. Published as a library, not built into CogWorks core.
+Provides shared working copy management capabilities that domain services can use, and manages the pipeline working directory for the orchestrator.
 
 **Responsibilities:**
 
-- Knows: Git operations (clone, branch, commit, push), temporary directory management, branch naming conventions
-- Does: Creates shallow clones to temp directories, creates and switches branches, commits files, pushes to remote, cleans up temp directories
+- Knows: Git operations (clone, worktree, branch, commit, push), temporary directory management, branch naming conventions
+- Does: Creates git worktrees for pipeline working directories, creates shallow clones to temp directories for domain services, creates and switches branches, commits files, pushes to remote, cleans up worktrees and temp directories
 
 **Collaborators:**
 
 - Git CLI (subprocess execution)
-- Filesystem (temporary directory creation/deletion)
+- Filesystem (worktree and temporary directory creation/deletion)
 
 **Roles:**
 
-- Clone manager: Creates and manages temporary repository checkouts
-- Branch manager: Handles branch creation per the naming convention
+- Worktree manager: Creates and manages pipeline working directories as git worktrees
+- Clone manager: Creates and manages temporary repository checkouts for domain services
+- Branch manager: Handles branch creation per the naming convention (`cogworks/<work-item>/<node-slug>`)
 - Commit creator: Produces well-structured commits following repository conventions
-- Cleanup handler: Ensures temp directories are removed after use
+- Cleanup handler: Ensures worktrees and temp directories are removed after use
 
-**Note**: This is a shared library that domain services may optionally use. CogWorks does not manage working copies directly. Domain services are responsible for their own file system operations.
+**Note**: The pipeline working directory (git worktree) persists across all nodes within a pipeline run. Domain service working copies are separate and ephemeral. This is a shared library that domain services may optionally use for their own checkouts.
 
 ---
 
@@ -500,7 +580,7 @@ Loads and provides typed access to repository configuration.
 **Responsibilities:**
 
 - Knows: Configuration schema, default values for all settings
-- Does: Loads configuration from `.cogworks/config.toml` in the target repository, validates against schema, provides typed access to settings
+- Does: Loads configuration from `.cogworks/config.toml` in the target repository, validates against schema, provides typed access to settings. Loads pipeline configuration from `.cogworks/pipeline.toml` (delegating to Pipeline Configuration Manager for graph validation)
 
 **Collaborators:**
 
@@ -520,8 +600,8 @@ Tracks LLM token consumption and enforces cost limits.
 
 **Responsibilities:**
 
-- Knows: Token costs per model, pipeline budget, current accumulated cost
-- Does: Records token usage per LLM call, computes cumulative cost, checks budget before each call, produces cost reports (per-stage, per-sub-work-item)
+- Knows: Token costs per model, pipeline budget, current accumulated cost, parallel execution context
+- Does: Records token usage per LLM call, computes cumulative cost, checks budget before each call (atomic across concurrent nodes), produces cost reports (per-node, per-sub-work-item)
 
 **Collaborators:**
 
@@ -536,7 +616,7 @@ Tracks LLM token consumption and enforces cost limits.
 
 ---
 
-## Scenario Validator (Stage 5b Executor)
+## Scenario Validator (Scenario Validation Node Implementation)
 
 Executes scenario validation after deterministic checks and tests pass, before the review gate.
 
@@ -564,7 +644,7 @@ Executes scenario validation after deterministic checks and tests pass, before t
 
 **Key behavior:**
 
-- Only runs for sub-work-items with applicable scenarios (others skip this stage)
+- Only runs for sub-work-items with applicable scenarios (others skip this node)
 - Each trajectory runs in isolation (fresh twin state)
 - Satisfaction score must meet threshold (default 0.95) to proceed
 - Any explicit failure criterion violation fails the sub-work-item immediately

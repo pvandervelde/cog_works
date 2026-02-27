@@ -1,0 +1,67 @@
+name: Quality Checks
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  fast-checks:
+    name: Fast Quality Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Task tracking validation (if Beads is used)
+      - name: Check task tracking
+        continue-on-error: true
+        run: |
+          if command -v bd >/dev/null 2>&1; then
+            # Check if commit has task ID
+            if ! git log --format=%s -1 | grep -E '\(bd-[a-z0-9]+\)'; then
+              echo "::warning::No task ID in commit message. Consider: (bd-xxx)"
+            fi
+
+            # Check for orphaned work (commits without closed tasks)
+            if bd doctor --orphans --json 2>/dev/null | grep -q "orphans"; then
+              echo "::warning::Found commits with task IDs but tasks not closed"
+              bd doctor --orphans
+            fi
+          fi
+
+      # Re-run all pre-commit checks (in case bypassed locally)
+      - name: Check for secrets
+        run: |
+          pip install detect-secrets
+          if [ -f ".secrets.baseline" ]; then
+            detect-secrets scan --baseline .secrets.baseline
+          else
+            echo "No .secrets.baseline found, creating one..."
+            detect-secrets scan --baseline .secrets.baseline
+          fi
+
+      # Language-specific checks
+
+
+
+
+  comprehensive-checks:
+    name: Comprehensive Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: fast-checks
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          fail_ci_if_error: true

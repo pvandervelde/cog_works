@@ -107,7 +107,7 @@ All log output is structured JSON. Every log entry includes:
   "timestamp": "2026-02-16T14:30:00Z",
   "level": "info",
   "pipeline_id": 42,
-  "stage": "code_generation",
+  "node": "code_generation",
   "sub_work_item": 5,
   "action": "llm_call",
   "result": "success",
@@ -126,13 +126,13 @@ When running as a service, expose these metrics:
 |--------|------|-------------|
 | `cogworks_pipelines_active` | Gauge | Number of pipelines currently in progress |
 | `cogworks_pipelines_completed_total` | Counter | Pipelines completed (by status: success/failed/escalated) |
-| `cogworks_stage_duration_seconds` | Histogram | Time spent in each stage |
-| `cogworks_llm_calls_total` | Counter | LLM API calls (by stage, model, result) |
-| `cogworks_llm_tokens_total` | Counter | Tokens consumed (by stage, model, direction) |
+| `cogworks_node_duration_seconds` | Histogram | Time spent in each node |
+| `cogworks_llm_calls_total` | Counter | LLM API calls (by node, model, result) |
+| `cogworks_llm_tokens_total` | Counter | Tokens consumed (by node, model, direction) |
 | `cogworks_llm_cost_dollars` | Counter | Accumulated LLM cost |
 | `cogworks_github_api_calls_total` | Counter | GitHub API calls (by endpoint, status) |
 | `cogworks_github_rate_limit_remaining` | Gauge | Remaining GitHub API budget |
-| `cogworks_retries_total` | Counter | Retry attempts (by stage, reason) |
+| `cogworks_retries_total` | Counter | Retry attempts (by node, reason) |
 | `cogworks_escalations_total` | Counter | Escalations (by reason) |
 | `cogworks_domain_service_calls_total` | Counter | Domain service calls (by service, method, result) |
 | `cogworks_domain_service_latency_seconds` | Histogram | Domain service call latency (by service, method) |
@@ -141,9 +141,13 @@ When running as a service, expose these metrics:
 | `cogworks_injection_detected_total` | Counter | INJECTION_DETECTED events (should be zero in normal operation; alert if non-zero) |
 | `cogworks_scope_violations_total` | Counter | Scope violation events (by type: underspecified, ambiguous, protected_path) |
 | `cogworks_context_packs_loaded` | Gauge | Number of Context Packs loaded per pipeline run (by pipeline) |
-| `cogworks_required_artefact_failures_total` | Counter | Required artefact blocking findings at Review stage (by pack name) |
+| `cogworks_required_artefact_failures_total` | Counter | Required artefact blocking findings at Review node (by pack name) |
 | `cogworks_hold_state_total` | Counter | Work items entering hold state (injection detection events) |
 | `cogworks_constitutional_load_failures_total` | Counter | Constitutional rules load failures (should be zero; alert if non-zero) |
+| `cogworks_parallel_nodes_active` | Gauge | Number of nodes currently executing in parallel within a pipeline |
+| `cogworks_edge_evaluations_total` | Counter | Edge condition evaluations (by type: deterministic, llm, composite; by result: taken, not_taken) |
+| `cogworks_rework_traversals_total` | Counter | Rework edge traversals (by cycle identifier) |
+| `cogworks_pipeline_state_writes_total` | Counter | Pipeline state writes to GitHub (node boundary persistence events) |
 
 For CLI mode, these are logged as structured events. For service mode, they are exposed as Prometheus metrics.
 
@@ -151,10 +155,11 @@ For CLI mode, these are logged as structured events. For service mode, they are 
 
 Every pipeline run produces an audit trail posted as comments on the parent work item:
 
-1. **Stage entry comment**: When entering a new stage, post a summary of what will be done.
-2. **Stage completion comment**: When a stage completes, post a summary of what was done (LLM calls made, validations passed, artifacts created).
-3. **Failure comment**: When a stage fails, post a structured failure report.
-4. **Cost comment**: On pipeline completion (or failure), post a cost report.
+1. **Node entry comment**: When a node begins, post a summary of what will be done.
+2. **Node completion comment**: When a node completes, post a summary of what was done (LLM calls made, validations passed, artifacts created).
+3. **Failure comment**: When a node fails, post a structured failure report.
+4. **Pipeline state comment**: Updated at each node boundary with the full pipeline state JSON (active/completed/pending/failed nodes, traversal counts, cumulative cost).
+5. **Cost comment**: On pipeline completion (or failure), post a cost report.
 
 ---
 
@@ -190,7 +195,7 @@ Costs are tracked in-memory during a pipeline run and written to GitHub on compl
 ```
 Pipeline #42 Cost Report
 ========================
-Stage                    Tokens      Cost
+Node                     Tokens      Cost
 ─────────────────────────────────────────
 1. Task Classification     2,300    $0.03
 2. Architecture           15,000    $0.22
@@ -262,7 +267,7 @@ Remaining                269,200    $6.56
 
 ### Interface Registry Validation Failure
 
-**Symptom**: Pipeline fails during architecture or review stage with "interface registry validation error".
+**Symptom**: Pipeline fails during architecture or review node with "interface registry validation error".
 
 **Diagnosis**:
 
@@ -298,12 +303,12 @@ Remaining                269,200    $6.56
 
 ### Pipeline Failed
 
-**Symptom**: Work item has `cogworks:stage:failed` label.
+**Symptom**: Work item has `cogworks:node:failed` label.
 
 **Diagnosis**:
 
 1. Read the failure comment on the work item.
-2. Check the stage and specific error.
+2. Check the node and specific error.
 
 **Resolution by failure type**:
 
@@ -354,7 +359,7 @@ Remaining                269,200    $6.56
 
 **Diagnosis**:
 
-1. Check per-stage breakdown. Which stage consumed the most tokens?
+1. Check per-node breakdown. Which node consumed the most tokens?
 2. Check retry counts. High retries indicate the LLM is struggling with the task.
 3. Check context sizes. Large context = more input tokens per call.
 
@@ -363,7 +368,7 @@ Remaining                269,200    $6.56
 1. If retries are high: improve prompt templates, clarify interfaces/specifications.
 2. If context is large: review what's being included. Consider more targeted context assembly.
 3. If the work item is inherently complex: break it into smaller work items.
-4. Consider using a cheaper model for high-retry stages (code generation iterations).
+4. Consider using a cheaper model for high-retry nodes (code generation iterations).
 
 ---
 
@@ -456,7 +461,7 @@ Remaining                269,200    $6.56
 1. Review the specification and interface documents.
 2. For `SCOPE_UNDERSPECIFIED`: Update the specification PR or interface document to explicitly include the needed capability.
 3. For `SCOPE_AMBIGUOUS`: Clarify the ambiguous specification section by updating the spec PR with a more explicit definition.
-4. After updating the specification, the Interface Design stage may need to be re-run to update the interface document.
+4. After updating the specification, the Interface Design node may need to be re-run to update the interface document.
 5. Re-invoke: `cogworks process <issue-url>`.
 
 ---
@@ -476,14 +481,14 @@ Remaining                269,200    $6.56
 
 1. If the pack directory is missing: create it with the required pack structure.
 2. If the trigger definition is wrong: update `trigger.toml` to match the correct classification output.
-3. If the work item is being misclassified: check the classification stage output and the safety-critical module registry.
+3. If the work item is being misclassified: check the classification node output and the safety-critical module registry.
 4. After updating pack content, no CogWorks action needed — packs are loaded automatically on next pipeline run.
 
 ---
 
 ### Required Artefact Missing (Context Pack Enforcement)
 
-**Symptom**: Review stage fails with blocking finding referencing a Context Pack and a missing artefact.
+**Symptom**: Review node fails with blocking finding referencing a Context Pack and a missing artefact.
 
 **Diagnosis**:
 

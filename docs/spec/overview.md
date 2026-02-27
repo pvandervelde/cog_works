@@ -16,7 +16,7 @@ These principles are load-bearing — they constrain every architectural decisio
 
 4. **Stateless and observable.** All durable state lives in GitHub. No hidden databases. The system can be fully understood by reading GitHub state.
 
-5. **Follows the human process.** Design → contracts → plan → implement → review. Each stage produces a human-recognisable artifact.
+5. **Follows the human process.** Design → contracts → plan → implement → review. Each node produces a human-recognisable artifact.
 
 6. **Constitutional boundaries.** External content is data, not instructions. Non-overridable behavioral rules are loaded before any context assembly or LLM call. The boundary between trusted instructions and untrusted input is explicit and enforced.
 
@@ -102,7 +102,11 @@ Domain services are external processes that communicate with CogWorks through th
 
 ## Pipeline Flow
 
-The pipeline has 7 stages. Stages 1-4 execute once per work item. Stages 5-7 execute as a unit for each sub-work-item in dependency order.
+The pipeline is a configurable directed graph of nodes. The default pipeline preserves the standard 7-node linear sequence. Repositories may define custom graphs in `.cogworks/pipeline.toml` with parallel fan-out, conditional edges, and rework loops.
+
+### Default Pipeline
+
+The default pipeline has two phases. Nodes 1–4 execute once per work item. Nodes 5–7 execute as a unit for each sub-work-item in dependency order.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -120,35 +124,49 @@ The pipeline has 7 stages. Stages 1-4 execute once per work item. Stages 5-7 exe
                                            │
                                            ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Per Sub-Work-Item (in dependency order)                                 │
+│ Per Sub-Work-Item (in dependency order, optionally parallel)            │
 │                                                                         │
 │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐           │
 │  │ 5. Code  │───→│ Determin.│───→│ Scenario │───→│ 6. Review│───→PR     │
 │  │ Generate │    │ Checks + │    │ Validate │    │ Gate     │           │
 │  │          │    │ Tests    │    │          │    │          │           │
 │  └────┬─────┘    └──────────┘    └────┬─────┘    └──────────┘           │
-│       │ retry loop on failure from any stage     │                      │
+│       │ rework edge (max 5 traversals)           │                      │
 │       └──────────────────────────────────────────┘                      │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Note**: Stage 5 now includes scenario validation after deterministic checks and tests pass but before the review gate. Scenario validation is optional—it only runs for sub-work-items that have applicable scenarios.
+Scenario validation is optional — it only runs for sub-work-items that have applicable scenarios.
 
-Each stage gate is configurable: auto-proceed or human-gated. Safety-critical work items force human gates for all code-producing stages.
+Each node gate is configurable: `auto-proceed` or `human-gated`. Safety-critical work items force human gates for all code-producing nodes.
 
-## Data Flow Across Stages
+### Custom Pipeline Graphs
 
-Each stage produces an artifact that flows into subsequent stages:
+Repositories may define custom pipeline graphs with:
 
-| Stage | Input | Output | Storage |
-|-------|-------|--------|---------|
+- **Parallel fan-out**: Multiple nodes executing concurrently when their inputs are all available
+- **Fan-in synchronisation**: A node waiting for all upstream parallel nodes to complete
+- **Conditional edges**: Deterministic expressions, LLM-evaluated conditions, or boolean composites that control which downstream nodes activate
+- **Rework loops**: Cycles with explicit termination conditions (maximum traversals, cost budget)
+- **Spawning nodes**: Nodes that create derivative work items without blocking the pipeline
+
+Multiple named pipelines can be defined in a single configuration file. The Intake node's classification output selects which pipeline to execute.
+
+## Data Flow Across Nodes
+
+Each node produces artifacts that flow into downstream nodes via the pipeline working directory or GitHub:
+
+| Node | Input | Output | Storage |
+|------|-------|--------|---------|
 | 1. Intake | GitHub Issue | Classification result | Issue comment + labels |
 | 2. Architecture | Classification + repo context + loaded Context Packs | Specification document (Markdown) | Pull Request |
 | 3. Interface Design | Approved spec + repo context | Interface definition files (source code) | Pull Request |
 | 4. Planning | Approved spec + approved interfaces | Sub-work-item issues with dependency graph | GitHub Issues |
-| 5. Code Generation | Sub-work-item + spec + interfaces + prior SWI outputs | Implementation code + tests | Working branch |
-| 6. Review Gate | Generated code | Review results (pass/fail + findings) | In-memory (fed back to stage 5 or forward to stage 7) |
+| 5. Code Generation | Sub-work-item + spec + interfaces + prior SWI outputs | Implementation code + tests | Working directory → branch |
+| 6. Review Gate | Generated code | Review results (pass/fail + findings) | Pipeline state (fed back to Code Gen or forward to Integration) |
 | 7. Integration | Reviewed code | Pull Request | GitHub PR |
+
+In custom pipeline graphs, node inputs and outputs are declared in the pipeline configuration and the orchestrator verifies all inputs are available before starting a node.
 
 ## Working Copy Management
 
@@ -160,8 +178,8 @@ CogWorks needs file access in two distinct modes:
 
 Strategy:
 
-- **Domain services manage their own working copies.** CogWorks does not create or manage local clones directly. Instead, it provides repository information to domain services via the Extension API request envelope (`repository.path` and `repository.ref`). The `path` field is the local filesystem path to the repository root or a clone URL depending on deployment; the `ref` field is the git ref to validate against. Domain services handle cloning or checkout as needed. For co-located services (Unix socket), a shared filesystem path may be used; for remote services (HTTP), the domain service clones from the provided URL.
+- **Pipeline working directory**: Each pipeline run has a dedicated git worktree checked out from the target repository. Intermediate artifacts (specs, interface definitions, plans, generated code) are written to the working directory before being committed as PRs. The working directory persists across all nodes within a single pipeline run and is cleaned up on completion. The working directory is a **performance optimisation** — pipeline state is always recoverable from GitHub artifacts (PRs, issue comments) in case of failure.
+- **Domain services manage their own working copies.** CogWorks provides repository information to domain services via the Extension API request envelope (`repository.path` and `repository.ref`). The `path` field is the local filesystem path to the repository root or a clone URL depending on deployment; the `ref` field is the git ref to validate against. Domain services handle cloning or checkout as needed. For co-located services (Unix socket), a shared filesystem path may be used; for remote services (HTTP), the domain service clones from the provided URL.
 - **Shared libraries**: CogWorks publishes shared libraries that domain services can use for common operations: shallow clone management, branch creation, temporary directory lifecycle, commit/push. These are optional — domain services may implement their own.
-- **Branch per artifact**: `cogworks/<work-item-number>/<stage-slug>` (e.g., `cogworks/42/spec`, `cogworks/42/interfaces`, `cogworks/42/swi-3`)
-- **Cleanup**: Temporary directories removed after each domain service operation. Branches cleaned up after PR merge (standard GitHub settings).
-- **No persistent working copy**: Aligns with stateless design. Each operation clones fresh if needed.
+- **Branch per artifact**: `cogworks/<work-item-number>/<node-slug>` (e.g., `cogworks/42/spec`, `cogworks/42/interfaces`, `cogworks/42/swi-3`)
+- **Cleanup**: The pipeline working directory is removed when the pipeline run completes. Domain service temporary directories are removed after each domain service operation. Branches cleaned up after PR merge (standard GitHub settings).

@@ -12,12 +12,13 @@ This document defines the clean architecture boundaries — what is business log
 │  (Pure domain concepts — no I/O, no external dependencies)              │
 │                                                                         │
 │  Pipeline state machine    │  Classification rules                      │
-│  Dependency graph (DAG)    │  Review aggregation                        │
-│  Budget enforcement        │  Context priority & truncation             │
-│  Stage gate logic          │  Scope threshold evaluation                │
-│  Label parsing/generation  │  Retry budget tracking                     │
-│  Interface registry valid. │  Cross-domain constraint validation        │
-│  Scenario satisfaction     │  Computed constraint evaluation            │
+│  Pipeline graph (DAG+cycles)│  Review aggregation                       │
+│  Graph execution engine    │  Context priority & truncation             │
+│  Budget enforcement        │  Scope threshold evaluation                │
+│  Node gate logic           │  Retry budget tracking                     │
+│  Edge condition evaluation │  Cross-domain constraint validation        │
+│  Label parsing/generation  │  Computed constraint evaluation            │
+│  Interface registry valid. │  Scenario satisfaction                     │
 │  Context Pack selection    │  Constitutional rules enforcement          │
 │  Injection detection       │  Scope enforcement                         │
 │  Required artefact check   │  Protected path validation                 │
@@ -33,7 +34,7 @@ This document defines the clean architecture boundaries — what is business log
 │  Domain Service Client     │  Template Engine                           │
 │  Interface Registry Loader │  Audit Store                               │
 │  Scenario Executor         │  Twin Provisioner                          │
-│  Summary Cache             │                                            │
+│  Summary Cache             │  Pipeline Configuration Loader             │
 └─────────────────────┬───────────────────────────────────────────────────┘
                       │ implemented by
                       ▼
@@ -58,16 +59,47 @@ Business logic contains zero I/O. It operates on data structures passed in as ar
 
 ### Pipeline State Machine
 
-Determines valid stage transitions and next actions.
+Determines valid node transitions and next actions by traversing the pipeline graph.
 
-- **Input**: Current pipeline state (stage label, sub-work-item statuses, PR statuses, gate configuration)
-- **Output**: Next action to take (which stage executor to invoke, or "wait", or "escalate")
+- **Input**: Current pipeline state (active/completed/pending/failed nodes, edge conditions, sub-work-item statuses, PR statuses, gate configuration, pipeline graph definition)
+- **Output**: Next action(s) to take (which node(s) to activate, or "wait", or "escalate")
 - **Rules**:
-  - Stage N cannot begin until Stage N-1's gate is passed
-  - Safety-critical work items force human gates for code-producing stages
+  - A node cannot start until all its incoming edge conditions are satisfied and all declared inputs are available
+  - Safety-critical work items force human gates for code-producing nodes
   - `cogworks:processing` label means another instance is active — back off
-  - Stages 5-7 loop over sub-work-items in topological order
-  - A sub-work-item cannot start until all its dependencies are complete
+  - Multiple nodes may be activatable simultaneously (parallel fan-out) when the graph allows
+  - Fan-in nodes stay pending until all upstream parallel nodes complete
+  - Rework edges track traversal counts and enforce termination conditions
+  - When no pipeline configuration exists, uses the default linear 7-node pipeline
+
+### Graph Execution Engine
+
+Coordinates the execution of pipeline graph nodes, evaluates edge conditions, and manages parallel execution.
+
+- **Input**: Pipeline graph definition, current pipeline state, node implementations
+- **Output**: Updated pipeline state after executing one graph traversal pass
+- **Rules**:
+  - Computes node execution order from edge definitions using topological sorting
+  - Evaluates outgoing edge conditions when a node completes, activating all eligible downstream nodes
+  - For `all-matching` edges: all true edges are taken (fan-out)
+  - For `first-matching` edges: only the first true edge is taken (exclusive routing)
+  - For `explicit` edges: node output names the edges to take
+  - Parallel nodes execute as concurrent async tasks within the orchestrator process
+  - Respects maximum concurrent LLM calls limit (configurable, default: 3)
+  - Handles partial failure: other nodes continue unless failed node is marked `abort_siblings_on_failure`
+  - Writes pipeline state to GitHub at each node boundary (crash-recovery point)
+
+### Edge Condition Evaluation
+
+Evaluates edge conditions to determine which downstream nodes to activate.
+
+- **Input**: Edge condition definition (deterministic expression, LLM-evaluated condition, or composite), current pipeline state, node output
+- **Output**: Boolean (edge taken or not taken), evaluation record for audit trail
+- **Rules**:
+  - Deterministic conditions: evaluated by the orchestrator against pipeline state via a simple expression language
+  - LLM-evaluated conditions: natural-language conditions assessed by the LLM against pipeline context; must be recorded in the audit trail
+  - Composite conditions: boolean combinations (AND/OR/NOT) of deterministic and LLM-evaluated conditions
+  - LLM-evaluated conditions have a deterministic fallback when the LLM is unavailable or returns an ambiguous response
 
 ### Classification Rules
 
@@ -104,11 +136,12 @@ Combines multiple review pass results into a single decision.
 
 Pure arithmetic on token usage and cost.
 
-- **Input**: Current accumulated cost, proposed call's estimated tokens, model cost rates, budget limit
+- **Input**: Current accumulated cost, proposed call's estimated tokens, model cost rates, budget limit, parallel execution context
 - **Output**: Approved (proceed) or denied (budget exceeded)
 - **Rules**:
   - If accumulated + estimated > budget → deny and produce cost report
-  - Cost report includes per-stage and per-sub-work-item breakdown
+  - Cost report includes per-node and per-sub-work-item breakdown
+  - Parallel nodes share the pipeline's total cost budget; budget enforcement must be atomic across concurrent nodes
 
 ### Context Priority and Truncation
 
@@ -127,7 +160,7 @@ Deterministic selection of context items when the full package exceeds the model
 
 Converts between structured pipeline state and GitHub label strings.
 
-- **Input/Output**: Bidirectional mapping between structured types (stage, status, dependency, order) and label strings (`cogworks:stage:architecture`, `cogworks:depends-on:42`, etc.)
+- **Input/Output**: Bidirectional mapping between structured types (node, status, dependency, order) and label strings (`cogworks:node:architecture`, `cogworks:depends-on:42`, etc.)
 
 ### Interface Registry Validation
 
@@ -141,7 +174,7 @@ Deterministic validation of the cross-domain interface registry.
   - No two interfaces may define conflicting constraints for the same physical parameter
   - All referenced domains must have a registered domain service (or be marked `external`)
   - Domain service / interface version mismatches are flagged as blocking
-  - Runs before any pipeline stage on every invocation
+  - Runs before any pipeline node on every invocation
 
 ### Cross-Domain Constraint Validation
 
@@ -154,7 +187,7 @@ Deterministic comparison of generated artifact values against interface registry
   - Nominal value deviations are warnings
   - Computed constraints (e.g., total bus load) are evaluated deterministically by the validator
   - Validates against registry contracts only — does not require other domain services to be running
-  - Runs during review gate (first, before LLM reviews) and during architecture stage
+  - Runs during review gate (first, before LLM reviews) and during architecture node
 
 ### Scenario Satisfaction Scoring
 
@@ -180,7 +213,7 @@ Deterministic selection of Context Packs based on work item classification.
   - A work item may match multiple packs simultaneously
   - A matched pack is always loaded (no option to skip)
   - Where packs contain contradictory guidance, the more restrictive rule applies
-  - Pack loading occurs at Architecture stage (Stage 2), before any LLM generation call
+  - Pack loading occurs at Architecture node, before any LLM generation call
 
 ### Constitutional Rules Enforcement
 
@@ -226,7 +259,7 @@ Verification that all artefacts declared by loaded Context Packs are present.
 - **Input**: Required artefact declarations from loaded Context Packs, generated pipeline output
 - **Output**: Pass (all present) or blocking findings identifying the pack and missing artefact
 - **Rules**:
-  - Checked during the Review stage
+  - Checked during the Review node
   - Missing artefacts produce blocking findings (preventing PR creation)
   - Each finding identifies which pack declared the requirement and what is missing
 
@@ -360,6 +393,19 @@ Reads and manages pyramid summaries of modules.
   - Inbound: cached summaries (Level 1/2/3 text), staleness indicators
   - Outbound: module identifiers, level requests
 
+### Pipeline Configuration Loader
+
+Loads and validates pipeline graph definitions from the repository.
+
+- **Operations**:
+  - `load_pipeline_config(directory) → PipelineConfig` — Load and parse the `.cogworks/pipeline.toml` file
+  - `get_named_pipeline(config, name) → PipelineGraph` — Retrieve a specific named pipeline graph definition
+  - `get_default_pipeline() → PipelineGraph` — Return the built-in default linear pipeline when no configuration file exists
+- **Data flowing across boundary**:
+  - Inbound: parsed pipeline configuration (node definitions, edge definitions, pipeline-level settings, named pipeline maps)
+  - Outbound: directory path, raw file contents
+- **Error cases**: Missing configuration file (falls back to default), invalid TOML (non-retryable), schema violation (non-retryable with error details), graph validation failure (cycle without termination condition, unreachable nodes, etc.)
+
 ### Template Engine
 
 Renders prompt templates with variable substitution.
@@ -429,8 +475,8 @@ Each abstraction has one or more concrete implementations. These are the only mo
 This traces data flow across all boundaries for a single sub-work-item code generation cycle:
 
 ```
-Pipeline Executor
-  │  "Process sub-work-item #5 for work item #42"
+Graph Execution Engine
+  │  "Execute code-generation node for sub-work-item #5 of work item #42"
   ▼
 Code Generator (business logic)
   │  Requests context assembly
@@ -438,7 +484,7 @@ Code Generator (business logic)
 Context Assembler (business logic)
   │  Needs: spec doc, interfaces, prior SWI outputs, constraints,
   │         relevant cross-domain interface contracts
-  │  Delegates to Code Repository abstraction + Interface Registry
+  │  Reads from pipeline working directory + delegates to Code Repository abstraction
   ▼
 Code Repository (abstraction) → GitHub API (infrastructure)
   │  Returns: file contents
@@ -466,7 +512,7 @@ Template Engine (abstraction) → Handlebars (infrastructure)
   │  Returns: rendered prompt string
   ▼
 Code Generator
-  │  Checks budget (business logic: Budget Enforcement)
+  │  Checks budget (business logic: Budget Enforcement — atomic across parallel nodes)
   │  Sends prompt + context + schema
   │  Delegates to LLM Provider abstraction
   ▼
@@ -474,6 +520,7 @@ LLM Provider (abstraction) → Anthropic API (infrastructure)
   │  Returns: validated structured response + token count
   ▼
 Code Generator
+  │  Writes output to pipeline working directory
   │  Runs deterministic checks
   │  Delegates to Domain Service Client abstraction
   ▼
@@ -483,10 +530,14 @@ Domain Service Client → Extension API Client → Domain Service (external)
   │  Returns: Diagnostics / SimulationResults
   ▼
 Code Generator (business logic)
-  │  If checks fail: compose error feedback, loop back to LLM call
-  │  If checks pass: hand off to Review Executor
+  │  If checks fail: compose error feedback, loop back to LLM call (rework edge)
+  │  If checks pass: node completes, edge conditions evaluated
   ▼
-Review Executor
+Graph Execution Engine
+  │  Evaluates outgoing edges, activates next eligible node(s)
+  │  Writes pipeline state to GitHub (crash-recovery point)
+  ▼
+Review Executor (next node)
   │  First: Cross-domain constraint validation (deterministic)
   │  Delegates to Domain Service Client: extract_interfaces
   │  Compares extracted values against interface registry contracts

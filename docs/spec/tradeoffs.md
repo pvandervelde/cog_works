@@ -63,16 +63,17 @@ This document records the significant design alternatives considered and the rat
 
 ## 4. Sequential vs. Parallel Sub-Work-Item Processing
 
-**Decision**: Sequential, in topological dependency order.
+**Decision**: Topological dependency order with optional parallel fan-out for independent sub-work-items.
 
-| Factor | Sequential | Parallel |
-|--------|------------|----------|
-| **Context quality** | Each SWI has all prior outputs | Independent SWIs lack each other's outputs |
-| **Complexity** | Simple loop | Dependency graph scheduling, merge conflicts |
-| **Cost** | Optimal — each SWI benefits from prior context | May generate redundant/conflicting code |
-| **Speed** | Slower for independent SWIs | Faster when SWIs are independent |
+| Factor | Sequential Only | Topological + Parallel Fan-Out |
+|--------|----------------|-------------------------------|
+| **Context quality** | Each SWI has all prior outputs | Dependent SWIs get all dependency outputs; independent SWIs get own chain only |
+| **Complexity** | Simple loop | Dependency graph scheduling, shared cost budget, fan-in synchronisation |
+| **Cost** | Optimal per-SWI context | May generate slightly less optimal code for concurrent SWIs |
+| **Speed** | Slower for independent SWIs | Faster when SWIs have no mutual dependency |
+| **Safety** | Inherently safe ordering | Must enforce topological constraints; parallel nodes share budget atomically |
 
-**Rationale**: The spec explicitly requires sequential processing (REQ-CODE-001). The quality benefit is significant — each sub-work-item benefits from seeing the actual implementation of its dependencies, not just the interface. Parallel processing could be added later for independent sub-work-items (no dependency between them), but is not needed for initial release.
+**Rationale**: REQ-CODE-001 requires dependency-ordered processing. Sub-work-items with no mutual dependency path MAY execute concurrently when the pipeline configuration allows it. The default pipeline remains sequential for simplicity; custom pipelines can enable parallel fan-out. This gives repositories the choice between simplicity (default) and speed (explicit opt-in), while ensuring dependency ordering is always respected.
 
 ---
 
@@ -139,7 +140,7 @@ This document records the significant design alternatives considered and the rat
 | **Independent evolution** | Each pass can be tuned independently | One monolithic prompt |
 | **Parallelism** | LLM passes can run in parallel (future) | N/A |
 
-**Rationale**: The spec requires four passes — one deterministic constraint check followed by three separate LLM passes — (REQ-REVIEW-002). The focused approach produces better findings because each review prompt can include specific checklists and examples for its domain. The cost is bounded (3 LLM calls × sub-work-item count × remediation cycles), and the review stage uses a high-quality model anyway.
+**Rationale**: The spec requires four passes — one deterministic constraint check followed by three separate LLM passes — (REQ-REVIEW-002). The focused approach produces better findings because each review prompt can include specific checklists and examples for its domain. The cost is bounded (3 LLM calls × sub-work-item count × remediation cycles), and the review node uses a high-quality model anyway.
 
 ---
 
@@ -150,7 +151,7 @@ This document records the significant design alternatives considered and the rat
 | Factor | Anthropic Only | Multi-Provider |
 |--------|---------------|----------------|
 | **Simplicity** | One API to implement and test | Multiple APIs, response normalization |
-| **Cost optimization** | N/A | Route different stages to cheapest provider |
+| **Cost optimization** | N/A | Route different nodes to cheapest provider |
 | **Resilience** | Single point of failure | Failover between providers |
 | **Time to market** | Faster | Slower |
 
@@ -250,19 +251,19 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 15. Context Pack Loading: Architecture Stage vs. Every Stage
+## 15. Context Pack Loading: Architecture Node vs. Every Node
 
-**Decision**: Context Packs are loaded once at the Architecture stage (Stage 2) and their content persists for the entire pipeline run.
+**Decision**: Context Packs are loaded once at the Architecture node and their content persists for the entire pipeline run.
 
-| Factor | Load Once at Architecture | Load at Every Stage |
+| Factor | Load Once at Architecture | Load at Every Node |
 |--------|--------------------------|---------------------|
-| **Consistency** | Same packs throughout run | Could vary per stage |
+| **Consistency** | Same packs throughout run | Could vary per node |
 | **API calls** | One load per pipeline | Multiple loads |
 | **Content currency** | Based on original classification | Could reflect updates |
 | **Determinism** | Deterministic per run | Could change if packs are updated mid-run |
 | **Auditability** | Single recorded pack set | Multiple pack sets to audit |
 
-**Rationale**: Packs are loaded once and remain consistent for the entire pipeline run. This ensures that the code generator and reviewer see the same domain knowledge, anti-patterns, and required artefacts. Loading packs at each stage would complicate auditing (which packs were active when?) and could introduce inconsistency if a pack is updated between stages. The classification that triggers pack loading does not change during a pipeline run, so reloading would produce the same result anyway.
+**Rationale**: Packs are loaded once and remain consistent for the entire pipeline run. This ensures that the code generator and reviewer see the same domain knowledge, anti-patterns, and required artefacts. Loading packs at each node would complicate auditing (which packs were active when?) and could introduce inconsistency if a pack is updated between nodes. The classification that triggers pack loading does not change during a pipeline run, so reloading would produce the same result anyway.
 
 **Trade-off accepted**: Required artefact declarations from newly committed packs will not take effect for in-progress pipeline runs. This is acceptable — pack updates are rare and take effect on subsequent runs.
 
@@ -283,3 +284,38 @@ This document records the significant design alternatives considered and the rat
 **Rationale**: The primary goal of the constitutional rules is that they cannot be overridden by external content. Placing them in the system prompt (separate from the user-role context) provides the strongest available boundary using the model API's own separation mechanism. A context-injected rule could theoretically be overridden or buried by subsequent items assembled from untrusted sources. System prompt placement is also not subject to context truncation — the rules are always present in full.
 
 **Key constraint**: Constitutional rules token cost is not counted against the per-call context budget. They are overhead the system must absorb. This means effective context budget = model_context_window - constitutional_rules_tokens - output_reservation_tokens.
+
+---
+
+## 17. Fixed Linear Pipeline vs. Configurable Graph Pipeline
+
+**Decision**: Configurable directed graph loaded from `.cogworks/pipeline.toml`, with a built-in default that preserves the original seven-node linear pipeline when no configuration file is present.
+
+| Factor | Fixed Linear Pipeline | Configurable Graph |
+|--------|----------------------|-------------------|
+| **Simplicity** | No configuration required | Requires TOML schema understanding |
+| **Flexibility** | One-size-fits-all | Per-repo customisation (skip, reorder, parallelise) |
+| **Onboarding** | Zero setup | Must learn config schema (but default works out of the box) |
+| **Rework loops** | Review → Code Gen only | Arbitrary rework edges with max_traversals termination |
+| **Parallel execution** | Not possible | Fan-out / fan-in for independent nodes |
+| **Validation cost** | None | DAG validation at load time (cycle detection, reachability) |
+| **Testing surface** | Single path | Multiple paths per named pipeline; need graph-specific tests |
+
+**Rationale**: Different repositories have different workflows. A documentation repo does not need code generation or test execution; a safety-critical embedded repo needs extra review gates. The configurable graph lets each repository define the pipeline that matches its needs, while the built-in default ensures CogWorks works without any configuration. Graph validation at load time catches misconfigurations before any LLM tokens are spent. See ADR-0004 for full decision context.
+
+---
+
+## 18. Pipeline State Persistence: GitHub Issue Comments vs. Local File
+
+**Decision**: Pipeline execution state is persisted as a structured JSON comment on the GitHub issue, not as a local file in the working directory.
+
+| Factor | GitHub Issue Comment | Local File |
+|--------|---------------------|------------|
+| **Durability** | Survives process crash and host loss | Lost if host dies |
+| **Visibility** | Readable by humans and other tools | Requires file system access |
+| **Recoverability** | Any host can resume from last comment | Requires same host or shared storage |
+| **Latency** | API call per state write | Local file write (faster) |
+| **Rate limits** | Counts against GitHub API budget | No API cost |
+| **Audit trail** | Built-in (comment history) | Must be separately captured |
+
+**Rationale**: The system's design principle is "GitHub is the sole durable state store" (no external databases, no persistent local state that isn't reproducible). Writing pipeline state to the issue ensures that a crash-and-resume on a different host can pick up exactly where the previous run left off. The latency cost of an API call per node transition is acceptable because node execution itself (LLM calls, domain service operations) dominates wall-clock time. State writes are infrequent (once per node boundary) so rate-limit impact is minimal.

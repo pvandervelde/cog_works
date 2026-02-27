@@ -8,38 +8,105 @@ This document defines the precise meaning of every domain concept in CogWorks. T
 
 ### Pipeline
 
-The complete SDLC sequence from task intake to PR creation for a single work item.
+A configurable directed graph of nodes that takes a work item from intake to PR creation.
 
 - Identified by: The parent work item's GitHub Issue number
-- Contains: A fixed sequence of stages (1-7)
-- State: Represented entirely by GitHub labels on the parent work item
-- Lifespan: From `cogworks:run` label application to `cogworks:stage:complete` or `cogworks:stage:failed`
+- Contains: A directed graph of nodes connected by edges, defined in `.cogworks/pipeline.toml` or the built-in default
+- State: Represented by GitHub labels on the parent work item and a structured state comment (JSON) updated at each node boundary
+- Lifespan: From `cogworks:run` label application to terminal node completion or pipeline failure
+- Default: Repositories with no `.cogworks/pipeline.toml` get the default linear pipeline (Intake → Architecture → Interface Design → Planning → Code Generation → Review → Integration)
+- See also: Named Pipeline, Pipeline Configuration
 
-### Stage
+### Pipeline Graph
 
-A discrete phase of the pipeline that produces a specific artifact.
+The directed graph structure defining a pipeline's execution flow.
 
-- Identified by: Stage number (1-7) and name
-- Contains: One or more actions (deterministic or LLM-assisted)
-- State: Represented by `cogworks:stage:<name>` label on parent work item
-- Constraint: Stages execute sequentially; a stage cannot begin until the prior stage's gate is passed
+- Contains: Nodes (processing steps) and edges (transitions with optional conditions)
+- Supports: Sequential execution, parallel fan-out, fan-in synchronisation, conditional routing, and controlled cycles (rework loops)
+- Cycles: Permitted but every cycle MUST have an explicit termination condition (max traversals, cost budget, or deterministic exit condition)
+- Ordering: Execution order computed from edge definitions via topological sorting; unconnected nodes may execute concurrently
 
-### Stage Gate
+### Node
 
-A configurable decision point between stages where the pipeline pauses for approval.
+A processing step in the pipeline graph. Every node has a common interface regardless of type.
+
+- Identified by: Unique name within the pipeline configuration
+- Type: One of `llm`, `deterministic`, or `spawning`
+- Inputs: Named artifacts or state that must exist before the node can execute
+- Outputs: Named artifacts or state that the node produces for downstream nodes
+- Validation: How to determine success — schema-based, exit-code-based, or domain-service-based
+- Timeout: Maximum wall-clock time; exceeded → node failure
+- Cost budget: For LLM nodes, maximum token spend; exceeded → node halt
+- Gate: `auto-proceed` or `human-gated` (configurable per node, overridable by shift work boundary and safety classification)
+
+### LLM Node
+
+A node that invokes the LLM gateway with a prompt template and context to produce artifacts.
+
+- Specifies: Prompt template path, context requirements, output schema, retry behaviour
+- The original 7 pipeline steps (Intake through Integration) are LLM nodes in the default pipeline
+- The orchestrator assembles context, invokes the LLM, validates output against schema, retries on failure, and records everything in the audit trail
+
+### Deterministic Node
+
+A node that executes a script or invokes a domain service without LLM involvement.
+
+- Execution methods: `script` (shell command), `domain_service` (Extension API method), or `builtin` (orchestrator-provided function like PR creation or label management)
+- Examples: compile check, binary size check, licence scan, PR creation, label update, constraint validation, code normalisation
+- The orchestrator captures stdout/stderr/exit-code, parses output per the node's specification, and records in the audit trail
+
+### Spawning Node
+
+A node that analyses pipeline state and creates new GitHub Issues for follow-up work. Does not produce artifacts for the current pipeline run.
+
+- Non-blocking by default: Pipeline continues regardless of spawning node success
+- May be configured as blocking (pipeline waits for issue creation, but never waits for issue completion)
+- Examples: refactoring analysis, tech debt detection, follow-up work identification, documentation gap detection
+- Created issues are linked to the parent work item and recorded in the audit trail
+
+### Edge
+
+A transition between two nodes in the pipeline graph.
+
+- Contains: Source node, target node, optional condition
+- Unconditional edges: Always taken (condition omitted)
+- Conditional edges: Taken only when the condition evaluates to true
+- Evaluation modes (per source node): `all-matching` (fan-out to all true edges), `first-matching` (exclusive routing), or `explicit` (node output names edges to take)
+
+### Edge Condition
+
+A rule that determines whether an edge is taken after its source node completes.
+
+- **Deterministic condition**: Expression evaluated against pipeline state using a simple expression language (e.g., `review.result.passed == true`, `code_generation.retry_count < 5`)
+- **LLM-evaluated condition**: Natural-language condition assessed by the LLM against current pipeline context (e.g., "The review findings indicate an architectural issue, not just an implementation bug"). MUST have a deterministic fallback. MUST be recorded in the audit trail.
+- **Composite condition**: Boolean combination (AND, OR, NOT) of deterministic and LLM-evaluated conditions
+
+### Rework Edge
+
+An edge that creates a cycle (loop) in the pipeline graph for retry or rework scenarios.
+
+- MUST specify: Maximum traversal count, which node outputs to preserve vs. discard on re-entry, retry vs. rework semantics
+- Retry: Same input, try again (e.g., LLM schema validation failure)
+- Rework: Modified input, different approach (e.g., review findings fed back to code generation)
+- Overflow behaviour: When max traversals reached — halt with error, escalate to human, or take a configured overflow edge
+
+### Node Gate
+
+A configurable decision point after a node completes where the pipeline may pause for human approval.
 
 - Configuration: `auto-proceed` (continue immediately) or `human-gated` (wait for explicit approval)
-- Scope: Configurable per-stage, per-repository
-- Override: Safety-critical work items force `human-gated` for all code-producing stages regardless of configuration
+- Scope: Configurable per node, per repository
+- Override: Safety-critical work items force `human-gated` for all code-producing nodes regardless of configuration
+- Shift work boundary: Sets a default gate policy per work item classification — nodes before the boundary default to `human-gated`, nodes after default to `auto-proceed`
 - Represented by: `cogworks:awaiting-review` label when waiting
 
 ### Step Function
 
-A single CLI invocation that reads GitHub state, determines the next action, executes it, and writes results back.
+A single CLI invocation that reads GitHub state, executes one graph traversal pass, and writes results back.
 
-- Stateless: No carried state between invocations
+- Stateless: No carried state between invocations; pipeline state reconstructed from GitHub
 - Idempotent: Re-invoking for the same state produces the same result (or detects prior completion)
-- Atomic: Each invocation performs one logical action
+- Scope: One invocation may execute one or more nodes (e.g., a node and its unconditional successors, or parallel fan-out nodes)
 
 ---
 
@@ -52,14 +119,14 @@ A GitHub Issue that represents a unit of work to be implemented by CogWorks.
 - Identified by: GitHub Issue number
 - Contains: Title, description, optional structured fields (affected components, priority, type)
 - Trigger: Pipeline starts when `cogworks:run` label is applied
-- State labels: `cogworks:stage:<stage-name>`, `cogworks:safety-critical`, `cogworks:processing`, `cogworks:awaiting-review`
+- State labels: `cogworks:node:<node-name>`, `cogworks:safety-critical`, `cogworks:processing`, `cogworks:awaiting-review`
 
 ### Sub-Work-Item
 
-A GitHub Issue created by CogWorks during the Planning stage, representing one implementation task within a larger work item.
+A GitHub Issue created by CogWorks during the Planning node, representing one implementation task within a larger work item.
 
 - Identified by: GitHub Issue number
-- Created by: The Planning stage (Stage 4)
+- Created by: The Planning node
 - Contains: Title, description, file list, interface references, test specification, dependency references
 - State labels: `cogworks:sub-work-item`, `cogworks:status:<status>`, `cogworks:depends-on:<issue>`, `cogworks:order:<n>`
 - Constraint: Maximum configurable count per work item (default: 10)
@@ -72,7 +139,7 @@ The result of analyzing a work item to determine its type, scope, and safety imp
 
 - Contains: Task type (enum), affected modules (list), estimated scope, safety-affecting flag, rationale
 - Task types: new feature, bug fix, refactor, configuration change, documentation, dependency update
-- Determines: Which pipeline stages execute, which constraints apply, which gates are enforced
+- Determines: Which pipeline nodes execute, which constraints apply, which gates are enforced
 
 ### Safety Classification
 
@@ -80,7 +147,7 @@ A determination of whether a work item touches safety-critical code paths.
 
 - Determined by: Cross-referencing affected modules against the safety-critical module registry
 - Override rule: If *any* affected module is in the registry, the work item is safety-affecting regardless of LLM classification
-- Consequence: Forces human-gated transitions for all code-producing stages
+- Consequence: Forces human-gated transitions for all code-producing nodes
 
 ### Scope Estimate
 
@@ -128,7 +195,7 @@ A high-fidelity behavioral clone of an external dependency (API, hardware, netwo
 - Built via: Standard CogWorks pipeline (twins are work items)
 - Contains: Conformance test suite validating twin behavior against specification
 - Lifecycle: Versioned, maintained, updated when real dependency changes
-- Used by: Scenario validation stage provisions twins when scenarios reference external dependencies
+- Used by: Scenario validation node provisions twins when scenarios reference external dependencies
 - Properties: Programmatically startable/stoppable, stateless between runs, supports failure injection
 - Conformance status: Whether a twin's conformance tests still pass against the real system. Stale twins (failed conformance) produce "unverified" scenario results (see risk-register.md CW-R08)
 - Fidelity boundary: Each twin specification documents what behaviors are replicated vs. simplified or omitted. Scenarios are tagged with required fidelity level; those requiring higher fidelity than available trigger physical test validation (see risk-register.md CW-R09)
@@ -150,7 +217,7 @@ Multi-level summaries of modules enabling efficient context assembly.
 
 ### Specification Document
 
-A Markdown document produced by the Architecture stage describing what will be built and why.
+A Markdown document produced by the Architecture node describing what will be built and why.
 
 - Contains: Affected modules, design decisions with rationale, dependency changes, risk assessment, required ADRs
 - Delivered via: Pull Request (referencing the work item)
@@ -158,7 +225,7 @@ A Markdown document produced by the Architecture stage describing what will be b
 
 ### Interface Definition
 
-Source code files containing type signatures, trait definitions, and function signatures produced by the Interface Design stage.
+Source code files containing type signatures, trait definitions, and function signatures produced by the Interface Design node.
 
 - Language: Target language (Rust initially), not pseudocode
 - Delivered via: Pull Request (referencing work item and spec PR)
@@ -166,7 +233,7 @@ Source code files containing type signatures, trait definitions, and function si
 
 ### Sub-Work-Item Plan
 
-The set of sub-work-items produced by the Planning stage, with their dependency graph.
+The set of sub-work-items produced by the Planning node, with their dependency graph.
 
 - Contains: One GitHub Issue per sub-work-item, each with file list, interface references, test specification, and dependency links
 - Validated: Topological sort must succeed (no cycles), all interfaces must be covered, granularity limits respected
@@ -174,7 +241,7 @@ The set of sub-work-items produced by the Planning stage, with their dependency 
 
 ### Implementation Output
 
-The code and tests produced by the Code Generation stage for a single sub-work-item.
+The code and tests produced by the Code Generation node for a single sub-work-item.
 
 - Contains: Source files (new or modified), test files, all passing deterministic checks
 - Delivered via: Pull Request (referencing sub-work-item and parent work item)
@@ -197,7 +264,7 @@ The structured output of the Review Gate for a single sub-work-item.
 
 The assembled set of files, documentation, and constraints provided as input to an LLM call.
 
-- Contents vary by stage but may include: specification, interface definitions, prior SWI outputs, ADRs, coding standards, architectural constraints, relevant source code, Context Pack domain knowledge
+- Contents vary by node but may include: specification, interface definitions, prior SWI outputs, ADRs, coding standards, architectural constraints, relevant source code, Context Pack domain knowledge
 - Constraint: Must fit within target model's context window
 - Truncation: Deterministic priority-based strategy when content exceeds window
 - Note: Constitutional Rules are NOT part of the context package. They are injected separately as a privileged system prompt component. Context Pack content IS included in context packages via the Context Assembler.
@@ -215,7 +282,7 @@ The deterministic ranking used to select context when the full package exceeds t
 
 ### Prompt Template
 
-A version-controlled Markdown file with variable placeholders that defines the instructions given to an LLM at a specific stage.
+A version-controlled Markdown file with variable placeholders that defines the instructions given to an LLM at a specific node.
 
 - Format: Markdown with `{{variable}}` placeholders
 - Stored: In repository (version-controlled)
@@ -224,7 +291,7 @@ A version-controlled Markdown file with variable placeholders that defines the i
 
 ### Output Schema
 
-A JSON Schema definition that specifies the structure of an LLM's response for a given stage.
+A JSON Schema definition that specifies the structure of an LLM's response for a given node.
 
 - Purpose: Enables deterministic validation of LLM output before the pipeline proceeds
 - Stored: In repository (version-controlled)
@@ -250,7 +317,7 @@ An external process providing domain-specific tooling capabilities. Domain servi
 A temporary local clone of the target repository used for domain service operations.
 
 - Created: Shallow clone to a temporary directory when toolchain operations are needed
-- Branch convention: `cogworks/<work-item-number>/<stage-slug>`
+- Branch convention: `cogworks/<work-item-number>/<node-slug>`
 - Lifecycle: Created and destroyed within a single CLI invocation
 - Not used for: Lightweight file reads (those use GitHub API)
 - Management: Domain services are responsible for creating and managing working copies. CogWorks provides shared libraries that domain services can use for clone management and other common operations.
@@ -260,17 +327,90 @@ A temporary local clone of the target repository used for domain service operati
 Transfer of control from CogWorks to a human reviewer when the system cannot resolve an issue within its budget.
 
 - Triggers: Retry budget exceeded, cost budget exceeded, scope threshold exceeded, unresolvable review findings
-- Mechanism: Issue comment with structured failure report + `cogworks:stage:failed` label
+- Mechanism: Issue comment with structured failure report + `cogworks:node:failed` label
 - Contains: All attempts, all failures, accumulated context at point of failure
 
 ### Cost Budget
 
 A configurable limit on total LLM tokens consumed per pipeline run.
 
-- Scope: Per-pipeline (across all stages and sub-work-items)
+- Scope: Per-pipeline (across all nodes and sub-work-items)
 - Tracking: Accumulated in-memory during processing, written to GitHub as audit artifact on completion
 - Enforcement: Pipeline halts immediately when budget exceeded
-- Reporting: Per-stage and per-sub-work-item breakdown
+- Reporting: Per-node and per-sub-work-item breakdown
+- Parallel execution: Shared across concurrent nodes; budget checks are atomic
+
+### Pipeline Working Directory
+
+A dedicated git worktree maintained by the orchestrator for the duration of a pipeline run.
+
+- Purpose: Accumulates intermediate artifacts (specs, interface definitions, plans, generated code) across nodes within a single pipeline run
+- Persistence: Persists across all nodes within a single pipeline run; cleaned up on pipeline completion
+- Recovery: State MUST be recoverable from GitHub artifacts (PRs, issue comments) in case of failure — the working directory is a performance optimisation, not a durability mechanism
+- Relationship to domain service working copies: The pipeline working directory is orchestrator-level state. Domain services still manage their own working copies for toolchain operations (compile, simulate, etc.) via the Extension API context.
+- Not a substitute for GitHub: All durable state MUST be written to GitHub (PRs, issue comments, labels) before cleanup
+
+### Pipeline Configuration
+
+The TOML file (`.cogworks/pipeline.toml`) that defines the pipeline graph for a repository.
+
+- Optional: Repositories without this file get the default linear pipeline
+- Contents: Node definitions, edge definitions, pipeline-level settings (cost budget, max concurrent LLM calls)
+- Multiple pipelines: May define multiple named pipelines (e.g., `feature`, `bugfix`, `documentation-only`); pipeline for a work item selected by the Intake node's classification output
+- Validated at load time: No orphan nodes, all edge targets exist, every cycle has a termination condition, at least one terminal node reachable from start
+
+### Named Pipeline
+
+A specific pipeline graph configuration defined within `.cogworks/pipeline.toml`.
+
+- Identified by: Human-readable name (e.g., `feature-development`, `bugfix`, `documentation-only`)
+- Selection: The Intake node's classification output determines which named pipeline is used for a work item
+- Default: If no named pipeline matches, or no configuration file exists, the default linear pipeline is used
+
+### Fan-Out
+
+A pattern where a completed node activates multiple downstream nodes for concurrent execution.
+
+- Occurs when: Multiple edges leave a source node and all their conditions evaluate to true (using `all-matching` evaluation mode)
+- Concurrent execution: Fan-out nodes execute as concurrent async tasks within the orchestrator process
+- Constraints: Shared cost budget, configurable max concurrent LLM calls (default: 3)
+
+### Fan-In
+
+A synchronisation point where a downstream node waits for multiple upstream nodes to complete.
+
+- Occurs when: A node declares inputs from multiple upstream nodes
+- Behaviour: The downstream node stays in `pending` state until ALL input nodes have completed
+- Partial failure: If one upstream node fails, the fan-in node cannot proceed. Depending on configuration, siblings may be aborted or allowed to complete.
+
+### Shift Work Boundary
+
+The pipeline node after which CogWorks proceeds non-interactively for a given work item classification.
+
+- Purpose: Makes the human/autonomous boundary explicit and configurable
+- Per-classification: Different work item types have different boundaries (e.g., safety-critical: after Review; standard: after Interface Design; low-risk: after Intake)
+- Effect: Nodes before the boundary default to `human-gated`; nodes after default to `auto-proceed`
+- Override: Per-node gate configuration and safety-critical override still apply
+- Visibility: Represented by a label or comment on the GitHub Issue so humans know when to engage
+
+### Reference Exemplar
+
+A file from an external repository included as read-only context for code generation.
+
+- Purpose: Enable pattern reuse across repositories ("implement this feature following the pattern shown in the reference")
+- Declared in: Architecture specification
+- Included by: Context Assembler, at the appropriate pyramid summary level (Level 2 for distant references, Level 3 for closely related)
+- Constraint: Read-only — CogWorks MUST NOT modify files in referenced repositories
+- Example: Extension API handler pattern in `cogworks-domain-rust` referenced when building a new domain service
+
+### Pipeline State
+
+The structured representation of a pipeline run's progress, maintained by the orchestrator.
+
+- Contains: Active nodes (currently executing), completed nodes with outputs, pending nodes (inputs not yet available), failed nodes with error info, per-cycle traversal counts, cumulative cost
+- Format: JSON document, written to a GitHub comment on the parent work item at each node boundary
+- Purpose: Human visibility and crash recovery
+- Recovery: On re-invocation, the orchestrator reads this state and resumes from where it left off
 
 ### Audit Trail
 
@@ -312,7 +452,7 @@ A version-controlled repository of cross-domain interface definitions, stored in
 - Contains: Structured definitions of interfaces that span two or more domains
 - Format: TOML files conforming to a published JSON Schema
 - Authorship: MUST be authored and maintained by humans; CogWorks MUST NOT create or modify definitions autonomously
-- Validation: Registry is validated deterministically on every pipeline run, before any pipeline stage executes
+- Validation: Registry is validated deterministically on every pipeline run, before any pipeline node executes
 - Purpose: Provide a single source of truth for inter-domain contracts
 
 ### Interface Definition
@@ -399,7 +539,7 @@ The mechanism for handling domain service operations that may take extended time
 
 The standardised wrapper around every Extension API request.
 
-- Contains: `request_id` (UUID, for tracing), `api_version`, `method`, `caller` context (system, stage, work item IDs), `repository` context (path, ref), `params` (method-specific), and optional `interface_contracts` (relevant cross-domain contracts from the registry)
+- Contains: `request_id` (UUID, for tracing), `api_version`, `method`, `caller` context (system, node, work item IDs), `repository` context (path, ref), `params` (method-specific), and optional `interface_contracts` (relevant cross-domain contracts from the registry)
 - The `caller` context allows domain services to include traceability information in their responses without needing to understand the caller's pipeline
 - The `repository.path` field is semantically overloaded: for co-located services (Unix socket), it is a local filesystem path to the repository root; for remote services (HTTP), it is a clone URL. Domain service authors must handle both string formats — check for a URL scheme (`http://`, `https://`) to distinguish them
 - The `interface_contracts` field is populated by CogWorks when the invoked method is one that performs cross-domain constraint validation (`validate`, `review_rules`, `extract_interfaces`). It contains the subset of the interface registry contracts relevant to the artifacts being processed. Domain services return `constraint_results` in the response when this field is present
@@ -452,7 +592,7 @@ A structured directory containing domain knowledge, safe patterns, anti-patterns
 - Located at: `.cogworks/context-packs/<pack-name>/` (configurable)
 - Contains: trigger definition file, domain knowledge document, safe patterns document, anti-patterns document (with explanations of why each pattern is unsafe), required artefacts declaration
 - Loading: Deterministic, driven by work item's component tags, issue labels, and safety classification — not by LLM inference
-- Timing: Loaded at the Architecture stage (Stage 2), before any code generation begins
+- Timing: Loaded at the Architecture node, before any code generation begins
 - Multiple packs: A single pipeline run may load multiple packs simultaneously
 - Conflict resolution: Where packs contain contradictory guidance, the more restrictive rule applies
 - Versioned: Version-controlled alongside the source code they inform; changes traceable to pipeline runs
@@ -463,7 +603,7 @@ A structured directory containing domain knowledge, safe patterns, anti-patterns
 A specific document section, evidence item, or output element declared by a Context Pack that must be present in the pipeline's output for the pack's domain requirements to be satisfied.
 
 - Declared in: Context Pack's `required-artefacts.toml`
-- Checked at: Review stage (blocking finding if missing)
+- Checked at: Review node (blocking finding if missing)
 - Failure output: Identifies which pack declared the requirement and what artefact is missing (actionable, not generic)
 
 ### Constitutional Rules
@@ -497,7 +637,7 @@ CogWorks generating code that implements capabilities, touches files, or introdu
 
 The set of source files a specific work item is permitted to create or modify, derived from the interface document and specification.
 
-- Source: Interface Design stage output + Specification document
+- Source: Interface Design node output + Specification document
 - Enforcement: Scope enforcer validates generated artifacts against this set
 - Violation: Generating files outside this set is a scope violation
 
@@ -508,7 +648,7 @@ A work item state entered after injection detection. The work item is suspended 
 - Entry: `INJECTION_DETECTED` event
 - Behavior: Work item is NOT automatically requeued or retried
 - Exit: Human must explicitly review the flagged content and either confirm false positive (with justification recorded in audit trail) or mark the work item as contaminated
-- Label: `cogworks:hold` (distinct from `cogworks:stage:failed`)
+- Label: `cogworks:hold` (distinct from `cogworks:node:failed`)
 
 ### Pipeline Events (Safety)
 

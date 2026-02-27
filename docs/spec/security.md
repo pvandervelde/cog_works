@@ -60,7 +60,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 3. **Schema validation (secondary defense)**: All LLM outputs are validated against strict JSON schemas. Even if the LLM is manipulated, the output must conform to the expected structure. Freeform text fields in the schema are limited to specific purposes (rationale, description) and are never executed.
 4. **Output is never executed**: CogWorks never executes LLM output as code within its own process. Generated code is written to files and validated by external tools (compiler, linter).
 5. **Prompt structure**: Issue body is clearly delimited in the prompt template (e.g., inside XML/Markdown tags) and framed as data, not instructions.
-6. **Human review**: Stage gates (especially for safety-critical work items) provide human checkpoints before any generated code is merged.
+6. **Human review**: Node gates (especially for safety-critical work items) provide human checkpoints before any generated code is merged.
 
 **Residual risk**: The constitutional layer reduces risk but cannot guarantee zero false negatives. A sufficiently sophisticated injection might evade detection. Mitigated by schema validation, multi-dimensional review (security pass), and human gates.
 
@@ -234,7 +234,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 **Mitigations**:
 
-1. **Different models for generation and review**: The review stage uses a different model (or a different model configuration) from the code generation stage. This reduces systematic correlation.
+1. **Different models for generation and review**: The review node uses a different model (or a different model configuration) from the code generation node. This reduces systematic correlation.
 2. **Focused pass prompts**: Each review pass uses a narrow, focused prompt. A model with a specific blind spot for one category is less likely to have the same blind spot for different categories.
 3. **Human gates for safety-critical**: Safety-critical PRs require human review regardless of automated results.
 4. **Scenario validation**: Independent of LLM review — tests actual behavior, not what the LLM says about the code.
@@ -321,6 +321,24 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 ---
 
+### THREAT-018: Malicious Pipeline Configuration Hijacking Execution
+
+**Description**: An attacker with write access to the repository modifies `.cogworks/pipeline.toml` to insert a malicious pipeline definition — for example, routing to a custom node that exfiltrates secrets via a spawning node, bypasses review nodes, or suppresses cost tracking. Because the pipeline configuration file is loaded at runtime, a subtle change could alter CogWorks' behavior without triggering obvious alerts.
+
+**Impact**: Pipeline executes attacker-controlled node sequencing. Review nodes skipped; audit trail incomplete; secrets potentially exfiltrated via domain service calls or spawning nodes.
+
+**Mitigations**:
+
+1. **Pipeline configuration in protected paths**: `.cogworks/pipeline.toml` must be added to the CODEOWNERS protected path set. Changes require human approval via required review.
+2. **Load-time schema validation**: Pipeline configuration is validated against a strict JSON Schema at load time. Invalid configurations are rejected before any node executes.
+3. **Node registry restriction**: Only built-in node types (LLM, deterministic-builtin, spawning) or pre-approved domain service names may appear in node definitions. Unknown identifiers cause load-time rejection.
+4. **Audit log**: Pipeline configuration hash is recorded in the audit trail at pipeline start. Unexpected changes are detectable.
+5. **Rework loop cap enforcement**: Max traversal limits are enforced even if the configuration specifies an unusually high value (hard cap in code, not just validation).
+
+**Residual risk**: An attacker with legitimate human-reviewed PR access can still modify the configuration. The primary protection is change control (CODEOWNERS + required review), not technical enforcement within CogWorks.
+
+---
+
 ## Security Requirements Summary
 
 | Requirement | Description | Enforcement |
@@ -338,4 +356,6 @@ This document identifies security threats to CogWorks and specifies mitigations.
 | Constitutional rules loaded | Non-overridable rules before any LLM call | Unit test: missing rules file halts pipeline |
 | Injection detection | External content scanned before prompt inclusion | Property-based tests for injection patterns |
 | Protected path enforcement | Generated files never modify behavioral config | Unit tests for scope enforcer, pre-PR validation |
+| Pipeline configuration validation | `.cogworks/pipeline.toml` validated against schema at load time; unknown node types rejected | Unit tests for pipeline config loader |
+| Pipeline configuration change control | `.cogworks/pipeline.toml` in CODEOWNERS protected paths; changes require human approval | CODEOWNERS + repository branch protection |
 | Constitutional rules change control | Human-reviewed PR required for rule changes | Constitutional Rules Loader branch validation |

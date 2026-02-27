@@ -80,7 +80,7 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 
 | ID | Mitigation | Type | Status |
 |----|-----------|------|--------|
-| CW-R02-M1 | Use a different LLM model (or provider) for review passes than for code generation. Configure via model selection per stage. | Preventive | Designed |
+| CW-R02-M1 | Use a different LLM model (or provider) for review passes than for code generation. Configure via model selection per node. | Preventive | Designed |
 | CW-R02-M2 | Prompt templates, scenario specifications, and the conformance test suite are in a protected path with CODEOWNERS requiring human approval for any change. CogWorks PRs touching these paths are automatically flagged. | Preventive | Planned |
 | CW-R02-M3 | Deterministic checks (compilation, linting, property tests, static analysis) are immune to LLM bias. Maximise the coverage of deterministic validation. | Preventive | Designed |
 | CW-R02-M4 | Periodic human audit of CogWorks review outputs — sample review findings and verify they're catching real issues, not rubber-stamping. Track review finding rates over time; a sudden drop indicates potential degradation. | Detective | Planned |
@@ -269,7 +269,7 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | CW-R10-M1 | Per-pipeline cost budget with automatic halt (REQ-CODE-004). | Preventive | Designed |
 | CW-R10-M2 | Per-call token limit so no single LLM invocation consumes a disproportionate share of the budget. | Preventive | Planned |
 | CW-R10-M3 | Hard billing alert at the LLM provider level (independent of CogWorks' own tracking). Defence-in-depth against bugs in cost tracking. | Detective | Planned |
-| CW-R10-M4 | Per-stage cost breakdown in the audit trail (REQ-AUDIT-002). Review weekly for anomalies. | Detective | Designed |
+| CW-R10-M4 | Per-node cost breakdown in the audit trail (REQ-AUDIT-002). Review weekly for anomalies. | Detective | Designed |
 
 **Residual Risk:** Low. Multiple independent cost controls make undetected runaway spending unlikely.
 
@@ -462,6 +462,30 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 
 ---
 
+### CW-R19: Graph Misconfiguration Causes Runaway Rework or Dead-End Pipeline
+
+**Description:** A misconfigured `.cogworks/pipeline.toml` results in a pipeline graph with an inadvertent cycle that evades the `max_traversals` limit, a dead-end node (no forward edge and not a terminal), or edge conditions that can never evaluate to true — causing CogWorks to spin, stall, or consume cost budget without making progress.
+
+**Likelihood:** 3 (Possible — graph configuration is complex and teams may introduce subtle errors)
+
+**Impact:** 3 (Moderate — pipeline stuck or cost wasted; no data loss, but work item blocked until human intervention)
+
+**Risk Score:** 9
+
+**Mitigations:**
+
+| ID | Mitigation | Type | Status |
+|----|-----------|------|--------|
+| CW-R19-M1 | Load-time DAG validation: cycle detection (with `max_traversals` as the only allowed back-edges), reachability analysis (every node has a path to a terminal node). Configuration that fails validation is rejected before any execution. | Preventive | Designed |
+| CW-R19-M2 | Hard cap on rework loop traversals enforced in executor code regardless of what the configuration specifies (code-level guard cannot be overridden by configuration). | Preventive | Designed |
+| CW-R19-M3 | LLM-evaluated edge conditions MUST have a deterministic fallback. A condition that returns no parseable result defaults to the fallback, not to infinite retry. | Preventive | Designed |
+| CW-R19-M4 | Cost budget applies across the entire pipeline run, including rework iterations. A misconfigured loop that approaches the budget limit triggers a cost-budget halt before complete exhaustion. | Detective | Designed |
+| CW-R19-M5 | Pipeline configuration linting tool (separate from CogWorks runtime) validates pipeline files in CI before merge, providing early feedback to engineers. | Preventive | Planned |
+
+**Residual Risk:** Low-moderate. Load-time validation catches structural errors; cost budget catches runaway execution. A semantically valid but logically incorrect pipeline (correct structure, impossible edge conditions) may still stall, but cost budget and processing lock TTL ensure eventual cleanup.
+
+---
+
 ## Cross-Reference to Spec
 
 The following spec documents contain mitigations or design decisions informed by entries in this risk register:
@@ -481,3 +505,4 @@ The following spec documents contain mitigations or design decisions informed by
 | CW-R13 | requirements.md (REQ-AUDIT), operations.md (audit trail) |
 | CW-R15 | constraints.md (pyramid summary accuracy), vocabulary.md (Pyramid Summary Levels) |
 | CW-R18 | requirements.md (REQ-CONST), security.md (THREAT-015) |
+| CW-R19 | edge-cases.md (EDGE-057, EDGE-058, EDGE-064), constraints.md (Pipeline Graph), assertions.md (ASSERT-GRAPH-004, ASSERT-GRAPH-006), security.md (THREAT-018) |
