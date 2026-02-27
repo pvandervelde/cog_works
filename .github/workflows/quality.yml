@@ -38,8 +38,9 @@ jobs:
           if [ -f ".secrets.baseline" ]; then
             detect-secrets scan --baseline .secrets.baseline
           else
-            echo "No .secrets.baseline found, creating one..."
-            detect-secrets scan --baseline .secrets.baseline
+            echo "No .secrets.baseline found. Creating one for review..."
+            detect-secrets scan > .secrets.baseline
+            echo "::warning::No .secrets.baseline was committed. A baseline has been generated — please commit it to the repository."
           fi
 
       # Language-specific checks
