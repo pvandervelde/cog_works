@@ -126,6 +126,11 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **Cost visibility**: Token usage and cost must be tracked per-call, per-node, and per-pipeline. The final cost report must be posted as a comment on the work item.
 - **Constitutional event visibility**: Every INJECTION_DETECTED, SCOPE_UNDERSPECIFIED, SCOPE_AMBIGUOUS, and PROTECTED_PATH_VIOLATION event must appear in the audit trail with full context (work item ID, source document, offending content or missing capability). These events are never silently suppressed.
 - **Context Pack audit**: The names, version (git ref), and trigger match reasons for all loaded Context Packs must be recorded in the audit trail and included in the PR description.
+- **Metric emission is non-blocking**: Metric data point emission to external sinks MUST be fire-and-forget. Emission failures MUST be logged as warnings but MUST NOT block, slow, or fail the pipeline. The pipeline's correctness and completion MUST NOT depend on metric emission success.
+- **Metric data points always logged**: Regardless of whether an external metric sink is configured, all computed metric data points MUST appear in the structured log output. This ensures metric data is always available for post-hoc analysis even when no external backend is configured.
+- **No metrics storage**: CogWorks MUST NOT implement its own metrics storage, aggregation, dashboarding, or alerting. These are delegated to external tools. CogWorks' sole responsibility is computing and emitting raw metric data points.
+- **Metric computation is deterministic**: The same pipeline audit data MUST always produce the same metric data points. Metric computation is a pure function.
+- **Root cause categories are structured**: Retry and failure root cause categories MUST be structured enums (compilation error, test failure, review finding, constraint violation, timeout), not free-form strings. This enables reliable external aggregation.
 
 ---
 

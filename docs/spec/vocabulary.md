@@ -421,6 +421,41 @@ A complete record of every decision, LLM call, validation result, and state tran
 - Storage: GitHub issue comments or linked artifacts
 - Purpose: ISO 9001 traceability, systematic improvement, debugging
 
+### Performance Metric
+
+A structured data point emitted by CogWorks at pipeline run boundaries for consumption by external metrics systems.
+
+- Emitted at: Each node boundary and pipeline completion
+- Contents: Per-node wall-clock timings, retry counts with root cause categories, LLM token usage per node, domain service invocation timings, satisfaction scores, final disposition, total pipeline cost
+- Dimensions: Pipeline run ID, work item ID, classification, safety classification, repository identifier, node name, timestamp
+- Purpose: Enable external tools (Prometheus, Mimir, InfluxDB, Grafana) to compute trend metrics (convergence rate, first-pass success rate, cost efficiency, etc.)
+- CogWorks does NOT store, aggregate, or dashboard metrics — it emits raw data points and delegates those concerns to purpose-built external tools
+
+### Metric Sink
+
+An abstraction through which CogWorks emits performance metric data points to an external metrics backend.
+
+- Implementations: Prometheus push gateway, OpenTelemetry collector, InfluxDB line protocol, structured log output (fallback)
+- Optional: CogWorks operates correctly without a configured metric sink; metrics appear in structured logs but are not pushed externally
+- Analogy: Similar to how the LLM Provider trait abstracts LLM API access, the Metric Sink trait abstracts metrics emission
+
+### Improvement Backlog
+
+A set of GitHub Issues tagged `process:improvement` tracking systematic improvements to CogWorks' configuration, prompts, scenarios, and processes.
+
+- Each issue captures: triggering metric, root cause diagnosis, proposed change, expected impact, verification plan
+- After implementation: actual impact measured over verification period and recorded
+- Purpose: ISO 9001 evidence of continuous improvement; searchable history of system optimization
+
+### Review Cadence
+
+The structured schedule at which CogWorks performance is reviewed by humans.
+
+- Weekly (30 min): Operational review — failed runs, gate overrides, stuck issues
+- Monthly (60 min): Quality review — post-merge defects, codebase health, safety escapes, gate calibration
+- Quarterly (2 hrs): Strategic review — 3-month trends, cost analysis, shift work boundary adjustment, risk register update
+- Purpose: Ensure CogWorks output is measured and issues drive action, not just accumulate
+
 ---
 
 ## GitHub State Concepts

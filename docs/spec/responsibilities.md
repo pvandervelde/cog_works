@@ -673,6 +673,36 @@ Records all pipeline activity for traceability and debugging.
 
 ---
 
+## Metric Emitter
+
+Computes and emits structured performance metric data points for consumption by external metrics systems. Contains zero metrics storage logic.
+
+**Responsibilities:**
+
+- Knows: Metric data point schema, required dimensions (pipeline run ID, work item ID, classification, safety classification, repository, node, timestamp), root cause category enumeration
+- Does: Transforms raw audit trail data into structured metric data points, emits data points through the Metric Sink abstraction at each node boundary and pipeline completion, handles emission failures gracefully (logs, does not block pipeline)
+
+**Collaborators:**
+
+- Audit Recorder (provides raw audit data for metric computation)
+- Metric Sink (emits computed data points to external backend)
+- Configuration Manager (reads metric sink configuration)
+
+**Roles:**
+
+- Transformer: Converts audit trail events into structured metric data points with proper dimensions
+- Emitter: Pushes data points through the Metric Sink abstraction
+- Failure isolator: Ensures metric emission failures never block pipeline execution
+
+**Key behavior:**
+
+- Emission is non-blocking: metric sink failures produce log warnings, not pipeline failures
+- When no metric sink is configured, the emitter logs data points to structured output and takes no further action
+- Data point dimensions are populated deterministically from pipeline state — same pipeline state always produces same dimensions
+- Root cause categories are structured enums (compilation error, test failure, review finding, constraint violation, timeout), not free-form strings
+
+---
+
 ## Context Pack Loader
 
 Loads domain knowledge packs based on work item classification. Contains zero LLM logic.

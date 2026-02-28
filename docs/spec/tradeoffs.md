@@ -198,7 +198,30 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 12. Polling vs. Streaming for Long-Running Domain Service Operations
+## 12. External Metrics Backend vs. Built-in Metrics Store
+
+**Decision**: CogWorks emits metric data points to an external metrics backend. No built-in metrics storage, aggregation, or dashboarding.
+
+| Factor | External Metrics Backend | Built-in Metrics Store |
+|--------|------------------------|------------------------|
+| **Focus** | CogWorks stays focused on automated engineering pipelines | CogWorks takes on metrics infrastructure responsibility |
+| **Aggregation** | Purpose-built tools (Prometheus, Mimir) handle time-series aggregation natively | Must implement aggregation logic across pipeline runs |
+| **Dashboarding** | Grafana or equivalent provides rich, configurable dashboards out of the box | Must build and maintain a custom dashboard |
+| **Alerting** | External alerting systems (Alertmanager, Grafana alerts) with mature notification channels | Must implement alerting logic and notification delivery |
+| **GitHub-only principle** | GitHub remains sole *durable pipeline state*. Metrics are operational telemetry, not pipeline state — they belong in a metrics system | Violates the "no database" principle or requires awkward GitHub-based metrics storage |
+| **Cross-pipeline queries** | Natural — time-series DBs are designed for multi-dimensional queries across data points | Requires scanning GitHub comments across many work items (expensive API usage) |
+| **Operational maturity** | These tools have years of production hardening | Must build and harden a new metrics system |
+| **Deployment complexity** | Adds external dependency (metrics backend + dashboard) | No additional infrastructure (but more CogWorks code) |
+
+**Rationale**: CogWorks' core competency is automated engineering pipelines, not metrics infrastructure. Purpose-built tools (Prometheus/Mimir for storage, Grafana for dashboards, Alertmanager for alerts) are excellent at exactly this problem. CogWorks' responsibility ends at emitting well-structured, well-dimensioned metric data points through a pluggable Metric Sink abstraction. The Metric Sink follows the same pattern as the LLM Provider trait — a clean abstraction boundary with swappable infrastructure implementations.
+
+This also clarifies the boundary of the "GitHub as sole durable state" principle: GitHub is the durable state for *pipeline execution* (work item state, audit trail, PR lifecycle). Performance metrics are *operational telemetry* — a different concern that belongs in a different system.
+
+**Risk**: Metric sink implementation must be non-blocking and failure-tolerant. A metrics backend outage must not block or slow pipeline execution. Metric emission failures are logged, not fatal.
+
+---
+
+## 13. Polling vs. Streaming for Long-Running Domain Service Operations
 
 **Decision**: Polling initially, designed for future streaming.
 
@@ -214,7 +237,7 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 13. CogWorks-Mediated vs. Direct Cross-Domain Communication
+## 14. CogWorks-Mediated vs. Direct Cross-Domain Communication
 
 **Decision**: CogWorks mediates all cross-domain interactions. Domain services never communicate directly.
 
@@ -230,7 +253,7 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 14. Deterministic vs. LLM-Based Injection Detection
+## 15. Deterministic vs. LLM-Based Injection Detection
 
 **Decision**: Heuristic-only injection detection (LLM-based secondary pass deferred to future enhancement).
 
@@ -251,7 +274,7 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 15. Context Pack Loading: Architecture Node vs. Every Node
+## 16. Context Pack Loading: Architecture Node vs. Every Node
 
 **Decision**: Context Packs are loaded once at the Architecture node and their content persists for the entire pipeline run.
 
@@ -269,7 +292,7 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 16. Constitutional Rules: System Prompt vs. Context Injection
+## 17. Constitutional Rules: System Prompt vs. Context Injection
 
 **Decision**: Constitutional rules are injected as a privileged system prompt component, not as a regular context item.
 
@@ -287,7 +310,7 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 17. Fixed Linear Pipeline vs. Configurable Graph Pipeline
+## 18. Fixed Linear Pipeline vs. Configurable Graph Pipeline
 
 **Decision**: Configurable directed graph loaded from `.cogworks/pipeline.toml`, with a built-in default that preserves the original seven-node linear pipeline when no configuration file is present.
 
@@ -305,7 +328,7 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
-## 18. Pipeline State Persistence: GitHub Issue Comments vs. Local File
+## 19. Pipeline State Persistence: GitHub Issue Comments vs. Local File
 
 **Decision**: Pipeline execution state is persisted as a structured JSON comment on the GitHub issue, not as a local file in the working directory.
 

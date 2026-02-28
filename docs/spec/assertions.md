@@ -777,3 +777,61 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **And**: Fan-out completion state is restored (which upstream nodes have finished)
 - **And**: Execution resumes from the failed or incomplete node, not from the start
 - **Traces to**: REQ-EXEC-004, ASSERT-PSM-009
+
+---
+
+## Context Assembly
+
+### ASSERT-CTX-001: Reference exemplar files loaded from external repository
+
+- **Given**: The architecture specification declares reference exemplar files from an external repository
+- **When**: Context assembly prepares the context package for code generation
+- **Then**: The specified exemplar files are fetched from the external repository
+- **And**: Exemplar files are included in the context package at the appropriate pyramid summary level (Level 2 for distant references, Level 3 for closely related references)
+- **And**: Exemplar files are read-only context — CogWorks does not modify files in referenced repositories
+- **Traces to**: REQ-CTX-001
+
+---
+
+## Performance Metrics
+
+### ASSERT-METRIC-001: Metric data points emitted on pipeline completion
+
+- **Given**: A pipeline run completes with any final disposition (merged, rejected, failed, abandoned)
+- **When**: The pipeline executor processes pipeline completion
+- **Then**: Metric data points are emitted to the configured metric sink
+- **And**: Data points include per-node timings, retry counts with root cause categories, token usage, domain service invocation timings, satisfaction scores, final disposition, and total cost
+- **Traces to**: REQ-AUDIT-004
+
+### ASSERT-METRIC-002: All required dimensions present in emitted data points
+
+- **Given**: Metric data points are computed from a completed pipeline run
+- **When**: The Metric Emitter prepares data points for emission
+- **Then**: Each data point includes: pipeline run ID, work item ID, work item classification, safety classification, repository identifier, node name, and timestamp
+- **Traces to**: REQ-AUDIT-005
+
+### ASSERT-METRIC-003: Metric sink failure is non-fatal
+
+- **Given**: A metric sink is configured but the external backend is unreachable
+- **When**: The Metric Emitter attempts to emit data points
+- **Then**: The emission failure is logged as a warning
+- **And**: The pipeline continues to completion (not blocked, not slowed)
+- **And**: Metric data points appear in structured log output regardless
+- **Traces to**: REQ-AUDIT-006
+
+### ASSERT-METRIC-004: Incremental data points emitted at node boundaries
+
+- **Given**: A pipeline with multiple nodes and a configured metric sink
+- **When**: Each node completes execution
+- **Then**: Incremental metric data points for that node are emitted to the sink
+- **And**: The pipeline does not wait for confirmation of successful emission before proceeding to the next node
+- **Traces to**: REQ-AUDIT-004
+
+### ASSERT-METRIC-005: Pipeline operates normally without metric sink
+
+- **Given**: No metric sink is configured in `.cogworks/config.toml`
+- **When**: A pipeline run completes
+- **Then**: Metric data points are computed and logged to structured log output
+- **And**: No external emission is attempted
+- **And**: The pipeline operates identically to when a sink is configured
+- **Traces to**: REQ-AUDIT-006

@@ -371,6 +371,18 @@ Every pipeline state transition (node entry, node completion, gate evaluation) M
 
 When a node fails, CogWorks MUST post a structured failure report as a GitHub issue comment and apply the `cogworks:node:failed` label.
 
+### REQ-AUDIT-004: Performance metric emission
+
+At the completion of each pipeline run (and at each node boundary for in-progress monitoring), CogWorks MUST emit structured metric data points to a configurable external metric sink. Emitted data points MUST include: per-node wall-clock timings, retry counts with root cause categories (compilation error, test failure, review finding, constraint violation, timeout), LLM token usage per node, domain service invocation timings per method, satisfaction scores (per-scenario and overall), final disposition (merged, rejected, failed, abandoned), and total pipeline cost.
+
+### REQ-AUDIT-005: Metric data completeness
+
+Each emitted metric data point MUST include sufficient dimensions to enable cross-pipeline aggregation by external tools: pipeline run ID, work item ID, work item classification, safety classification, repository identifier, node name, and timestamp. The dimensions MUST enable computation of all performance metrics defined in the operations specification (pipeline effectiveness, efficiency, quality, and learning metrics).
+
+### REQ-AUDIT-006: Metric sink abstraction
+
+CogWorks MUST define a metric sink abstraction for emitting metric data points. The abstraction MUST support pluggable backends (e.g., Prometheus push gateway, OpenTelemetry collector, InfluxDB line protocol). CogWorks MUST NOT implement its own metrics storage, aggregation, or dashboarding — these are delegated to purpose-built external tools. The metric sink is optional — CogWorks MUST operate correctly when no metric sink is configured (metrics are included in structured log output but not pushed to an external system).
+
 ---
 
 ## REQ-BOUND: System Boundaries
@@ -382,6 +394,18 @@ CogWorks MUST NOT execute generated code or LLM output within its own process. C
 ### REQ-BOUND-002: No PR merging
 
 CogWorks MUST NOT merge, approve, close, or request changes on any Pull Request. PR lifecycle decisions belong to humans.
+
+### REQ-BOUND-003: No metrics storage
+
+CogWorks MUST NOT implement its own metrics database, time-series store, or dashboarding. Metrics storage, aggregation, trend analysis, and dashboarding are delegated to external purpose-built tools. CogWorks' responsibility ends at emitting structured metric data points through the metric sink abstraction.
+
+---
+
+## REQ-CTX: Context Assembly
+
+### REQ-CTX-001: Reference exemplars
+
+The context assembly service MUST support including files from external repositories as reference exemplars. Exemplars are declared in the architecture specification and included in the context package for code generation. Exemplars are read-only context — CogWorks MUST NOT modify files in referenced repositories. Exemplar inclusion MUST respect the pyramid summary levels (Level 2 for distant references, Level 3 for closely related references).
 
 ---
 
