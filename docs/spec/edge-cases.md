@@ -510,5 +510,5 @@ This document catalogs non-standard flows and failure scenarios that the system 
 ### EDGE-073: Single LLM Model Available for Both Generation and Alignment
 
 **Scenario**: The deployment has only one LLM model configured. The alignment check cannot use a different model from the generator.
-**Expected behavior**: The alignment check proceeds with the same model. A warning is logged noting the correlated bias risk. Metrics track same-model alignment checks separately for analysis. For safety-critical items, this condition may warrant additional scrutiny.
-**Key requirement**: Model separation is SHOULD (not MUST). Single-model deployments are supported with documented risk.
+**Expected behavior**: The alignment check proceeds with the same model. A warning is logged noting the correlated bias risk. Metrics track same-model alignment checks separately for analysis. For safety-critical work items, the alignment threshold is automatically raised by 0.02 (e.g., 0.95 → 0.97) to compensate for increased correlated-bias risk, and the traceability matrix entry for the affected stage is annotated with a `same_model_bias_risk` flag visible to human reviewers during gate sign-off.
+**Key requirement**: Model separation is SHOULD (not MUST). Single-model deployments are supported with documented risk and compensating controls for safety-critical items.

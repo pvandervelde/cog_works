@@ -863,7 +863,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: The node is re-entered with rework context that includes the two specific misalignment findings
 - **And**: The rework counter is incremented (not the retry counter)
 - **And**: The alignment findings appear in the audit trail
-- **Traces to**: REQ-ALIGN-005, REQ-ALIGN-006
+- **Traces to**: REQ-ALIGN-005, REQ-ALIGN-021
 
 ### ASSERT-ALIGN-004: Rework budget exhaustion escalates to pipeline failure
 
@@ -887,7 +887,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **When**: Node B’s alignment check completes
 - **Then**: The traceability matrix contains entries from both node A and node B
 - **And**: Requirements not addressed at node B are marked N/A with a reason
-- **Traces to**: REQ-ALIGN-030
+- **Traces to**: REQ-ALIGN-030, REQ-ALIGN-031
 
 ### ASSERT-ALIGN-007: Traceability matrix published on pipeline completion
 
@@ -896,7 +896,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: The traceability matrix is posted as a comment on the work item issue
 - **And**: The matrix is included in the audit trail
 - **And**: For safety-classified work items, the matrix is flagged as requiring human sign-off
-- **Traces to**: REQ-ALIGN-031
+- **Traces to**: REQ-ALIGN-030, REQ-ALIGN-031
 
 ### ASSERT-ALIGN-008: End-to-end alignment check catches accumulated drift
 
@@ -921,7 +921,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **When**: The LLM alignment check is invoked
 - **Then**: The deterministic check findings are included in the LLM prompt context
 - **And**: The LLM check focuses on semantic alignment issues not already caught by deterministic checks
-- **Traces to**: REQ-ALIGN-003, REQ-ALIGN-004
+- **Traces to**: REQ-ALIGN-004
 
 ### ASSERT-ALIGN-011: Alignment score and blocking findings both required to pass
 

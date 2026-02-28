@@ -839,7 +839,7 @@ Verifies that a pipeline node's output matches the semantic intent of its upstre
 - Pipeline Executor (receives rework signal with misalignment findings as additional context; distinct from retry signal)
 - Audit Recorder (records alignment check results, findings, score, rework cycles)
 - Configuration Manager (reads per-node alignment thresholds, rework budgets, check type enablement)
-- Traceability Matrix Builder (posts entries from each alignment check result)
+- Pipeline State (reads and writes traceability matrix entries accumulated across alignment checks)
 
 **Roles:**
 

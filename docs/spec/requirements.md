@@ -617,7 +617,7 @@ CogWorks MUST NOT create or modify files matching protected path patterns (const
 
 ### REQ-ALIGN-001: Alignment verification step
 
-Every LLM node in the pipeline MUST have an alignment verification step that runs as part of validation (REQ-EXEC-003, step 4) — after schema validation and domain service validation, but before the output is accepted. The alignment verification step compares the node's output against its upstream inputs and reports any misalignment. Alignment verification checks that the output addresses the intent of the input — not just structural or syntactic correctness. The alignment checker MUST be a different LLM call from the generating node (different prompt, and ideally a different model configured via per-node model selection).
+Every LLM node in the pipeline MUST have an alignment verification step that runs as part of validation (REQ-EXEC-003, step 4) — after schema validation and domain service validation, but before the output is accepted. The alignment verification step compares the node's output against its upstream inputs and reports any misalignment. Alignment verification checks that the output addresses the intent of the input — not just structural or syntactic correctness. The alignment checker MUST be a different LLM call from the generating node (different prompt, and SHOULD use a different model — see REQ-ALIGN-004).
 
 ### REQ-ALIGN-002: Alignment finding structure
 
@@ -651,6 +651,19 @@ The pipeline MUST distinguish between retries and rework:
 - **Rework**: The output is technically valid but doesn't match the intent of the input (alignment verification failure). The node is re-entered with the specific misalignment findings as additional context. Counted against the node's rework budget (separate from retry budget).
 
 Retries and rework MUST have separate counters, separate budgets, and separate context strategies. The distinction MUST be maintained in the pipeline state and audit trail.
+
+### REQ-ALIGN-006: Rework budget exhaustion
+
+When a node's rework budget is exhausted (all configured rework cycles have been attempted and alignment still fails), the pipeline MUST:
+
+1. Record the final alignment findings in the audit trail, tagged as rework-exhaustion
+2. Post a detailed alignment failure comment on the work item issue, including: the node name, the number of rework cycles attempted, and the alignment findings from the final attempt
+3. Mark the node as failed with a structured error that distinguishes rework exhaustion from retry exhaustion
+4. Halt the pipeline — the pipeline MUST NOT silently pass or skip the node after rework exhaustion
+
+Rework exhaustion is a distinct failure mode from retry exhaustion. The structured error MUST include the failure category (`rework_exhausted` vs `retry_exhausted`), enabling downstream tooling and human reviewers to distinguish "couldn't produce valid output" from "couldn't produce aligned output".
+
+_Note: Requirement IDs 007–009 are reserved for future per-stage rework specialization requirements._
 
 ### REQ-ALIGN-010: Work item to architecture alignment
 
@@ -735,7 +748,7 @@ The review gate alignment check MUST verify that the review was spec-aware:
 
 ### REQ-ALIGN-015: End-to-end alignment check
 
-After all sub-work-items are complete and before the pipeline reports success, a final end-to-end alignment check MUST verify that the aggregate output addresses the original work item. This check is necessary because small acceptable deviations at each stage can compound into significant drift from the original intent.
+After all sub-work-items are complete and before the pipeline reports success, a final end-to-end alignment check MUST verify that the aggregate output addresses the original work item. This check runs as a pipeline-level validation step after the terminal node (Integration) completes — it is not a separate node in the pipeline graph but a pipeline executor responsibility triggered on successful pipeline completion. This check is necessary because small acceptable deviations at each stage can compound into significant drift from the original intent.
 
 **Deterministic checks:**
 
@@ -764,7 +777,7 @@ When an alignment check fails (score below threshold or any blocking finding), t
 
 ### REQ-ALIGN-022: Alignment check cost management
 
-LLM alignment checks MUST be counted against the node's cost budget (REQ-CODE-004). When estimating node cost budgets, alignment check overhead MUST be accounted for — typically one additional LLM call per node execution. Deterministic alignment checks have negligible cost and are not counted. The pipeline configuration MUST support disabling LLM alignment checks per node while retaining deterministic checks.
+LLM alignment checks MUST be counted against the node's cost budget (REQ-CODE-004). The budget check MUST occur before the LLM alignment call is invoked — if the remaining budget is insufficient, the alignment check MUST fail with a structured budget-exceeded error rather than proceeding and exceeding the budget. When estimating node cost budgets, alignment check overhead MUST be accounted for — typically one additional LLM call per node execution. Deterministic alignment checks have negligible cost and are not counted. The pipeline configuration MUST support disabling LLM alignment checks per node while retaining deterministic checks.
 
 ### REQ-ALIGN-030: Traceability matrix
 
@@ -775,7 +788,7 @@ The traceability matrix MUST be:
 - Generated automatically from the alignment check results at each stage
 - Posted as a comment on the work item issue at pipeline completion
 - Included in the audit trail
-- Available for GateKeeper to reference during gate evaluation
+- Available for the Review Gate to reference during gate evaluation (REQ-REVIEW-001)
 
 ### REQ-ALIGN-031: Traceability matrix accumulation
 
@@ -804,6 +817,7 @@ If a node has no explicit alignment configuration, the orchestrator MUST apply d
 | Integration | No alignment check (deterministic node). |
 | Deterministic nodes | No alignment check. |
 | Spawning nodes | No alignment check. |
+| End-to-end (pipeline-level) | Deterministic + LLM alignment against original work item. Score threshold: 0.90. Not a graph node — runs as pipeline executor post-completion step (REQ-ALIGN-015). |
 
 ### REQ-ALIGN-041: Safety classification impact on alignment
 

@@ -299,7 +299,7 @@ Deterministic and LLM-based verification that a node's output matches the intent
 
 Incrementally builds a requirement-to-implementation traceability matrix across pipeline stages.
 
-- **Input**: Work item requirements (extracted during intake), per-stage alignment check results, pipeline completion status
+- **Input**: Work item requirements (extracted from the work item body during the first alignment check — the Architecture node's alignment check parses the work item into a structured requirements list to seed the matrix rows), per-stage alignment check results, pipeline completion status
 - **Output**: Structured traceability matrix mapping each requirement through Architecture → Interface → Sub-Work-Item → Code → Status
 - **Rules**:
   - Matrix is accumulated in the pipeline state — each alignment check adds its columns
