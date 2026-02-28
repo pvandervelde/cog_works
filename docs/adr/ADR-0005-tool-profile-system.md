@@ -87,7 +87,7 @@ The constitutional layer (ADR-0003) declares scope rules, but declaration withou
 
 - **Configuration overhead**: Each node type needs a tool profile definition (mitigated by sensible defaults for all 7 core nodes).
 - **Scope debugging**: When a node legitimately needs access it doesn't have, the developer must update the profile (mitigated by clear scope violation error messages).
-- **Adapter generator complexity**: The OpenAPI/EAB parser is ~2,500 lines of implementation.
+- **Adapter generator complexity**: The OpenAPI/EAB parser requires significant implementation effort (parsing, validation, code generation, drift detection).
 
 ### Neutral
 

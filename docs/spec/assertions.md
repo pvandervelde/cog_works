@@ -1029,11 +1029,20 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ### ASSERT-SKILL-002: Only active skills are invocable
 
-- **Given**: Three skills — one Active, one Proposed, one Retired
+- **Given**: Four skills — one Active, one Proposed, one Reviewed, one Retired
 - **When**: The LLM calls `skill.list`
 - **Then**: Only the Active skill appears in the list
-- **And**: Attempting `skill.run` on the Proposed or Retired skill returns a structured error
-- **Traces to**: REQ-SKILL-005
+- **And**: Attempting `skill.run` on the Proposed, Reviewed, or Retired skill returns a structured error stating the skill is not available
+- **And**: The error does NOT reveal whether the skill exists (to prevent information leakage about unapproved skills)
+- **Traces to**: REQ-SKILL-005, THREAT-020
+
+### ASSERT-SKILL-006: Proposed-to-Active transition requires review
+
+- **Given**: A skill in Proposed state
+- **When**: An operator attempts to activate it directly (skipping the Reviewed state)
+- **Then**: The activation is rejected with a structured error indicating review is required
+- **And**: The skill remains in Proposed state
+- **Traces to**: REQ-SKILL-005, THREAT-020
 
 ### ASSERT-SKILL-003: Deprecated skill invocation produces warning
 
@@ -1063,9 +1072,9 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ## Progressive Discovery Assertions
 
-### ASSERT-DISC-001: Progressive discovery activates above threshold
+### ASSERT-DISC-001: Progressive discovery activates at or above threshold
 
-- **Given**: A node with 20 tools in its resolved profile (above the default threshold of 15)
+- **Given**: A node with 15 tools in its resolved profile (at the default threshold of 15)
 - **When**: The LLM call is prepared
 - **Then**: The tool list contains the compact index (name + one-line description) instead of full schemas
 - **And**: Meta-tools `tools.search`, `tools.schema`, `tools.call` are available
@@ -1085,6 +1094,15 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **When**: `tools.search` returns results
 - **Then**: The skill appears before the raw tool in the result list
 - **Traces to**: REQ-DISC-004
+
+### ASSERT-DISC-004: tools.call enforces scope identically to direct invocation
+
+- **Given**: A Code Generation node with `allowed_write_paths` set to `["src/modules/auth/**"]` and progressive discovery active
+- **When**: The LLM invokes `tools.call` with tool name `fs.write` and path `src/modules/payment/handler.rs`
+- **Then**: The scope enforcer rejects the invocation with the same structured error as a direct `fs.write` call would produce
+- **And**: A `SCOPE_VIOLATION` event is recorded in the audit trail
+- **And**: The file is NOT modified
+- **Traces to**: REQ-DISC-002, REQ-ENFORCE-002
 
 ---
 
@@ -1113,3 +1131,46 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **When**: The drift detection CLI command is run
 - **Then**: The report identifies the removed endpoint and the adapter tool definition that no longer has a source
 - **Traces to**: REQ-ADAPT-005
+
+---
+
+## Per-Category Tool Assertions
+
+### ASSERT-TOOL-010: Filesystem read respects read scope
+
+- **Given**: A node with `allowed_read_paths = ["src/**"]` and `denied_read_paths = ["src/secrets/**"]`
+- **When**: The LLM invokes `fs.read` targeting `src/secrets/config.toml`
+- **Then**: The tool rejects the read with a structured error (denied path takes precedence)
+- **And**: A `SCOPE_VIOLATION` event is recorded
+- **Traces to**: REQ-TOOL-010, REQ-TOOL-013
+
+### ASSERT-TOOL-020: Git commit respects branch pattern
+
+- **Given**: A Code Generation node with `branch_pattern = "cogworks/swi-.*"`
+- **When**: The LLM invokes `git.commit` on branch `main`
+- **Then**: The commit is rejected with a structured error explaining the branch constraint
+- **And**: No commit is created
+- **Traces to**: REQ-TOOL-020, REQ-ENFORCE-002
+
+### ASSERT-TOOL-030: Domain service tool respects service scope
+
+- **Given**: A node with `allowed_services = ["rust"]`
+- **When**: The LLM invokes `domain.validate` specifying service `kicad`
+- **Then**: The invocation is rejected with a structured error identifying the service scope violation
+- **Traces to**: REQ-TOOL-030, REQ-ENFORCE-002
+
+### ASSERT-TOOL-040: Shell tool restricts to allowed commands
+
+- **Given**: A node with `allowed_commands = ["cargo build", "cargo test"]`
+- **When**: The LLM invokes `shell.run_restricted` with command `rm -rf /`
+- **Then**: The command is rejected with a structured error (command not in allowlist)
+- **And**: The command is NOT executed
+- **Traces to**: REQ-TOOL-040, REQ-ENFORCE-002
+
+### ASSERT-TOOL-050: Network tool restricts to allowed URLs
+
+- **Given**: A node with `net.fetch` enabled and `allowed_urls = ["https://docs.example.com"]`
+- **When**: The LLM invokes `net.fetch` targeting `https://evil.example.com/exfiltrate`
+- **Then**: The fetch is rejected with a structured error (URL not in allowlist)
+- **And**: No network request is made
+- **Traces to**: REQ-TOOL-051, REQ-ENFORCE-002

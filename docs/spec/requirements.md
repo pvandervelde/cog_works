@@ -836,6 +836,8 @@ For safety-classified work items, alignment checks MUST be stricter:
 
 ## Tool Registry & Scoped Tools
 
+> **Numbering convention**: Tool requirements use categorical groupings: 001–009 for registry-level concerns, 010–019 for filesystem tools, 020–029 for git tools, 030–039 for domain service tools, 040–049 for shell tools, 050–059 for search/network tools. New tool categories should use the next available decade range. Do not fill gaps within a category unless the new requirement belongs to that category.
+
 ### REQ-TOOL-001: Tool registry
 
 The orchestrator MUST maintain a central registry of all available tools. Each tool entry contains: unique name, category, description, parameter JSON Schema, scope parameter declarations, and implementation reference. Tools from three sources (built-in, adapter-generated, skill-derived) all register through the same mechanism.
@@ -924,7 +926,7 @@ The orchestrator MUST provide default tool profiles for all 7 core pipeline node
 | Planning | `reader` | `fs.read`, `fs.list`, `search.code` | Read-only, full repo read access |
 | Code Generation | `generator` | All `reader` tools + `fs.write`, `fs.create`, `fs.delete`, `git.commit`, `git.branch`, `domain.*`, `shell.run_restricted` | Write access limited to `{{affected_modules}}`; git commits to `cogworks/swi-*` branches only |
 | Review | `reviewer` | `reader` tools + `domain.validate`, `domain.review_rules`, `domain.simulate` | Read-only filesystem; domain validation only |
-| Integration | `integrator` | `git.*`, `fs.read` | Branch operations only; read-only filesystem |
+| Integration | `integrator` | `git.status`, `git.diff`, `git.branch`, `git.log`, `fs.read` | Branch operations and status checks only; read-only filesystem; no `git.commit` (merges use GitHub API via Pull Request Manager abstraction) |
 
 ---
 
@@ -940,7 +942,7 @@ Each tool implementation MUST validate scope parameters before executing. This v
 
 ### REQ-ENFORCE-003: OS-level sandboxing (Layer 3)
 
-For Code Generation nodes (the only core node with write access), the orchestrator SHOULD apply OS-level sandboxing (e.g., `landlock`, `seccomp-bpf`, containerised execution) to constrain filesystem and network access at the process level. This is the third layer of defence, independent of Layers 1 and 2.
+For Code Generation nodes (the only core node with write access), the orchestrator SHOULD apply OS-level sandboxing (e.g., `landlock`, `seccomp-bpf`, containerised execution) to constrain filesystem and network access at the process level. This is the third layer of defence, independent of Layers 1 and 2. For safety-critical work items (REQ-PIPE-006) or work items from untrusted sources, OS-level sandboxing MUST be applied. SHOULD becomes MUST when the work item's safety classification is set.
 
 ---
 
@@ -994,6 +996,19 @@ Every tool call within a skill execution MUST be validated against the calling n
 
 Skills MUST follow a lifecycle: Proposed → Reviewed → Active → Deprecated → Retired. Only Active skills are available to LLM nodes. Deprecated skills remain available but produce a warning when invoked, referencing the preferred alternative. Retired skills are removed from tool lists.
 
+Valid state transitions:
+
+| From | To | Trigger | Approval |
+|------|----|---------|----------|
+| Proposed | Reviewed | Human reviews and approves the skill script and parameter schema | Human (required) |
+| Reviewed | Active | Operator activates via `cogworks skill activate` | Human (required) |
+| Active | Deprecated | Manual deprecation or auto-deprecation via REQ-SKILL-006 (success rate below threshold) | Automatic (REQ-SKILL-006) or human |
+| Deprecated | Active | Operator re-activates after fixing the underlying issue | Human (required) |
+| Deprecated | Retired | Operator retires via `cogworks skill retire` | Human (required) |
+| Active | Retired | Operator retires directly (e.g., skill no longer applicable) | Human (required) |
+
+Transitions not listed above are invalid. The Proposed → Active transition (skipping review) is explicitly prohibited.
+
 ### REQ-SKILL-006: Skill success tracking
 
 The orchestrator MUST track per-skill success/failure rates. When a skill's success rate drops below a configurable threshold (default: 90% over the last 20 invocations), the skill MUST be automatically flagged for review (status change to Deprecated with reason `success_rate_below_threshold`).
@@ -1004,11 +1019,11 @@ The orchestrator MUST track per-skill success/failure rates. When a skill's succ
 
 ### REQ-DISC-001: Compact tool index
 
-When a node's resolved tool list exceeds a configurable threshold (default: 15 tools), the orchestrator MUST present a compact tool index (name + one-line description) instead of full schemas in the LLM tool list.
+When a node's resolved tool list meets or exceeds a configurable threshold (default: 15 tools), the orchestrator MUST present a compact tool index (name + one-line description) instead of full schemas in the LLM tool list.
 
 ### REQ-DISC-002: Meta-tools for on-demand schema
 
-When progressive discovery is active, the orchestrator MUST provide three meta-tools: `tools.search` (semantic search across tool names and descriptions), `tools.schema` (retrieve full JSON Schema for a named tool), and `tools.call` (invoke a tool by name with parameters).
+When progressive discovery is active, the orchestrator MUST provide three meta-tools: `tools.search` (semantic search across tool names and descriptions), `tools.schema` (retrieve full JSON Schema for a named tool), and `tools.call` (invoke a tool by name with parameters). Tool invocations through `tools.call` MUST pass through the same scope enforcement as direct tool invocations (REQ-ENFORCE-002). The `tools.call` meta-tool MUST NOT provide a bypass of any enforcement layer.
 
 ### REQ-DISC-003: Tool index generation
 
@@ -1045,3 +1060,9 @@ The orchestrator MUST provide a CLI command to compare generated adapter definit
 ### REQ-ADAPT-006: Supported specification formats
 
 The adapter generator MUST support: OpenAPI 3.0 (JSON + YAML), OpenAPI 3.1 (JSON + YAML), and EAB JSON Schema. Additional formats MAY be added as extensions.
+
+---
+
+## MCP Integration (Superseded)
+
+> **Note**: Requirement IDs REQ-MCP-001 through REQ-MCP-004 were defined in COGWORKS-TOOLSCOPE-001 §9 and are superseded by REQ-ADAPT-001 through REQ-ADAPT-006. See ADR-0005 for decision context. MCP integration is retained only as a fallback for bidirectional or streaming protocols that generated adapters cannot represent. No new requirements should use the REQ-MCP-* prefix.

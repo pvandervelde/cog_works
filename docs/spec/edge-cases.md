@@ -558,3 +558,9 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Scenario**: During a Code Generation node execution, the LLM makes 7 tool calls that violate scope constraints (e.g., repeatedly trying to write to paths outside its scope, possibly due to poor prompt instructions or a misunderstanding of the task scope).
 **Expected behavior**: Each violation is returned to the LLM as a structured error. After the 5th violation (default threshold), an audit warning is emitted. The node MAY be halted at this point (configurable behavior). If the node continues and the LLM eventually succeeds within scope, the pipeline continues but the high violation count is prominently noted in the tool usage report.
 **Key requirement**: Excessive scope violations are a signal of misconfiguration or prompt issues, not just individual rejections.
+
+### EDGE-081: Layer 1 Filtering Failure — Layer 2 Must Catch
+
+**Scenario**: Due to a bug or race condition, a tool that should NOT be in the node's profile appears in the LLM's tool list (Layer 1 filtering failure). The LLM invokes this tool with parameters that violate the node's scope constraints.
+**Expected behavior**: Layer 2 (tool-level scope enforcement) independently validates the invocation. Because the tool's scope parameters for this node are either absent or restrictive, the invocation is rejected with a `SCOPE_VIOLATION` event. The audit trail records both the anomalous tool presence and the scope violation. The defence-in-depth property holds: failure at Layer 1 does not compromise Layer 2.
+**Key requirement**: The three enforcement layers operate independently. Layer 2 does not assume Layer 1 has already validated tool availability. This is the core security property of the defence-in-depth design (constraints.md: "Failure at one layer MUST NOT compromise the others").
