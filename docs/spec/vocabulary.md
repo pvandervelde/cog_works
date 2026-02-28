@@ -834,7 +834,7 @@ A parameterised, deterministic script that replays a proven tool invocation patt
 The current state of a skill in its lifecycle.
 
 - **Proposed**: Extracted from audit trail analysis; not yet available to pipeline nodes
-- **Reviewed**: Human has reviewed and approved; committed to `.cogworks/skills/`
+- **Reviewed**: Human has reviewed and approved; committed to `.cogworks/skills/`. May transition to Active (activate), back to Proposed (rework), or to Retired (abandon).
 - **Active**: Available to pipeline nodes; included in tool lists
 - **Deprecated**: Marked as outdated (e.g., success rate dropped below threshold); still available but alternatives are preferred
 - **Retired**: Removed from tool lists; retained in version control for reference

@@ -1036,14 +1036,6 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **And**: The error does NOT reveal whether the skill exists (to prevent information leakage about unapproved skills)
 - **Traces to**: REQ-SKILL-005, THREAT-020
 
-### ASSERT-SKILL-006: Proposed-to-Active transition requires review
-
-- **Given**: A skill in Proposed state
-- **When**: An operator attempts to activate it directly (skipping the Reviewed state)
-- **Then**: The activation is rejected with a structured error indicating review is required
-- **And**: The skill remains in Proposed state
-- **Traces to**: REQ-SKILL-005, THREAT-020
-
 ### ASSERT-SKILL-003: Deprecated skill invocation produces warning
 
 - **Given**: A skill with lifecycle state `Deprecated` and a specified alternative skill
@@ -1067,6 +1059,22 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: Execution is rejected with a structured error identifying the missing required parameter
 - **And**: No tool calls from the skill are executed
 - **Traces to**: REQ-SKILL-001
+
+### ASSERT-SKILL-006: Proposed-to-Active transition requires review
+
+- **Given**: A skill in Proposed state
+- **When**: An operator attempts to activate it directly (skipping the Reviewed state)
+- **Then**: The activation is rejected with a structured error indicating review is required
+- **And**: The skill remains in Proposed state
+- **Traces to**: REQ-SKILL-005, THREAT-020
+
+### ASSERT-SKILL-007: Reviewed skill can be rejected or abandoned
+
+- **Given**: A skill in Reviewed state
+- **When**: An operator invokes `cogworks skill rework` (reject/rework) or `cogworks skill retire` (abandon)
+- **Then**: The skill transitions to Proposed (rework) or Retired (abandon) respectively
+- **And**: The state change is recorded in the audit trail with the operator's reason
+- **Traces to**: REQ-SKILL-005
 
 ---
 
@@ -1150,6 +1158,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **When**: The LLM invokes `git.commit` on branch `main`
 - **Then**: The commit is rejected with a structured error explaining the branch constraint
 - **And**: No commit is created
+- **And**: A `SCOPE_VIOLATION` event is recorded
 - **Traces to**: REQ-TOOL-020, REQ-ENFORCE-002
 
 ### ASSERT-TOOL-030: Domain service tool respects service scope
@@ -1157,6 +1166,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Given**: A node with `allowed_services = ["rust"]`
 - **When**: The LLM invokes `domain.validate` specifying service `kicad`
 - **Then**: The invocation is rejected with a structured error identifying the service scope violation
+- **And**: A `SCOPE_VIOLATION` event is recorded
 - **Traces to**: REQ-TOOL-030, REQ-ENFORCE-002
 
 ### ASSERT-TOOL-040: Shell tool restricts to allowed commands
@@ -1165,6 +1175,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **When**: The LLM invokes `shell.run_restricted` with command `rm -rf /`
 - **Then**: The command is rejected with a structured error (command not in allowlist)
 - **And**: The command is NOT executed
+- **And**: A `SCOPE_VIOLATION` event is recorded
 - **Traces to**: REQ-TOOL-040, REQ-ENFORCE-002
 
 ### ASSERT-TOOL-050: Network tool restricts to allowed URLs
@@ -1173,4 +1184,5 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **When**: The LLM invokes `net.fetch` targeting `https://evil.example.com/exfiltrate`
 - **Then**: The fetch is rejected with a structured error (URL not in allowlist)
 - **And**: No network request is made
+- **And**: A `SCOPE_VIOLATION` event is recorded
 - **Traces to**: REQ-TOOL-051, REQ-ENFORCE-002

@@ -463,7 +463,7 @@ For integration tests that do not need to exercise alignment logic:
 
 ### Skill Lifecycle Tests
 
-- **Only Active skills visible**: Skills in Proposed, Deprecated, Retired states. Assert: `skill.list` returns only Active skills (and Deprecated with warning).
+- **Only Active skills visible**: Skills in Proposed, Reviewed, Deprecated, Retired states. Assert: `skill.list` returns only Active skills (and Deprecated with warning).
 - **Deprecated skill warning**: Invoking a Deprecated skill. Assert: execution proceeds with warning referencing alternative.
 - **Retired skill rejected**: Invoking a Retired skill. Assert: execution rejected with structured error.
 - **Auto-deprecation**: Skill with 85% success rate (below 90% threshold). Assert: lifecycle state changes to Deprecated with `success_rate_below_threshold` reason.

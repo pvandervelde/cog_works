@@ -1002,6 +1002,8 @@ Valid state transitions:
 |------|----|---------|----------|
 | Proposed | Reviewed | Human reviews and approves the skill script and parameter schema | Human (required) |
 | Reviewed | Active | Operator activates via `cogworks skill activate` | Human (required) |
+| Reviewed | Proposed | Operator rejects and sends back for revision via `cogworks skill rework` | Human (required) |
+| Reviewed | Retired | Operator abandons the skill via `cogworks skill retire` | Human (required) |
 | Active | Deprecated | Manual deprecation or auto-deprecation via REQ-SKILL-006 (success rate below threshold) | Automatic (REQ-SKILL-006) or human |
 | Deprecated | Active | Operator re-activates after fixing the underlying issue | Human (required) |
 | Deprecated | Retired | Operator retires via `cogworks skill retire` | Human (required) |
