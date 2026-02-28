@@ -268,13 +268,45 @@ Verification that all artefacts declared by loaded Context Packs are present.
 
 Pure function that transforms raw audit trail data into structured metric data points for emission.
 
-- **Input**: Pipeline run audit data (node timings, retry counts with root causes, token usage, domain service invocations, satisfaction scores, final disposition)
+- **Input**: Pipeline run audit data (node timings, retry counts with root causes, rework counts with misalignment types, token usage, domain service invocations, alignment scores, satisfaction scores, final disposition)
 - **Output**: Set of structured metric data points with dimensions (pipeline run ID, work item ID, classification, safety classification, repository identifier, node name, timestamp)
 - **Rules**:
   - Computation is deterministic: same audit data always produces same metric data points
   - Each node boundary produces incremental data points (not only pipeline completion)
-  - Root cause categories are structured enums, not free-form strings: compilation error, test failure, review finding, constraint violation, timeout
+  - Root cause categories are structured enums, not free-form strings: compilation error, test failure, review finding, constraint violation, alignment failure, timeout
+  - Misalignment type distribution (missing, extra, modified, ambiguous, scope_exceeded) is tracked per stage
   - All dimensions required for external aggregation are populated before emission
+
+### Alignment Verification
+
+Deterministic and LLM-based verification that a node's output matches the intent of its upstream inputs. This is the semantic correctness layer — distinct from schema validation (structural correctness) and domain service validation (technical correctness).
+
+- **Input**: Node's upstream inputs (work item, architecture spec, interface definitions, sub-work-item description — depending on stage), node's output, alignment configuration (threshold, check types, rework budget)
+- **Output**: Alignment result (aligned/not-aligned, score, findings list, traceability matrix entries)
+- **Rules**:
+  - Runs as part of step 4 of the node execution lifecycle (REQ-EXEC-003), after schema and domain service validation
+  - Two check types: deterministic (structural comparison) and LLM (semantic comparison)
+  - Deterministic checks run first (cheap, fast, no LLM bias) — their results are included in the LLM check context so the LLM can focus on what requires judgement
+  - LLM alignment check uses an adversarial prompt focused on identifying misalignment, not assessing quality
+  - LLM alignment check SHOULD use a different model from the generating node (reduces correlated bias — CW-R02)
+  - Alignment failures trigger rework (not retry): the node re-enters with specific misalignment findings as additional context
+  - Rework counter is separate from retry counter; both have independent budgets
+  - Alignment score must meet configurable threshold (default: 0.90) AND have zero blocking findings to pass
+  - Safety-classified work items use stricter thresholds (default: 0.95) and cannot disable LLM alignment checks
+  - Each alignment check contributes entries to the incremental traceability matrix
+
+### Traceability Matrix Construction
+
+Incrementally builds a requirement-to-implementation traceability matrix across pipeline stages.
+
+- **Input**: Work item requirements (extracted from the work item body during the first alignment check — the Architecture node's alignment check parses the work item into a structured requirements list to seed the matrix rows), per-stage alignment check results, pipeline completion status
+- **Output**: Structured traceability matrix mapping each requirement through Architecture → Interface → Sub-Work-Item → Code → Status
+- **Rules**:
+  - Matrix is accumulated in the pipeline state — each alignment check adds its columns
+  - Requirements not addressed at a stage are marked "N/A" with a reason (not treated as failures)
+  - On pipeline completion, the matrix is posted as a comment on the work item and included in the audit trail
+  - For safety-classified work items, the traceability matrix requires human sign-off
+  - Matrix construction is deterministic given the same alignment check results
 
 ---
 

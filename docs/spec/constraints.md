@@ -158,6 +158,20 @@ These constraints MUST be enforced during implementation. They inform the interf
 
 ---
 
+## Alignment Verification Constraints
+
+- **Alignment checker model separation**: The LLM alignment check SHOULD use a different model from the generating node. Using the same model risks correlated blind spots (a model is unlikely to detect its own semantic errors). When only one model is available, this constraint is relaxed with a warning logged, not silently ignored.
+- **Rework and retry budgets are independent**: Rework (alignment failure) and retry (technical failure) MUST have separate counters and separate configurable budgets. Exhausting one does not affect the other. Both appear independently in the audit trail and metrics.
+- **Rework budget is enforced**: When the rework budget is exhausted for a node, the pipeline MUST fail with a structured error including the alignment findings from the final rework attempt. The pipeline MUST NOT silently pass after rework exhaustion.
+- **Finding types are structured enums**: Alignment finding types (missing, extra, modified, ambiguous, scope_exceeded) and severity levels (blocking, warning, informational) MUST be structured enums, not free-form strings. This enables reliable external aggregation and deterministic pass/fail evaluation.
+- **Blocking findings always fail**: If any alignment finding has severity `blocking`, the alignment check MUST fail regardless of the alignment score. The score threshold is necessary but not sufficient.
+- **Safety-critical alignment constraints cannot be relaxed**: For safety-classified work items: LLM alignment checks cannot be disabled, alignment threshold cannot be set below 0.95, and the traceability matrix requires human sign-off. These constraints are enforced at configuration load time, not at check time.
+- **Traceability matrix is incremental**: The traceability matrix MUST be built incrementally during pipeline execution, not reconstructed after the fact. Each alignment check contributes its entries as they occur.
+- **Alignment check cost is budgeted**: LLM alignment check token usage MUST be counted against the node's token budget. Alignment checks that would exceed the budget are reported as a structured error, not silently skipped.
+- **Deterministic checks run first**: Deterministic alignment checks MUST complete before the LLM alignment check is invoked. Their results are included in the LLM check context to avoid redundant LLM work.
+
+---
+
 ## Code Style (Rust-Specific)
 
 - **Follow Rust conventions**: `snake_case` for functions/variables, `PascalCase` for types, `SCREAMING_SNAKE_CASE` for constants (per `.tech-decisions.yml`).

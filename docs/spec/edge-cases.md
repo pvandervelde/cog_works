@@ -466,3 +466,49 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Scenario**: A pipeline run crashes mid-execution (process killed, OOM, hardware failure). Some nodes completed and emitted incremental data points, but the pipeline-level summary was never emitted.
 **Expected behavior**: External metrics systems receive partial data (whatever was emitted at node boundaries before the crash). The pipeline resume mechanism (REQ-EXEC-004) may produce a complete set on the resumed run. No data corruption occurs in the external backend.
 **Key requirement**: Incremental emission at node boundaries ensures partial data is available even after crashes.
+
+---
+
+## Alignment Verification Edge Cases
+
+### EDGE-067: Alignment Check False Positive Causes Unnecessary Rework
+
+**Scenario**: The LLM alignment check flags a valid output as misaligned (false positive). The node reworks its output, producing an identical or equivalent result. The alignment check passes on the second attempt.
+**Expected behavior**: The rework cycle completes normally. The audit trail records both the original alignment failure and the subsequent pass. Metrics capture the unnecessary rework cycle. No special handling — false positives are bounded by the rework budget.
+**Key requirement**: Rework budget limits the cost of alignment check false positives.
+
+### EDGE-068: Per-Stage Alignment Passes But End-to-End Alignment Fails
+
+**Scenario**: Each pipeline stage passes its per-stage alignment check. However, accumulated small drifts across stages result in a final output that no longer matches the original work item intent. The end-to-end alignment check (REQ-ALIGN-015) detects this.
+**Expected behavior**: The end-to-end alignment check fails with findings referencing the original work item. The pipeline disposition reflects the end-to-end failure. The traceability matrix shows all per-stage passes but an overall failure. Human review is requested.
+**Key requirement**: End-to-end alignment check is the safety net for accumulated drift across stages.
+
+### EDGE-069: Rework Budget Exhausted for Alignment Failure
+
+**Scenario**: A code generation node fails alignment checks repeatedly. After 3 rework cycles (default budget), the output still does not match the specification intent.
+**Expected behavior**: The pipeline fails with a structured error including: the alignment findings from the final attempt, the rework history (all 3 attempts and their findings), and a clear indication that rework budget was exhausted (distinct from retry budget exhaustion). The work item is not automatically requeued.
+**Key requirement**: Rework budget exhaustion is a distinct failure mode from retry exhaustion, with its own error structure.
+
+### EDGE-070: Deterministic and LLM Alignment Checks Disagree
+
+**Scenario**: The deterministic alignment check finds no issues, but the LLM alignment check produces blocking findings (or vice versa).
+**Expected behavior**: The merged result includes findings from both check types. If either produces a blocking finding, the alignment check fails. The audit trail records the disagreement. This is expected behavior — the two check types catch different classes of misalignment.
+**Key requirement**: Findings from both check types are merged; blocking findings from either type cause failure.
+
+### EDGE-071: Alignment Check LLM Call Fails (Technical Failure)
+
+**Scenario**: The LLM alignment check call fails due to a technical issue (rate limit, timeout, model unavailable).
+**Expected behavior**: This is treated as a retry-eligible failure of the alignment check itself, not an alignment failure. The retry budget for the alignment check call is separate from the node's rework budget. If the LLM check is configured as required (e.g., safety-critical items), the alignment check cannot pass without it. If the LLM check is optional, the alignment result is based on deterministic checks alone, with a warning logged.
+**Key requirement**: Technical failures of the alignment check are retries, not reworks. Safety-critical items cannot proceed without LLM alignment check.
+
+### EDGE-072: Alignment Check on Empty or Minimal Output
+
+**Scenario**: A node produces a technically valid but nearly empty output (e.g., an architecture spec with only a title and no content).
+**Expected behavior**: The deterministic alignment check produces `missing` findings for all expected elements. The alignment check fails with a very low score. This is an alignment failure (rework), not a schema validation failure (the schema may allow sparse content).
+**Key requirement**: Alignment verification catches semantic emptiness that schema validation permits.
+
+### EDGE-073: Single LLM Model Available for Both Generation and Alignment
+
+**Scenario**: The deployment has only one LLM model configured. The alignment check cannot use a different model from the generator.
+**Expected behavior**: The alignment check proceeds with the same model. A warning is logged noting the correlated bias risk. Metrics track same-model alignment checks separately for analysis. For safety-critical work items, the alignment threshold is automatically raised by 0.02 (e.g., 0.95 → 0.97) to compensate for increased correlated-bias risk, and the traceability matrix entry for the affected stage is annotated with a `same_model_bias_risk` flag visible to human reviewers during gate sign-off.
+**Key requirement**: Model separation is SHOULD (not MUST). Single-model deployments are supported with documented risk and compensating controls for safety-critical items.

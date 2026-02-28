@@ -686,6 +686,62 @@ A work item state entered after injection detection. The work item is suspended 
 - Exit: Human must explicitly review the flagged content and either confirm false positive (with justification recorded in audit trail) or mark the work item as contaminated
 - Label: `cogworks:hold` (distinct from `cogworks:node:failed`)
 
+### Alignment Verification
+
+The process of verifying that a pipeline node's output matches the intent of its upstream input — semantic correctness, distinct from structural correctness (schema validation) and technical correctness (domain service validation).
+
+- Purpose: Catches cases where the output is valid and correct code but doesn't address what was requested
+- Examples: Architecture spec solves a different problem than the work item described; interfaces add methods not in the spec; code implements a different algorithm than specified
+- Timing: Runs as part of step 4 of the node execution lifecycle, after schema and domain service validation
+- Two check types: Deterministic (structural comparison — fast, cheap, no LLM bias) and LLM (semantic comparison — adversarial prompt, ideally different model)
+- Output: Alignment result with score, findings, and traceability matrix entries
+- Failure triggers: Rework (not retry) with specific misalignment findings in context
+
+### Alignment Finding
+
+A structured report of a specific misalignment between a node's output and its upstream input.
+
+- Contains: type, severity, description, input reference, output reference, suggestion
+- Finding types:
+  - `missing`: Something required by the input is absent from the output
+  - `extra`: Something present in the output was not requested by the input
+  - `modified`: Something in the output contradicts or changes what the input specified
+  - `ambiguous`: The input is unclear and the output made an assumption that should be confirmed
+  - `scope_exceeded`: The output addresses concerns beyond the scope of the work item
+- Severity levels: `blocking` (fails alignment check, rework required), `warning` (passes, but included in review context), `informational` (logged in audit trail)
+- Each finding references both the input and the output, enabling targeted remediation
+
+### Alignment Score
+
+A numerical measure (0.0–1.0) of how well a node's output matches the intent of its upstream input.
+
+- Produced by: The LLM alignment check as part of its assessment
+- Threshold: Configurable per node (default: 0.90; safety-critical: 0.95)
+- Pass criteria: Score ≥ threshold AND zero blocking findings
+- Tracked in: Audit trail and performance metrics (per stage)
+- Related: Satisfaction Score (which measures scenario validation, not stage-to-stage alignment)
+
+### Rework
+
+Re-execution of a node with modified context because the previous output was technically valid but semantically misaligned with its input.
+
+- Distinguished from: Retry (re-execution because the output was technically invalid — didn't compile, didn't parse)
+- Context: Rework context includes the specific misalignment findings from the alignment check, giving the LLM targeted feedback on what to fix
+- Budget: Separate from retry budget; configurable per node (default: 3 cycles)
+- Counter: Tracked independently from retry counter in pipeline state
+- Audit: Each rework cycle is recorded with its alignment findings and the resulting output
+
+### Traceability Matrix
+
+A structured artifact mapping each requirement from the work item through the pipeline stages to the final deliverable.
+
+- Built: Incrementally as the pipeline progresses — each alignment check adds its columns
+- Columns: Requirement → Architecture → Interface → Sub-Work-Item → Code → Status
+- Status values: ✅ (satisfied), ⚠️ N/A (not applicable at this stage, with reason), ❌ (not addressed)
+- Published: Posted as a comment on the work item issue at pipeline completion
+- ISO 9001: Serves as evidence that requirements flow through to implementation
+- Safety: For safety-classified work items, requires human sign-off
+
 ### Pipeline Events (Safety)
 
 Structured events emitted by the constitutional layer and scope enforcer when behavioral boundaries are violated.

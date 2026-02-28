@@ -128,7 +128,7 @@ The orchestrator MUST maintain a state machine for each pipeline run tracking: c
 
 ### REQ-EXEC-003: Node execution lifecycle
 
-Each node execution MUST follow this lifecycle: (1) precondition check — verify all declared inputs are available, (2) announce — update pipeline state comment, (3) execute — run the node, (4) validate — check output against validation criteria, (5) record — write outputs and audit trail, (6) announce — update GitHub state, (7) evaluate edges — evaluate outgoing edge conditions. If execution fails and retries are available, the node re-enters execute with error info in context. If retries are exhausted, the node enters `failed` state.
+Each node execution MUST follow this lifecycle: (1) precondition check — verify all declared inputs are available, (2) announce — update pipeline state comment, (3) execute — run the node, (4) validate — check output against validation criteria (schema validation, domain service validation, and alignment verification for LLM nodes), (5) record — write outputs and audit trail, (6) announce — update GitHub state, (7) evaluate edges — evaluate outgoing edge conditions. If execution fails and retries are available, the node re-enters execute with error info in context. If alignment verification fails and rework cycles are available, the node re-enters execute with specific misalignment findings in context. If retries and rework cycles are both exhausted, the node enters `failed` state.
 
 ### REQ-EXEC-004: Pipeline triggering
 
@@ -373,7 +373,7 @@ When a node fails, CogWorks MUST post a structured failure report as a GitHub is
 
 ### REQ-AUDIT-004: Performance metric emission
 
-At the completion of each pipeline run (and at each node boundary for in-progress monitoring), CogWorks MUST emit structured metric data points to a configurable external metric sink. Emitted data points MUST include: per-node wall-clock timings, retry counts with root cause categories (compilation error, test failure, review finding, constraint violation, timeout), LLM token usage per node, domain service invocation timings per method, satisfaction scores (per-scenario and overall), final disposition (merged, rejected, failed, abandoned), and total pipeline cost.
+At the completion of each pipeline run (and at each node boundary for in-progress monitoring), CogWorks MUST emit structured metric data points to a configurable external metric sink. Emitted data points MUST include: per-node wall-clock timings, retry counts with root cause categories (compilation error, test failure, review finding, constraint violation, alignment failure, timeout), rework counts with misalignment type distribution (missing, extra, modified, ambiguous, scope_exceeded), LLM token usage per node (including alignment check calls), domain service invocation timings per method, alignment scores per stage, satisfaction scores (per-scenario and overall), final disposition (merged, rejected, failed, abandoned), and total pipeline cost.
 
 ### REQ-AUDIT-005: Metric data completeness
 
@@ -610,3 +610,224 @@ When a specification is ambiguous for a safety-affecting work item, CogWorks MUS
 ### REQ-CONST-013: Protected path enforcement
 
 CogWorks MUST NOT create or modify files matching protected path patterns (constitutional rules, prompt templates, scenario specifications) through the normal pipeline. Pre-PR validation MUST check generated files against protected path patterns.
+
+---
+
+## REQ-ALIGN: Alignment Verification
+
+### REQ-ALIGN-001: Alignment verification step
+
+Every LLM node in the pipeline MUST have an alignment verification step that runs as part of validation (REQ-EXEC-003, step 4) — after schema validation and domain service validation, but before the output is accepted. The alignment verification step compares the node's output against its upstream inputs and reports any misalignment. Alignment verification checks that the output addresses the intent of the input — not just structural or syntactic correctness. The alignment checker MUST be a different LLM call from the generating node (different prompt, and SHOULD use a different model — see REQ-ALIGN-004).
+
+### REQ-ALIGN-002: Alignment finding structure
+
+Each alignment check MUST produce a structured result containing: an `aligned` boolean, a numerical `score` (0.0–1.0), the configured `threshold`, and a list of `findings`. Each finding MUST include: a `type` (one of `missing`, `extra`, `modified`, `ambiguous`, `scope_exceeded`), a `severity` (`blocking`, `warning`, `informational`), a human-readable `description`, an `input_reference` (source and location in the upstream input), an `output_reference` (source and location in the node output), and an optional `suggestion` for remediation.
+
+Finding type definitions:
+
+- `missing`: Something required by the input is absent from the output
+- `extra`: Something present in the output was not requested by the input
+- `modified`: Something in the output contradicts or changes what the input specified
+- `ambiguous`: The input is unclear and the output made an assumption that should be confirmed
+- `scope_exceeded`: The output addresses concerns beyond the scope of the work item
+
+### REQ-ALIGN-003: Alignment score
+
+Each alignment check MUST produce a numerical alignment score between 0.0 and 1.0. The score is produced by the LLM alignment check as part of its assessment. The alignment check passes if the score meets or exceeds a configurable threshold (default: 0.90) AND there are no `blocking` findings.
+
+### REQ-ALIGN-004: Alignment check types
+
+Alignment checks MUST use an appropriate mix of two categories:
+
+**Deterministic alignment checks** compare structural properties of the output against the input. These are fast, cheap, and not subject to LLM bias. Examples: function name matching between interfaces and generated code, value preservation across stages, coverage checking (every interface covered by a sub-work-item), file-to-module mapping.
+
+**LLM alignment checks** use an LLM call to assess semantic alignment that cannot be reduced to structural comparison. The LLM alignment prompt MUST be focused and adversarial: "Here is what was requested. Here is what was produced. Identify every way the output fails to match the request." LLM alignment checks SHOULD use a different model from the generating node to reduce correlated bias (see CW-R02).
+
+### REQ-ALIGN-005: Retry vs. rework distinction
+
+The pipeline MUST distinguish between retries and rework:
+
+- **Retry**: The output is technically invalid (doesn't compile, doesn't parse, schema validation failure). Same input, try again. Counted against the node's retry budget.
+- **Rework**: The output is technically valid but doesn't match the intent of the input (alignment verification failure). The node is re-entered with the specific misalignment findings as additional context. Counted against the node's rework budget (separate from retry budget).
+
+Retries and rework MUST have separate counters, separate budgets, and separate context strategies. The distinction MUST be maintained in the pipeline state and audit trail.
+
+### REQ-ALIGN-006: Rework budget exhaustion
+
+When a node's rework budget is exhausted (all configured rework cycles have been attempted and alignment still fails), the pipeline MUST:
+
+1. Record the final alignment findings in the audit trail, tagged as rework-exhaustion
+2. Post a detailed alignment failure comment on the work item issue, including: the node name, the number of rework cycles attempted, and the alignment findings from the final attempt
+3. Mark the node as failed with a structured error that distinguishes rework exhaustion from retry exhaustion
+4. Halt the pipeline — the pipeline MUST NOT silently pass or skip the node after rework exhaustion
+
+Rework exhaustion is a distinct failure mode from retry exhaustion. The structured error MUST include the failure category (`rework_exhausted` vs `retry_exhausted`), enabling downstream tooling and human reviewers to distinguish "couldn't produce valid output" from "couldn't produce aligned output".
+
+_Note: Requirement IDs 007–009 are reserved for future per-stage rework specialization requirements._
+
+### REQ-ALIGN-010: Work item to architecture alignment
+
+The alignment check between the work item and the architecture specification MUST verify:
+
+**Deterministic checks:**
+
+- Specific values mentioned in the work item (numbers with units) appear in the specification
+- Components or modules named in the work item are addressed in the specification
+- Explicit exclusions in the work item ("do not change X", "out of scope: Y") are respected — the specification does not modify excluded items
+
+**LLM alignment check** — a single, focused LLM call that assesses:
+
+- Problem-solution alignment: Does the spec solve the problem described in the work item, or a related but different problem?
+- Completeness: Are there aspects of the work item that the spec does not address at all?
+- Scope creep: Does the spec introduce capabilities, components, or complexity not justified by the work item?
+- Assumption surfacing: Has the spec made assumptions about the work item's intent that should be confirmed?
+- Difficulty avoidance: Has the spec simplified or omitted the hardest parts of the requirement?
+
+### REQ-ALIGN-011: Architecture to interface alignment
+
+The alignment check between the architecture specification and the interface definitions MUST verify:
+
+**Deterministic checks:**
+
+- Data types referenced in the spec are defined in the interfaces
+- Cross-domain interfaces identified in the spec are declared in the interface definitions
+
+**LLM alignment check** — assesses:
+
+- Interaction completeness: Do the interfaces cover all interactions described in the architecture spec?
+- Abstraction level: Are the interfaces at the right level of abstraction?
+- Missing error paths: Does the architecture spec describe failure modes that the interfaces lack error types for?
+
+### REQ-ALIGN-012: Spec and interfaces to plan alignment
+
+The alignment check between the architecture spec, interfaces, and the sub-work-item plan MUST verify:
+
+**Deterministic checks:**
+
+- Every module in the architecture spec is covered by at least one sub-work-item
+- Every interface is implemented by at least one sub-work-item (extends existing REQ-PLAN-006)
+- Sub-work-item dependencies are consistent with the architecture (if the architecture says "module A depends on module B", the sub-work-item implementing A depends on the sub-work-item implementing B)
+- No sub-work-item addresses components outside the architecture spec scope
+
+**LLM alignment check** (optional, default: off — planning alignment is mostly structural) — assesses:
+
+- Decomposition appropriateness: Are the sub-work-items decomposed along the boundaries the architecture spec defines?
+- Ordering rationale: Does the dependency order make sense given the architecture's module interactions?
+
+### REQ-ALIGN-013: Plan and interfaces to code alignment
+
+The alignment check between the sub-work-item description, interface definitions, and generated code MUST verify:
+
+**Deterministic checks:**
+
+- Every function/method declared in the relevant interfaces exists in the generated code
+- Function signatures match interface declarations (parameter types, return types, error types)
+- Public API surface matches the interface — no undeclared public items (using domain service's `extract_interfaces` method)
+- Specific constants and values from the spec appear in the code
+- Test cases exist for each acceptance criterion in the sub-work-item description
+
+**LLM alignment check** — assesses:
+
+- Algorithm alignment: Does the code implement the approach described in the spec, not a superficially similar alternative?
+- Behavioural alignment: Will the code behave as the spec describes under the specified conditions?
+- Constraint adherence: Does the code respect constraints mentioned in the spec (memory limits, timing requirements, safety invariants)?
+- Scope discipline: Does the code implement only what the sub-work-item specifies, without adding unrequested features?
+- Error handling alignment: Does the code handle error conditions described in the spec and interfaces using the declared error types?
+
+### REQ-ALIGN-014: Review to spec alignment
+
+The review gate alignment check MUST verify that the review was spec-aware:
+
+**Deterministic checks:**
+
+- The review examined all files produced by code generation
+
+**LLM alignment check** (optional, default: off) — assesses:
+
+- Spec-awareness: Did the review check the code against the spec, or only against general quality standards?
+
+### REQ-ALIGN-015: End-to-end alignment check
+
+After all sub-work-items are complete and before the pipeline reports success, a final end-to-end alignment check MUST verify that the aggregate output addresses the original work item. This check runs as a pipeline-level validation step after the terminal node (Integration) completes — it is not a separate node in the pipeline graph but a pipeline executor responsibility triggered on successful pipeline completion. This check is necessary because small acceptable deviations at each stage can compound into significant drift from the original intent.
+
+**Deterministic checks:**
+
+- Every acceptance criterion from the work item has a traceability chain: it appears in the architecture spec → maps to an interface → maps to a sub-work-item → the sub-work-item's code was merged
+- All sub-work-items completed successfully
+- No scope creep across the pipeline: files modified across all sub-work-item PRs are within the affected modules declared in the architecture spec
+
+**LLM alignment check** — assesses:
+
+- Requirement satisfaction: Would the delivered changes, taken together, satisfy the person who wrote the work item?
+- Missing pieces: Is there anything the work item asked for that was not delivered and was not explicitly deferred?
+- Accumulated drift: Have the small decisions made at each stage moved the final output away from the original intent?
+
+### REQ-ALIGN-020: Alignment check configuration
+
+Each LLM node MUST support an alignment configuration block specifying: which upstream inputs to check against, whether deterministic checks are enabled, whether the LLM alignment check is enabled, the alignment score threshold, and the maximum rework cycles. The alignment configuration is part of the node definition in the pipeline configuration.
+
+### REQ-ALIGN-021: Alignment failure handling
+
+When an alignment check fails (score below threshold or any blocking finding), the orchestrator MUST:
+
+1. Record the alignment findings in the audit trail
+2. Check the rework cycle count against the configured maximum
+3. If rework cycles remain: loop back to the generating node with the specific misalignment findings appended to context; increment the rework counter (separate from the retry counter)
+4. If rework cycles are exhausted: post a detailed alignment failure comment on the work item issue, mark the node as failed, and halt the pipeline or escalate to a human
+
+### REQ-ALIGN-022: Alignment check cost management
+
+LLM alignment checks MUST be counted against the node's cost budget (REQ-CODE-004). The budget check MUST occur before the LLM alignment call is invoked — if the remaining budget is insufficient, the alignment check MUST fail with a structured budget-exceeded error rather than proceeding and exceeding the budget. When estimating node cost budgets, alignment check overhead MUST be accounted for — typically one additional LLM call per node execution. Deterministic alignment checks have negligible cost and are not counted. The pipeline configuration MUST support disabling LLM alignment checks per node while retaining deterministic checks.
+
+### REQ-ALIGN-030: Traceability matrix
+
+The end-to-end alignment check (REQ-ALIGN-015) MUST produce a traceability matrix as an artifact. The traceability matrix maps each requirement from the work item through the pipeline stages to the final deliverable. Each row traces: Requirement → Architecture spec section → Interface definition → Sub-work-item → Code file → Status (satisfied / not addressed / N/A).
+
+The traceability matrix MUST be:
+
+- Generated automatically from the alignment check results at each stage
+- Posted as a comment on the work item issue at pipeline completion
+- Included in the audit trail
+- Available for the Review Gate to reference during gate evaluation (REQ-REVIEW-001)
+
+### REQ-ALIGN-031: Traceability matrix accumulation
+
+The traceability matrix MUST be built incrementally as the pipeline progresses. Each alignment check adds its columns:
+
+- After Architecture alignment check: the "Architecture" column is populated
+- After Interface alignment check: the "Interface" column is populated
+- After Planning alignment check: the "Sub-Work-Item" column is populated
+- After Code Generation alignment check: the "Code" column is populated
+- After end-to-end alignment check: the "Status" column is computed
+
+If a requirement is not addressed at a stage (e.g., a mechanical requirement in a firmware pipeline), the cell is marked "N/A" with a reason.
+
+### REQ-ALIGN-040: Default alignment configuration
+
+If a node has no explicit alignment configuration, the orchestrator MUST apply defaults appropriate to the node type:
+
+| Node | Default behaviour |
+|------|-------------------|
+| Intake / Classification | No alignment check (first node — nothing to align against) |
+| Architecture | Deterministic + LLM alignment against work item. Score threshold: 0.90. Max rework: 3. |
+| Interface Design | Deterministic + LLM alignment against architecture spec. Score threshold: 0.90. Max rework: 3. |
+| Planning | Deterministic alignment against architecture spec + interfaces. LLM check: off. Score threshold: 0.85. Max rework: 2. |
+| Code Generation | Deterministic + LLM alignment against sub-work-item + interfaces. Score threshold: 0.90. Max rework: 3. |
+| Review | Deterministic alignment against code + spec. LLM check: off. Score threshold: 0.80. Max rework: 1. |
+| Integration | No alignment check (deterministic node). |
+| Deterministic nodes | No alignment check. |
+| Spawning nodes | No alignment check. |
+| End-to-end (pipeline-level) | Deterministic + LLM alignment against original work item. Score threshold: 0.90. Not a graph node — runs as pipeline executor post-completion step (REQ-ALIGN-015). |
+
+### REQ-ALIGN-041: Safety classification impact on alignment
+
+For safety-classified work items, alignment checks MUST be stricter:
+
+| Parameter | Standard | Safety-Critical |
+|-----------|----------|------------------|
+| Score threshold | 0.90 | 0.95 |
+| Max rework cycles | 3 | 5 |
+| LLM alignment check | Configurable (default: on) | Always on (cannot be disabled) |
+| End-to-end alignment check | Default on | Always on (cannot be disabled) |
+| Traceability matrix | Generated | Generated and requires human sign-off |
+| Blocking finding tolerance | 0 (any blocking finding fails) | 0 (additionally, more than 3 warnings also fails) |
