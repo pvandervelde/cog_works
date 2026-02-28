@@ -821,3 +821,40 @@ Validates that generated artifacts stay within the approved specification scope.
 - SCOPE_UNDERSPECIFIED: specification incomplete for the work item's needs — halt and request human input
 - SCOPE_AMBIGUOUS: safety-affecting specification is ambiguous — halt and request human clarification
 - PROTECTED_PATH_VIOLATION: generated artifacts touch protected paths — fail pre-PR validation
+
+---
+
+## Alignment Verifier
+
+Verifies that a pipeline node's output matches the semantic intent of its upstream inputs — the semantic correctness layer for the pipeline.
+
+**Responsibilities:**
+
+- Knows: Alignment check configuration per node (threshold, rework budget, LLM check enabled/disabled), deterministic check rules per stage, LLM alignment prompt templates, finding type taxonomy (missing, extra, modified, ambiguous, scope_exceeded), severity levels (blocking, warning, informational)
+- Does: Runs deterministic alignment checks (structural comparisons), invokes LLM for semantic alignment assessment (adversarial prompt, different model from generator), merges findings from both check types, computes alignment score, triggers rework on alignment failure, constructs traceability matrix entries per stage
+
+**Collaborators:**
+
+- LLM Gateway (invokes LLM alignment check with different model from generating node)
+- Pipeline Executor (receives rework signal with misalignment findings as additional context; distinct from retry signal)
+- Audit Recorder (records alignment check results, findings, score, rework cycles)
+- Configuration Manager (reads per-node alignment thresholds, rework budgets, check type enablement)
+- Traceability Matrix Builder (posts entries from each alignment check result)
+
+**Roles:**
+
+- Deterministic checker: Runs structural comparisons between input and output (function signatures present, requirements addressed, scope respected)
+- Semantic checker: Invokes LLM to assess whether output addresses the intent of the input, not merely its structure
+- Finding merger: Combines deterministic and LLM findings into a unified result, deduplicating where both detected the same issue
+- Rework trigger: When alignment fails, signals the executor to re-enter the node with specific misalignment findings (distinct from retry, which re-enters due to technical failures)
+- Traceability builder: Contributes per-stage entries to the requirement-to-implementation traceability matrix
+
+**Key behavior:**
+
+- Runs after schema validation and domain service validation (step 4 of node execution lifecycle)
+- Deterministic checks run first; their results are included in the LLM check context
+- LLM alignment check uses an adversarial prompt: focused on finding misalignment, not assessing quality
+- LLM alignment check SHOULD use a different model from the generating node (reduces correlated bias — CW-R02)
+- Alignment failure triggers rework (re-entry with misalignment findings), not retry (re-entry without additional context)
+- Rework budget is separate from retry budget; exhaustion of rework budget escalates to pipeline failure
+- For safety-classified work items: stricter thresholds (0.95 vs 0.90), LLM alignment check cannot be disabled, traceability matrix requires human sign-off

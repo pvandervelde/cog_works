@@ -85,8 +85,9 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | CW-R02-M3 | Deterministic checks (compilation, linting, property tests, static analysis) are immune to LLM bias. Maximise the coverage of deterministic validation. | Preventive | Designed |
 | CW-R02-M4 | Periodic human audit of CogWorks review outputs — sample review findings and verify they're catching real issues, not rubber-stamping. Track review finding rates over time; a sudden drop indicates potential degradation. | Detective | Planned |
 | CW-R02-M5 | CogWorks MUST NOT modify files matching protected path patterns (see CW-R18). Enforced by the constitutional layer. | Preventive | Planned |
+| CW-R02-M6 | Alignment verification at each pipeline stage detects semantic drift between generator input and output. The LLM alignment check uses a different model from the generator (reducing correlated bias). Alignment failures trigger rework with specific misalignment findings, not retry. | Preventive | Designed |
 
-**Residual Risk:** Low-moderate with mitigations. Different model for review significantly reduces correlated bias. Protected paths prevent self-modification.
+**Residual Risk:** Low-moderate with mitigations. Different model for review significantly reduces correlated bias. Alignment verification adds a per-stage semantic check that catches drift the review pass might miss. Protected paths prevent self-modification.
 
 ---
 
@@ -536,7 +537,7 @@ The following spec documents contain mitigations or design decisions informed by
 | Risk | Primary Spec Reference |
 |------|----------------------|
 | CW-R01 | constraints.md (testing), requirements.md (REQ-REVIEW-006, REQ-CLASS-002, REQ-CONST) |
-| CW-R02 | constraints.md (security), requirements.md (REQ-CONST) |
+| CW-R02 | constraints.md (security), requirements.md (REQ-CONST, REQ-ALIGN-001, REQ-ALIGN-004), assertions.md (ASSERT-ALIGN-012) |
 | CW-R03 | security.md (THREAT-001, THREAT-002, THREAT-014), requirements.md (REQ-REVIEW-002) |
 | CW-R05 | vocabulary.md (Processing Lock), operations.md (runbook) |
 | CW-R06 | edge-cases.md (EDGE-043, EDGE-044), testing.md (conformance tests) |

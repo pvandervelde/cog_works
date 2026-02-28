@@ -24,7 +24,7 @@ Start with **overview.md** for the big picture, then **vocabulary.md** to unders
 
 ## Source Requirements
 
-Functional requirements are defined in [requirements.md](requirements.md), which catalogues ~140 requirements across 22 categories (PIPE, GRAPH, NODE, EDGE, EXEC, CLASS, ARCH, IFACE, PLAN, CODE, SCEN, REVIEW, INT, AUDIT, BOUND, DTU, EXT, XDOM, XVAL, CPACK, CONST, CTX). Each `REQ-*` identifier in `assertions.md` traces to a corresponding entry in `requirements.md`.
+Functional requirements are defined in [requirements.md](requirements.md), which catalogues ~160 requirements across 23 categories (PIPE, GRAPH, NODE, EDGE, EXEC, CLASS, ARCH, IFACE, PLAN, CODE, SCEN, REVIEW, INT, AUDIT, BOUND, DTU, EXT, XDOM, XVAL, CPACK, CONST, CTX, ALIGN). Each `REQ-*` identifier in `assertions.md` traces to a corresponding entry in `requirements.md`.
 
 ## Key Capabilities
 

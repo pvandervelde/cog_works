@@ -835,3 +835,106 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **And**: No external emission is attempted
 - **And**: The pipeline operates identically to when a sink is configured
 - **Traces to**: REQ-AUDIT-006
+
+---
+
+## Alignment Verification Assertions
+
+### ASSERT-ALIGN-001: Deterministic check detects missing output element
+
+- **Given**: An architecture specification requires three components (A, B, C)
+- **When**: The interface design node produces interfaces for only A and B
+- **Then**: The deterministic alignment check produces a finding with type `missing`, severity `blocking`, and a reference to component C
+- **And**: The alignment check fails regardless of the alignment score
+- **Traces to**: REQ-ALIGN-001, REQ-ALIGN-002
+
+### ASSERT-ALIGN-002: LLM check detects semantic drift
+
+- **Given**: A work item requests a retry mechanism with exponential backoff
+- **When**: The code generation node produces code with a fixed-delay retry
+- **Then**: The LLM alignment check produces a finding with type `modified`, describing the substitution of fixed delay for exponential backoff
+- **And**: The finding includes references to both the input requirement and the output code
+- **Traces to**: REQ-ALIGN-001, REQ-ALIGN-004
+
+### ASSERT-ALIGN-003: Alignment failure triggers rework with findings in context
+
+- **Given**: An alignment check fails with two blocking findings
+- **When**: The pipeline executor processes the alignment failure
+- **Then**: The node is re-entered with rework context that includes the two specific misalignment findings
+- **And**: The rework counter is incremented (not the retry counter)
+- **And**: The alignment findings appear in the audit trail
+- **Traces to**: REQ-ALIGN-005, REQ-ALIGN-006
+
+### ASSERT-ALIGN-004: Rework budget exhaustion escalates to pipeline failure
+
+- **Given**: A node has exhausted its rework budget (e.g., 3 rework cycles completed)
+- **When**: The alignment check fails again after the final rework attempt
+- **Then**: The pipeline fails with a structured error including the alignment findings from the final attempt
+- **And**: The error distinguishes rework exhaustion from retry exhaustion
+- **Traces to**: REQ-ALIGN-006
+
+### ASSERT-ALIGN-005: Safety-classified items use stricter alignment thresholds
+
+- **Given**: A work item that is classified as safety-critical
+- **When**: The alignment verifier loads the alignment configuration for a node
+- **Then**: The threshold is at least 0.95 (cannot be configured lower)
+- **And**: The LLM alignment check is enabled (cannot be disabled)
+- **Traces to**: REQ-ALIGN-041
+
+### ASSERT-ALIGN-006: Traceability matrix is built incrementally
+
+- **Given**: A pipeline with nodes A → B → C, each with alignment checks
+- **When**: Node B’s alignment check completes
+- **Then**: The traceability matrix contains entries from both node A and node B
+- **And**: Requirements not addressed at node B are marked N/A with a reason
+- **Traces to**: REQ-ALIGN-030
+
+### ASSERT-ALIGN-007: Traceability matrix published on pipeline completion
+
+- **Given**: A pipeline completes successfully with alignment checks at each stage
+- **When**: The pipeline executor processes pipeline completion
+- **Then**: The traceability matrix is posted as a comment on the work item issue
+- **And**: The matrix is included in the audit trail
+- **And**: For safety-classified work items, the matrix is flagged as requiring human sign-off
+- **Traces to**: REQ-ALIGN-031
+
+### ASSERT-ALIGN-008: End-to-end alignment check catches accumulated drift
+
+- **Given**: A pipeline where each stage passes its per-stage alignment check, but the final output has drifted from the original work item intent through accumulated small changes
+- **When**: The end-to-end alignment check runs after pipeline completion
+- **Then**: The check detects the accumulated drift and produces findings referencing the original work item
+- **And**: The pipeline disposition reflects the end-to-end alignment failure
+- **Traces to**: REQ-ALIGN-015
+
+### ASSERT-ALIGN-009: Retry and rework counters are independent
+
+- **Given**: A node that has retried twice (technical failures) and reworked once (alignment failure)
+- **When**: The pipeline executor evaluates budget limits
+- **Then**: The retry counter shows 2 and the rework counter shows 1
+- **And**: Each counter is compared only against its own budget
+- **And**: Metrics emit retry and rework counts separately with their respective root causes
+- **Traces to**: REQ-ALIGN-005, REQ-ALIGN-006
+
+### ASSERT-ALIGN-010: Deterministic check results included in LLM check context
+
+- **Given**: A node output that has a deterministic alignment check finding (e.g., missing function signature)
+- **When**: The LLM alignment check is invoked
+- **Then**: The deterministic check findings are included in the LLM prompt context
+- **And**: The LLM check focuses on semantic alignment issues not already caught by deterministic checks
+- **Traces to**: REQ-ALIGN-003, REQ-ALIGN-004
+
+### ASSERT-ALIGN-011: Alignment score and blocking findings both required to pass
+
+- **Given**: An alignment check where the LLM produces a score of 0.95 (above threshold) but includes one finding with severity `blocking`
+- **When**: The alignment verifier evaluates the result
+- **Then**: The alignment check fails (blocking finding overrides score)
+- **And**: The finding is included in the rework context
+- **Traces to**: REQ-ALIGN-002, REQ-ALIGN-003
+
+### ASSERT-ALIGN-012: Alignment check uses different LLM model from generator
+
+- **Given**: A node configured with model X for code generation
+- **When**: The alignment verifier invokes the LLM alignment check
+- **Then**: The LLM call uses a model different from model X
+- **Or**: If only one model is available, a warning is logged and the check proceeds with the same model
+- **Traces to**: REQ-ALIGN-004, CW-R02

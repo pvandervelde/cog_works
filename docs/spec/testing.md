@@ -364,7 +364,56 @@ The test suite requires several fixture types:
 - **GitHub API response fixtures**: Recorded or hand-crafted JSON responses for GitHub API calls. Stored in `tests/fixtures/github/`.
 - **LLM response fixtures**: Recorded or hand-crafted LLM responses for each node type's output schema. Stored in `tests/fixtures/llm/`.
 - **Extension API message fixtures**: Hand-crafted JSON request/response pairs for each Extension API method. Stored in `tests/fixtures/extension_api/`.
-- **Configuration fixtures**: Various `.cogworks/config.toml` files exercising different configuration options (including domain service registration). Stored in `tests/fixtures/config/`.\n- **Pipeline configuration fixtures**: Various `.cogworks/pipeline.toml` files exercising: default linear pipeline, custom graph with fan-out/fan-in, graph with rework loops, graph with conditional edges (deterministic and LLM-evaluated), graph with spawning nodes, multiple named pipelines, invalid graphs (unterminated cycles, orphan nodes, duplicate names). Stored in `tests/fixtures/pipelines/`.
+- **Configuration fixtures**: Various `.cogworks/config.toml` files exercising different configuration options (including domain service registration). Stored in `tests/fixtures/config/`.
+- **Pipeline configuration fixtures**: Various `.cogworks/pipeline.toml` files exercising: default linear pipeline, custom graph with fan-out/fan-in, graph with rework loops, graph with conditional edges (deterministic and LLM-evaluated), graph with spawning nodes, multiple named pipelines, invalid graphs (unterminated cycles, orphan nodes, duplicate names). Stored in `tests/fixtures/pipelines/`.
+- **Alignment check fixtures**: Hand-crafted alignment check inputs and expected results for each pipeline stage. Includes: deterministic check inputs (input/output pairs with known misalignments), LLM alignment check response fixtures (JSON responses with scores, findings, traceability entries), merged finding sets, and rework context fixtures. Stored in `tests/fixtures/alignment/`.
+
+---
+
+## Alignment Verification Unit Tests
+
+The alignment verification subsystem requires targeted unit test scenarios:
+
+### Deterministic Check Tests
+
+- **Missing element detection**: Input specification lists functions A, B, C; output implements only A, B. Assert: finding with type `missing`, severity `blocking`, referencing C.
+- **Extra element detection**: Input specification lists functions A, B; output implements A, B, C. Assert: finding with type `extra`, severity `warning`.
+- **Scope exceeded detection**: Input specification scopes to module X; output modifies module Y. Assert: finding with type `scope_exceeded`, severity `blocking`.
+- **Clean pass**: Input and output structurally match. Assert: no findings, deterministic check passes.
+
+### LLM Alignment Check Tests
+
+- **Semantic drift detection**: Fixture with input requiring "exponential backoff" and output implementing "fixed delay". Assert: LLM response parsed correctly, finding with type `modified` produced.
+- **Ambiguity detection**: Fixture with ambiguous input and output making an assumption. Assert: finding with type `ambiguous`, severity `warning`.
+- **Score parsing**: Various LLM response fixtures with scores. Assert: scores parsed correctly, threshold comparison correct.
+- **Model separation verification**: Assert alignment check invokes LLM Gateway with a different model identifier than the generating node.
+
+### Finding Merger Tests
+
+- **Deduplication**: Deterministic and LLM checks both find the same missing function. Assert: merged result contains one finding, not two.
+- **Severity aggregation**: Multiple findings with mixed severities. Assert: any `blocking` finding causes overall failure.
+- **Empty merge**: Both check types return zero findings. Assert: alignment passes with score from LLM check.
+
+### Rework Triggering Tests
+
+- **Alignment failure triggers rework**: Alignment check fails. Assert: rework signal sent to executor with findings in context.
+- **Rework budget exhaustion**: Rework counter reaches budget limit. Assert: pipeline failure with structured error.
+- **Rework counter independence**: Assert rework counter and retry counter are tracked separately.
+
+### Traceability Matrix Tests
+
+- **Incremental construction**: Two sequential alignment checks. Assert: matrix contains entries from both.
+- **N/A handling**: Requirement not addressed at a stage. Assert: matrix shows N/A with reason.
+- **Safety sign-off flag**: Safety-classified work item. Assert: matrix flagged for human sign-off.
+
+### Mock Alignment Verifier
+
+For integration tests that do not need to exercise alignment logic:
+
+- Returns configurable alignment results (pass/fail, findings, score)
+- Records all invocations for assertion (inputs received, order of calls)
+- Supports per-node configuration (different results per stage)
+- Default behavior: always passes with score 1.0 and no findings
 
 ---
 
