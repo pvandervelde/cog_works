@@ -221,7 +221,7 @@ This also clarifies the boundary of the "GitHub as sole durable state" principle
 
 ---
 
-## 12. Polling vs. Streaming for Long-Running Domain Service Operations
+## 13. Polling vs. Streaming for Long-Running Domain Service Operations
 
 **Decision**: Polling initially, designed for future streaming.
 
@@ -237,7 +237,7 @@ This also clarifies the boundary of the "GitHub as sole durable state" principle
 
 ---
 
-## 13. CogWorks-Mediated vs. Direct Cross-Domain Communication
+## 14. CogWorks-Mediated vs. Direct Cross-Domain Communication
 
 **Decision**: CogWorks mediates all cross-domain interactions. Domain services never communicate directly.
 
@@ -253,7 +253,7 @@ This also clarifies the boundary of the "GitHub as sole durable state" principle
 
 ---
 
-## 14. Deterministic vs. LLM-Based Injection Detection
+## 15. Deterministic vs. LLM-Based Injection Detection
 
 **Decision**: Heuristic-only injection detection (LLM-based secondary pass deferred to future enhancement).
 
@@ -274,7 +274,7 @@ This also clarifies the boundary of the "GitHub as sole durable state" principle
 
 ---
 
-## 15. Context Pack Loading: Architecture Node vs. Every Node
+## 16. Context Pack Loading: Architecture Node vs. Every Node
 
 **Decision**: Context Packs are loaded once at the Architecture node and their content persists for the entire pipeline run.
 
@@ -292,7 +292,7 @@ This also clarifies the boundary of the "GitHub as sole durable state" principle
 
 ---
 
-## 16. Constitutional Rules: System Prompt vs. Context Injection
+## 17. Constitutional Rules: System Prompt vs. Context Injection
 
 **Decision**: Constitutional rules are injected as a privileged system prompt component, not as a regular context item.
 
@@ -310,7 +310,7 @@ This also clarifies the boundary of the "GitHub as sole durable state" principle
 
 ---
 
-## 17. Fixed Linear Pipeline vs. Configurable Graph Pipeline
+## 18. Fixed Linear Pipeline vs. Configurable Graph Pipeline
 
 **Decision**: Configurable directed graph loaded from `.cogworks/pipeline.toml`, with a built-in default that preserves the original seven-node linear pipeline when no configuration file is present.
 
@@ -328,7 +328,7 @@ This also clarifies the boundary of the "GitHub as sole durable state" principle
 
 ---
 
-## 18. Pipeline State Persistence: GitHub Issue Comments vs. Local File
+## 19. Pipeline State Persistence: GitHub Issue Comments vs. Local File
 
 **Decision**: Pipeline execution state is persisted as a structured JSON comment on the GitHub issue, not as a local file in the working directory.
 

@@ -780,6 +780,19 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ---
 
+## Context Assembly
+
+### ASSERT-CTX-001: Reference exemplar files loaded from external repository
+
+- **Given**: The architecture specification declares reference exemplar files from an external repository
+- **When**: Context assembly prepares the context package for code generation
+- **Then**: The specified exemplar files are fetched from the external repository
+- **And**: Exemplar files are included in the context package at the appropriate pyramid summary level (Level 2 for distant references, Level 3 for closely related references)
+- **And**: Exemplar files are read-only context — CogWorks does not modify files in referenced repositories
+- **Traces to**: REQ-CTX-001
+
+---
+
 ## Performance Metrics
 
 ### ASSERT-METRIC-001: Metric data points emitted on pipeline completion
@@ -822,12 +835,3 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **And**: No external emission is attempted
 - **And**: The pipeline operates identically to when a sink is configured
 - **Traces to**: REQ-AUDIT-006
-
-### ASSERT-CTX-001: Reference exemplar files loaded from external repository
-
-- **Given**: The architecture specification declares reference exemplar files from an external repository
-- **When**: Context assembly prepares the context package for code generation
-- **Then**: The specified exemplar files are fetched from the external repository
-- **And**: Exemplar files are included in the context package at the appropriate pyramid summary level (Level 2 for distant references, Level 3 for closely related references)
-- **And**: Exemplar files are read-only context — CogWorks does not modify files in referenced repositories
-- **Traces to**: REQ-CTX-001

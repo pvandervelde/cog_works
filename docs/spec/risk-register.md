@@ -490,7 +490,7 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 
 **Description:** If audit trail data quality degrades (e.g., missing node timings, incomplete retry records), the emitted metric data points become unreliable. External dashboards and alerting based on these metrics may produce misleading conclusions, leading to incorrect process improvement decisions.
 
-**Likelihood:** 2 (Unlikely — audit trail completeness is enforced by ASSERT-INT-002 and constraints)
+**Likelihood:** 2 (Unlikely — audit trail completeness is enforced by ASSERT-METRIC-001, ASSERT-METRIC-002 and constraints)
 
 **Impact:** 3 (Moderate — incorrect improvement decisions waste effort but don't affect pipeline correctness)
 
@@ -501,7 +501,7 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | ID | Mitigation | Type | Status |
 |----|-----------|------|--------|
 | CW-R20-M1 | Metric data point computation validates required fields before emission. Incomplete data points are logged with specific missing fields identified. | Detective | Designed |
-| CW-R20-M2 | Audit trail completeness enforced by existing assertions (ASSERT-INT-002) and constraints (Observability section). | Preventive | Designed |
+| CW-R20-M2 | Audit trail completeness enforced by existing assertions (ASSERT-METRIC-001, ASSERT-METRIC-002) and constraints (Observability section). | Preventive | Designed |
 | CW-R20-M3 | External dashboards should include data quality indicators (e.g., “X% of runs have complete metric data”) to surface degradation early. | Detective | Recommendation |
 
 **Residual Risk:** Low. Audit trail completeness is a core invariant with strong enforcement.

@@ -446,11 +446,11 @@ Emits structured metric data points to an external metrics backend.
 
 - **Operations**:
   - `emit(data_points) → Result` — Emit a batch of metric data points to the configured backend
-  - `flush() → Result` — Flush any buffered data points (called at pipeline completion)
+  - `flush() → Result` — Flush any buffered data points (called at pipeline completion). `flush()` MUST be time-bounded: implementations apply a short, configurable timeout (default: 2 seconds). If the flush does not complete within the timeout, it is abandoned, the failure is logged, and control returns to the caller. `flush()` MUST NOT block pipeline shutdown indefinitely.
 - **Data flowing across boundary**:
   - Outbound: structured metric data points with dimensions (pipeline run ID, work item ID, classification, safety classification, repository, node, timestamp) and measurements (timings, counts, costs, scores)
-- **Error cases**: Backend unavailable (non-fatal — logged, pipeline continues), authentication failure (non-fatal), serialization error (non-fatal)
-- **Constraint**: Metric emission failures MUST NOT block or slow pipeline execution. Emission is fire-and-forget with best-effort delivery.
+- **Error cases**: Backend unavailable (non-fatal — logged, pipeline continues), authentication failure (non-fatal), serialization error (non-fatal), flush timeout exceeded (non-fatal — logged, pipeline shutdown continues)
+- **Constraint**: Metric emission failures MUST NOT block or slow pipeline execution. Emission is fire-and-forget with best-effort delivery. `flush()` is best-effort with a bounded timeout — a metrics backend outage at pipeline completion MUST NOT delay process exit.
 
 ---
 
@@ -506,7 +506,14 @@ Each abstraction has one or more concrete implementations. These are the only mo
 - Uses: OpenTelemetry Collector OTLP endpoint (HTTP or gRPC)
 - Handles: Metric data point serialization to OTLP format, export to configured collector
 - Non-blocking: Emission failures are logged, not fatal to the pipeline
-- Future: Additional sinks (InfluxDB, StatsD, etc.) implement the same trait
+
+### InfluxDB Metric Sink
+
+- Implements: Metric Sink
+- Uses: InfluxDB line protocol (HTTP write API)
+- Handles: Metric data point serialization to InfluxDB line protocol format, HTTP write to configured InfluxDB endpoint, tag mapping from CogWorks dimensions to InfluxDB tags
+- Non-blocking: Emission failures are logged, not fatal to the pipeline
+- `flush()`: Issues a synchronous HTTP write bounded by the configurable flush timeout (default: 2 seconds); failure is logged and does not block pipeline shutdown
 
 ---
 
