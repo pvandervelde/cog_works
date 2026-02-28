@@ -240,11 +240,15 @@ The Work Planner MUST enforce a configurable maximum number of sub-work-items pe
 
 ### REQ-PLAN-005: Sub-work-item issues
 
-Each sub-work-item MUST be created as a GitHub Issue linked to the parent work item, with all required labels applied.
+Each sub-work-item MUST be created as a native GitHub sub-issue of the parent work item (using the sub-issue API), with all required labels applied. Dependencies between sub-work-items MUST be expressed via native GitHub typed issue links (`blocks` / `is blocked by`).
 
 ### REQ-PLAN-006: Interface coverage
 
 The Work Planner MUST verify that every interface from the Interface Design node is covered by at least one sub-work-item.
+
+### REQ-PLAN-007: Milestone inheritance
+
+When the parent work item has a GitHub Milestone set, all sub-work-items created by the Planning node MUST inherit the same milestone.
 
 ---
 
@@ -269,6 +273,10 @@ The pipeline MUST track accumulated LLM token cost and halt when the pipeline bu
 ### REQ-CODE-005: Context truncation
 
 Context assembly MUST apply deterministic priority-based truncation when the assembled package would exceed the model's context window. The current sub-work-item's interface definition MUST never be removed regardless of truncation pressure.
+
+### REQ-CODE-006: Semantic stalling detection
+
+The retry logic MUST track diagnostic categories across consecutive retry attempts for each sub-work-item. If the same diagnostic category recurs for a configurable number of consecutive retries (default: 3), the system MUST escalate with a structured stalling report rather than consuming the remaining retry budget. The stalling report MUST include the recurring error category and a summary of all attempts. This is distinct from flaky test detection (EDGE-015), which covers identical code producing different results.
 
 ---
 
@@ -398,6 +406,58 @@ CogWorks MUST NOT merge, approve, close, or request changes on any Pull Request.
 ### REQ-BOUND-003: No metrics storage
 
 CogWorks MUST NOT implement its own metrics database, time-series store, or dashboarding. Metrics storage, aggregation, trend analysis, and dashboarding are delegated to external purpose-built tools. CogWorks' responsibility ends at emitting structured metric data points through the metric sink abstraction.
+
+---
+
+## REQ-LLM: LLM Gateway
+
+### REQ-LLM-001: LLM API rate limit respect
+
+The LLM Gateway MUST track rate-limit state per LLM provider using response headers (e.g., `retry-after`, `x-ratelimit-remaining`). When the remaining request budget is low, the gateway MUST proactively throttle subsequent calls to avoid exhausting the budget. When an HTTP 429 response is received, the gateway MUST wait for the duration specified in the provider's response headers before retrying.
+
+### REQ-LLM-002: Rate limit coordination across parallel nodes
+
+When multiple nodes execute concurrently, the LLM Gateway MUST coordinate rate-limit state across all parallel LLM calls within the same pipeline invocation. Concurrent calls MUST NOT collectively exceed the provider's rate limit.
+
+### REQ-LLM-003: Rate limit halt threshold
+
+If the required wait time to respect a rate limit exceeds a configurable maximum (default: 30 minutes), the current step MUST halt with a retriable exit code rather than blocking indefinitely. A structured report MUST be posted identifying the rate limit and the required wait time.
+
+### REQ-LLM-004: Rate limit visibility
+
+The LLM Gateway MUST emit structured log entries when rate limiting is active, including: provider name, remaining request budget, reset time, and whether calls are being queued or throttled.
+
+---
+
+## REQ-LABEL: Label Configuration
+
+### REQ-LABEL-001: Configurable workflow labels
+
+Workflow-semantic labels (trigger, awaiting-review, safety-critical, hold, cancel, sub-work-item) MUST have configurable names via the `[labels]` section of `.cogworks/config.toml`. Each label MUST have a sensible default using the `cogworks:` prefix.
+
+### REQ-LABEL-002: Pipeline-internal labels are not configurable
+
+Pipeline-internal labels (`cogworks:processing`, `cogworks:node:<name>`, `cogworks:node:failed`, `cogworks:status:<status>`, `cogworks:restart`) MUST always use the `cogworks:` prefix and MUST NOT be configurable. These labels are machine state and are not intended for human consumption.
+
+### REQ-LABEL-003: Label configuration validation
+
+Label configuration MUST be validated at load time. If two workflow labels are configured to the same string, the system MUST produce a clear error and halt.
+
+---
+
+## REQ-PROJECT: GitHub Projects Integration
+
+### REQ-PROJECT-001: Optional project board sync
+
+CogWorks MUST support optionally syncing pipeline state to a GitHub Projects V2 board. When a `[github_project]` section is present in `.cogworks/config.toml`, CogWorks MUST add the work item to the configured project when a pipeline starts, update project fields (current node, safety classification, disposition) at each node boundary, and mark the item complete or failed on pipeline finish.
+
+### REQ-PROJECT-002: Project sync is non-blocking
+
+GitHub Project board updates MUST be fire-and-forget. Failures to update the project board MUST be logged as warnings but MUST NOT block, slow, or fail the pipeline. CogWorks MUST operate identically with or without a GitHub Project configuration.
+
+### REQ-PROJECT-003: Project field mapping
+
+The `[github_project]` configuration MUST support mapping between pipeline state properties (current node, safety classification, disposition, cost) and GitHub Project custom field names. Field mappings are repository-specific.
 
 ---
 

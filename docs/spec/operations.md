@@ -72,6 +72,7 @@ On startup, CogWorks performs a handshake with each registered service to discov
 ```
 cogworks process <issue-url>     # Process a single work item (one step)
 cogworks process-all <repo>      # Scan repo for trigger labels, process each
+cogworks process-all <repo> --milestone "v2.0"  # Process only work items in a specific milestone
 cogworks status <issue-url>      # Display current pipeline state (read-only)
 cogworks cost-report <issue-url> # Display cost report for a pipeline
 cogworks health                  # Check health of all registered domain services
@@ -148,6 +149,10 @@ When running as a service, expose these metrics:
 | `cogworks_edge_evaluations_total` | Counter | Edge condition evaluations (by type: deterministic, llm, composite; by result: taken, not_taken) |
 | `cogworks_rework_traversals_total` | Counter | Rework edge traversals (by cycle identifier) |
 | `cogworks_pipeline_state_writes_total` | Counter | Pipeline state writes to GitHub (node boundary persistence events) |
+| `cogworks_llm_rate_limit_remaining` | Gauge | Remaining LLM API request budget (by provider) |
+| `cogworks_llm_rate_limit_throttle_seconds` | Histogram | Time spent waiting due to LLM API rate limit throttling |
+| `cogworks_semantic_stalling_total` | Counter | Semantic stalling escalations (same error category across consecutive retries, by node) |
+| `cogworks_project_sync_failures_total` | Counter | GitHub Project board update failures (should not affect pipeline; alert if high) |
 
 For CLI mode, these are logged as structured events. For service mode, they are exposed as Prometheus metrics.
 
@@ -186,6 +191,28 @@ rules_file = ".cogworks/constitutional-rules.md"
 # Protected path patterns: CogWorks NEVER generates files matching these patterns
 # These defaults cannot be removed, only extended
 protected_paths_extra = []  # Additional patterns beyond the built-in defaults
+
+[labels]
+# Configurable workflow label names (defaults shown)
+# Pipeline-internal labels (cogworks:processing, cogworks:node:*, etc.) are NOT configurable
+# trigger = "cogworks:run"
+# awaiting_review = "cogworks:awaiting-review"
+# safety_critical = "cogworks:safety-critical"
+# hold = "cogworks:hold"
+# cancel = "cogworks:cancel"
+# sub_work_item = "cogworks:sub-work-item"
+
+[llm_rate_limit]
+# Maximum time (in minutes) to wait when rate limited before halting the step (default: 30)
+# halt_threshold_minutes = 30
+
+# Optional: GitHub Projects V2 integration for human oversight dashboards
+# [github_project]
+# project_id = 12345
+# [github_project.field_mappings]
+# status = "Pipeline Stage"
+# safety_classification = "Safety"
+# disposition = "Outcome"
 ```
 
 ### Cost Tracking
@@ -472,6 +499,44 @@ The metric sink is configured in `.cogworks/config.toml`:
 1. Wait for rate limit reset.
 2. If recurring, use a dedicated GitHub App installation token for CogWorks.
 3. Review pipeline for unnecessary API calls.
+
+---
+
+### LLM API Rate Limit Exhaustion
+
+**Symptom**: CogWorks logs show LLM rate limit throttling warnings, or the CLI exits with a rate-limit halt code. The `cogworks_llm_rate_limit_throttle_seconds` metric shows high values.
+
+**Diagnosis**:
+
+1. Check structured logs for `retry-after` values and provider name.
+2. Determine if multiple CogWorks instances or other tools are sharing the same API key.
+3. Check whether parallel nodes are compounding the request rate.
+
+**Resolution**:
+
+1. Wait for the provider's rate limit window to reset.
+2. If recurring, reduce `max_concurrent_llm_calls` in `.cogworks/pipeline.toml` to lower the request rate.
+3. If the provider supports higher rate limits on a paid tier, consider upgrading.
+4. If multiple CogWorks instances share the same API key, consider using separate keys or staggering pipeline runs.
+5. Review the `llm_rate_limit.halt_threshold_minutes` setting — increase if the wait is acceptable, or decrease if faster failure is preferred.
+
+---
+
+### Semantic Stalling
+
+**Symptom**: A sub-work-item escalates with a "semantic stalling" report, indicating the LLM produced different code on each retry but consistently hit the same error category.
+
+**Diagnosis**:
+
+1. Read the stalling report — it identifies the recurring error category and lists all attempts.
+2. Check whether the error category points to a specification issue (e.g., the spec asks for something the target language/framework cannot express).
+3. Review the interface definitions and specification for ambiguity.
+
+**Resolution**:
+
+1. Clarify the specification or interface definitions to address the root cause of the recurring error.
+2. If the error is a domain constraint that the LLM consistently misunderstands, add explicit guidance in the prompt templates or Context Pack.
+3. Re-trigger the pipeline after making specification changes.
 
 ---
 

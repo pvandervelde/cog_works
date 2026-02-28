@@ -89,6 +89,7 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **Constitutional rules are mandatory**: Constitutional rules MUST be loaded before any LLM call on every pipeline run. No configuration option may disable this. Failure to load constitutional rules halts the pipeline. This is not a security option — it is a hard constraint.
 - **Protected paths**: CogWorks MUST NOT create or modify files matching protected path patterns through the normal pipeline. Protected paths include at minimum: the constitutional rules file, prompt template files, scenario specification files, and Extension API schemas. The protected path list is version-controlled and configurable.
 - **Rate limit respect**: The system must respect GitHub API rate limits (5000/hr for authenticated requests). Track remaining budget from response headers, back off proactively.
+- **LLM API rate limit respect**: The LLM Gateway must respect provider-imposed rate limits (requests per time window). Rate-limit state must be tracked from provider response headers, shared across parallel nodes, and enforced proactively (throttle before hitting the limit, not just react to 429s). If the required wait time exceeds the configured halt threshold (default: 30 minutes), the step must halt with a retriable exit code rather than blocking indefinitely.
 - **Extension API authentication**: For Unix domain sockets, file system permissions provide access control. For HTTP/gRPC transport, authentication mechanism is to be determined but the design must not preclude adding authentication later (e.g., bearer tokens, mutual TLS).
 
 ---
@@ -103,6 +104,10 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **Sensible defaults**: Every configurable value must have a sensible default. A minimal configuration file should be sufficient to run the pipeline.
 - **Validation at load time**: Configuration must be fully validated when loaded. Invalid configuration produces a clear error message and halts the pipeline before any work begins.
 - **No environment-variable-driven behavior in business logic**: Environment variables are read in the infrastructure/configuration layer only. Business logic receives typed configuration values, never raw strings from the environment.
+- **Label configuration**: Workflow-semantic labels (trigger, awaiting-review, safety-critical, hold, cancel, sub-work-item) must be configurable via a `[labels]` section in `.cogworks/config.toml`. Pipeline-internal labels (`cogworks:processing`, `cogworks:node:<name>`, `cogworks:node:failed`, `cogworks:status:<status>`, `cogworks:restart`) are never configurable. Duplicate label name mappings must be rejected at load time.
+- **GitHub Project integration is optional and non-blocking**: When a `[github_project]` section is present, pipeline state is synced to a GitHub Projects V2 board at node boundaries. Project board update failures are logged as warnings and must never block, slow, or fail the pipeline. CogWorks must operate identically with or without project configuration.
+- **Native sub-issues for work item hierarchy**: Sub-work-items must be created as native GitHub sub-issues (using the sub-issue API), not as standalone issues linked only by labels. Dependencies between sub-work-items must use native GitHub typed issue links (`blocks` / `is blocked by`).
+- **Milestone inheritance**: Sub-work-items must inherit the parent work item's GitHub Milestone when one is set. CogWorks must not create, modify, or delete milestones.
 
 ---
 

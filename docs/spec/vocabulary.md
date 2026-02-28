@@ -120,6 +120,7 @@ A GitHub Issue that represents a unit of work to be implemented by CogWorks.
 - Contains: Title, description, optional structured fields (affected components, priority, type)
 - Trigger: Pipeline starts when `cogworks:run` label is applied
 - State labels: `cogworks:node:<node-name>`, `cogworks:safety-critical`, `cogworks:processing`, `cogworks:awaiting-review`
+- Milestone: If the work item has a GitHub Milestone set, it is preserved and inherited by sub-work-items (see Milestone)
 
 ### Sub-Work-Item
 
@@ -127,11 +128,14 @@ A GitHub Issue created by CogWorks during the Planning node, representing one im
 
 - Identified by: GitHub Issue number
 - Created by: The Planning node
+- Created as: A native GitHub sub-issue of the parent work item (using the sub-issue API)
 - Contains: Title, description, file list, interface references, test specification, dependency references
-- State labels: `cogworks:sub-work-item`, `cogworks:status:<status>`, `cogworks:depends-on:<issue>`, `cogworks:order:<n>`
+- State labels: `cogworks:sub-work-item`, `cogworks:status:<status>`
+- Dependencies: Expressed via native GitHub typed issue links (`blocks` / `is blocked by`), not via labels
+- Milestone: Inherits the parent work item's GitHub Milestone, if one is set
 - Constraint: Maximum configurable count per work item (default: 10)
 - Constraint: Must represent logical changes, not individual files
-- Ordering: Topologically sorted by declared dependencies
+- Ordering: Topologically sorted by declared dependencies (read from GitHub typed issue links)
 
 ### Classification
 
@@ -766,6 +770,87 @@ A file path pattern identifying files that CogWorks must never create or modify 
 - Examples: Constitutional rules file, prompt templates, scenario specifications, conformance test suite, output schemas, Extension API schemas
 - Enforcement: Pre-PR validation checks generated files against protected path patterns; tool-level scope enforcement prevents writes to protected paths (REQ-TOOL-011)
 - Change control: Protected paths require human-approved PR via CODEOWNERS or equivalent
+
+---
+
+## Label Categories
+
+CogWorks uses GitHub labels for two distinct purposes. Labels are split into categories to support mixed human/AI development workflows.
+
+### Pipeline-Internal Labels
+
+Labels that represent CogWorks-internal machine state. These are managed exclusively by CogWorks and should not be manually modified by humans (except during troubleshooting).
+
+- `cogworks:processing` — Concurrency lock indicating an active CLI invocation
+- `cogworks:node:<name>` — Tracks the currently active pipeline node(s)
+- `cogworks:node:failed` — Indicates a node has failed
+- `cogworks:status:<status>` — Tracks sub-work-item processing status
+- `cogworks:restart` — Signals that the pipeline should restart from the beginning
+
+These labels always use the `cogworks:` prefix and are not configurable.
+
+### Workflow-Semantic Labels
+
+Labels that represent workflow state meaningful to both human and AI developers. These use configurable names so teams can reuse their existing label conventions.
+
+- Trigger label (default: `cogworks:run`) — Initiates the pipeline
+- Awaiting review label (default: `cogworks:awaiting-review`) — A gate is waiting for human approval
+- Safety-critical label (default: `cogworks:safety-critical`) — Work item touches safety-critical code
+- Hold label (default: `cogworks:hold`) — Work item suspended pending human review (injection detection)
+- Cancel label (default: `cogworks:cancel`) — Signals pipeline cancellation
+- Sub-work-item label (default: `cogworks:sub-work-item`) — Identifies sub-work-item issues
+
+Label names are configurable via `[labels]` section in `.cogworks/config.toml`. This allows teams that use CogWorks alongside human developers to map CogWorks' workflow labels to their existing label taxonomy (e.g., `awaiting-review` instead of `cogworks:awaiting-review`).
+
+---
+
+## Milestone
+
+A GitHub Milestone associated with a work item, representing a development phase, release target, or software version.
+
+- Optional: Work items are not required to have a milestone
+- Inherited: When CogWorks creates sub-work-items, each sub-work-item inherits the parent work item's milestone (if set)
+- Filtering: The `cogworks process-all` command supports filtering by milestone (e.g., `cogworks process-all <repo> --milestone "v2.0"`) to process only work items in a specific release phase
+- Not modified: CogWorks MUST NOT create, modify, or delete milestones. Milestone management is a human responsibility
+- Visibility: Milestones provide natural grouping for human oversight, showing which work items belong to which release or development phase
+
+---
+
+## LLM Rate Limiting
+
+The mechanism by which the LLM Gateway respects provider-imposed API request quotas.
+
+- Scope: Per-provider, per-API-key rate limits (e.g., 100 calls per 5 hours, or requests-per-minute)
+- Tracking: The LLM Gateway tracks rate-limit state from provider response headers (`retry-after`, `x-ratelimit-remaining`, etc.)
+- Proactive throttling: When the remaining request budget is low, the gateway queues pending calls and spaces them to avoid exhausting the budget
+- Reactive backoff: When an HTTP 429 is received, the gateway waits for the duration specified in the `retry-after` header before retrying
+- Coordination: Rate-limit state is shared across parallel nodes executing within the same pipeline invocation to prevent concurrent calls from collectively exceeding the limit
+- Halt threshold: If the required wait time exceeds a configurable maximum (default: 30 minutes), the current step halts with a retriable exit code rather than blocking indefinitely
+- Distinguished from cost budget: Rate limiting controls request frequency; cost budget controls total token spend. Both are enforced independently
+
+---
+
+## Semantic Stalling
+
+A condition where LLM retries produce novel but equally incorrect output, consuming retry budget without making progress.
+
+- Detection: The LLM Gateway or retry logic tracks diagnostic categories (e.g., `type_error`, `constraint_violation`) across consecutive retry attempts. If the same diagnostic category recurs for a configurable number of consecutive retries (default: 3), the system flags semantic stalling
+- Distinguished from: Flaky tests (identical code, different results — EDGE-015) and normal retries (different errors on each attempt suggesting progress)
+- Response: Escalation with a structured report identifying the recurring error category and all attempts, rather than consuming the remaining retry budget
+- Rationale: An LLM that produces different code but hits the same category of error is unlikely to resolve the issue with more retries — the problem is likely a misunderstanding of requirements, not a transient failure
+
+---
+
+## GitHub Projects Integration
+
+Optional integration with GitHub Projects V2 for human oversight dashboards.
+
+- Purpose: Provides a visual overview of all active work items, their pipeline stage, safety classification, and blocked status via a GitHub Project board
+- Configuration: Optional `[github_project]` section in `.cogworks/config.toml` specifying project ID and field mappings
+- Behaviour: When configured, CogWorks updates the project board at pipeline boundaries (work item added on pipeline start, status field updated at node transitions, removed or marked complete on pipeline finish)
+- Non-blocking: Project board updates are fire-and-forget. Failures to update the project board are logged as warnings but MUST NOT block, slow, or fail the pipeline
+- Not required: CogWorks operates identically with or without a GitHub Project configuration. The project board is a visibility tool, not a state store
+- Fields: Configurable mapping between pipeline state (current node, safety classification, disposition) and project board custom fields
 - Related risk: CW-R18 (CogWorks modifies its own prompts or scenarios)
 
 ---

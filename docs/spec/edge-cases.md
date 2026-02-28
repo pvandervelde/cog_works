@@ -124,6 +124,12 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Expected behavior**: The system detects repeated test failures with the same code (no changes between retries) and escalates rather than consuming the retry budget on flaky tests.
 **Key requirement**: Track whether code changed between retries. If the same code fails the same test on consecutive runs, flag as potentially flaky and escalate.
 
+### EDGE-015a: Semantic Stalling in Code Generation
+
+**Scenario**: The LLM produces different code on each retry attempt, but domain service diagnostics consistently report the same category of error (e.g., every attempt fails with `type_error` or every attempt fails with `constraint_violation`). The output is novel each time, so flaky-test detection (EDGE-015) does not trigger, but no actual progress is being made.
+**Expected behavior**: The retry logic tracks diagnostic categories across consecutive attempts. After a configurable number of consecutive retries with the same error category (default: 3), the system flags semantic stalling and escalates with a structured report listing the recurring error category and all attempts — rather than consuming the remaining retry budget. The stalling report includes a recommendation that the specification, interfaces, or prompt may need human revision.
+**Key requirement**: Distinguish "novel output, same error" (stalling — escalate early) from "novel output, different errors" (progress — keep retrying) and "identical output, same error" (flaky test — escalate immediately).
+
 ### EDGE-016: Generated Artifacts Introduce an Undeclared Dependency
 
 **Scenario**: The LLM generates artifacts that use a dependency not declared in the project's dependency manifest.
@@ -157,6 +163,18 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Scenario**: The Anthropic API returns a server error or times out.
 **Expected behavior**: Retry with exponential backoff (up to a configurable maximum). If retries are exhausted, fail the current step and exit with a retriable exit code.
 **Key requirement**: Transient API errors are retried; persistent errors cause the step to fail gracefully.
+
+### EDGE-020a: LLM API Rate Limit Hit
+
+**Scenario**: The LLM provider returns an HTTP 429 (rate limit exceeded), e.g., because the provider allows only 100 calls per 5-hour window and CogWorks (possibly across parallel nodes) has exhausted the quota.
+**Expected behavior**: The LLM Gateway reads the `retry-after` header from the response. If the wait time is within the configured halt threshold (default: 30 minutes), pending LLM calls are queued and the gateway waits until the rate limit resets before retrying. If the wait time exceeds the halt threshold, the current step halts with a retriable exit code and posts a report identifying the rate limit and required wait time. Rate-limit state is shared across parallel nodes to prevent concurrent calls from collectively exceeding the limit again immediately after reset.
+**Key requirement**: LLM rate limit handling with proactive throttling. Distinguished from cost budget (which limits total spend, not request frequency).
+
+### EDGE-020b: LLM Rate Limit Budget Runs Low Before Exhaustion
+
+**Scenario**: The LLM Gateway's tracking of provider response headers indicates the remaining request budget is nearly exhausted (e.g., 5 calls remaining out of a 100-call window), but a 429 has not been received yet.
+**Expected behavior**: The gateway proactively throttles subsequent calls by spacing them to avoid exhausting the remaining budget. Parallel nodes competing for LLM calls are serialised if necessary. Structured log entries indicate that proactive throttling is active.
+**Key requirement**: Proactive throttling prevents the 429 from occurring in the first place, avoiding unnecessary wait times.
 
 ### EDGE-021: Repository Clone Fails (Network, Auth, Disk Space)
 
@@ -564,3 +582,31 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Scenario**: Due to a bug or race condition, a tool that should NOT be in the node's profile appears in the LLM's tool list (Layer 1 filtering failure). The LLM invokes this tool with parameters that violate the node's scope constraints.
 **Expected behavior**: Layer 2 (tool-level scope enforcement) independently validates the invocation. Because the tool's scope parameters for this node are either absent or restrictive, the invocation is rejected with a `SCOPE_VIOLATION` event. The audit trail records both the anomalous tool presence and the scope violation. The defence-in-depth property holds: failure at Layer 1 does not compromise Layer 2.
 **Key requirement**: The three enforcement layers operate independently. Layer 2 does not assume Layer 1 has already validated tool availability. This is the core security property of the defence-in-depth design (constraints.md: "Failure at one layer MUST NOT compromise the others").
+
+---
+
+## GitHub Integration Edge Cases
+
+### EDGE-082: GitHub Project Board Update Fails
+
+**Scenario**: CogWorks is configured to sync pipeline state to a GitHub Projects V2 board, but the project board update fails (project deleted, permissions revoked, API error).
+**Expected behavior**: The failure is logged as a structured warning. The pipeline continues without interruption. The pipeline's execution, disposition, and exit code are unaffected.
+**Key requirement**: Project board sync is non-blocking. Project board failures must never block, slow, or fail the pipeline.
+
+### EDGE-083: GitHub Sub-Issue API Unavailable
+
+**Scenario**: The GitHub sub-issue API is unavailable or returns an error when CogWorks attempts to create sub-work-items as native sub-issues of the parent work item.
+**Expected behavior**: The system retries with backoff. If the sub-issue API remains unavailable after retries, the Planning node fails with a structured error identifying the API failure. CogWorks does not fall back to label-based dependency tracking — native sub-issues are the required mechanism.
+**Key requirement**: Sub-work-item creation depends on the native sub-issue API. API unavailability is a pipeline-halting failure for the Planning node.
+
+### EDGE-084: Milestone Not Found on Parent Work Item
+
+**Scenario**: The parent work item has no milestone set.
+**Expected behavior**: Sub-work-items are created without a milestone. This is not an error — milestones are optional.
+**Key requirement**: Missing milestones are handled gracefully, not as errors.
+
+### EDGE-085: Configured Workflow Label Conflicts with Existing Label
+
+**Scenario**: The team configures the awaiting-review label as `needs-review` in `.cogworks/config.toml`, but the repository already uses `needs-review` for a different purpose.
+**Expected behavior**: CogWorks uses the configured label name. The semantic conflict with the existing usage is a human configuration error. CogWorks validates that no two workflow labels map to the same string (REQ-LABEL-003), but cannot detect semantic conflicts with pre-existing label usage.
+**Key requirement**: Label configuration validation catches internal conflicts (duplicate mappings) but not external semantic conflicts. Documentation should advise teams to review existing labels before configuring mappings.
