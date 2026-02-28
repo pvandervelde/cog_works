@@ -452,3 +452,17 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Scenario**: Node A completes. All outgoing edges from A have conditions that evaluate to false.
 **Expected behavior**: No downstream nodes are activated. The pipeline detects that no progress is possible from this point. It posts a warning comment identifying the dead-end node and halts with a clear error.
 **Key requirement**: Dead-end detection prevents silent pipeline stalls.
+
+---
+
+### EDGE-065: Metric Sink Unavailable During Pipeline Run
+
+**Scenario**: A pipeline run completes, the Metric Emitter computes data points, but the configured metric sink endpoint (Prometheus push gateway, OpenTelemetry collector) is unreachable.
+**Expected behavior**: Emission failure is logged as a structured warning. Metric data points appear in the structured log output. The pipeline's final disposition and exit code are unaffected.
+**Key requirement**: Metric emission failures must never block or degrade pipeline execution.
+
+### EDGE-066: Incomplete Metrics from Pipeline Crash
+
+**Scenario**: A pipeline run crashes mid-execution (process killed, OOM, hardware failure). Some nodes completed and emitted incremental data points, but the pipeline-level summary was never emitted.
+**Expected behavior**: External metrics systems receive partial data (whatever was emitted at node boundaries before the crash). The pipeline resume mechanism (REQ-EXEC-004) may produce a complete set on the resumed run. No data corruption occurs in the external backend.
+**Key requirement**: Incremental emission at node boundaries ensures partial data is available even after crashes.

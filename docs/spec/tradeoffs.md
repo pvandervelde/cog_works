@@ -198,6 +198,29 @@ This document records the significant design alternatives considered and the rat
 
 ---
 
+## 12. External Metrics Backend vs. Built-in Metrics Store
+
+**Decision**: CogWorks emits metric data points to an external metrics backend. No built-in metrics storage, aggregation, or dashboarding.
+
+| Factor | External Metrics Backend | Built-in Metrics Store |
+|--------|------------------------|------------------------|
+| **Focus** | CogWorks stays focused on automated engineering pipelines | CogWorks takes on metrics infrastructure responsibility |
+| **Aggregation** | Purpose-built tools (Prometheus, Mimir) handle time-series aggregation natively | Must implement aggregation logic across pipeline runs |
+| **Dashboarding** | Grafana or equivalent provides rich, configurable dashboards out of the box | Must build and maintain a custom dashboard |
+| **Alerting** | External alerting systems (Alertmanager, Grafana alerts) with mature notification channels | Must implement alerting logic and notification delivery |
+| **GitHub-only principle** | GitHub remains sole *durable pipeline state*. Metrics are operational telemetry, not pipeline state — they belong in a metrics system | Violates the "no database" principle or requires awkward GitHub-based metrics storage |
+| **Cross-pipeline queries** | Natural — time-series DBs are designed for multi-dimensional queries across data points | Requires scanning GitHub comments across many work items (expensive API usage) |
+| **Operational maturity** | These tools have years of production hardening | Must build and harden a new metrics system |
+| **Deployment complexity** | Adds external dependency (metrics backend + dashboard) | No additional infrastructure (but more CogWorks code) |
+
+**Rationale**: CogWorks' core competency is automated engineering pipelines, not metrics infrastructure. Purpose-built tools (Prometheus/Mimir for storage, Grafana for dashboards, Alertmanager for alerts) are excellent at exactly this problem. CogWorks' responsibility ends at emitting well-structured, well-dimensioned metric data points through a pluggable Metric Sink abstraction. The Metric Sink follows the same pattern as the LLM Provider trait — a clean abstraction boundary with swappable infrastructure implementations.
+
+This also clarifies the boundary of the "GitHub as sole durable state" principle: GitHub is the durable state for *pipeline execution* (work item state, audit trail, PR lifecycle). Performance metrics are *operational telemetry* — a different concern that belongs in a different system.
+
+**Risk**: Metric sink implementation must be non-blocking and failure-tolerant. A metrics backend outage must not block or slow pipeline execution. Metric emission failures are logged, not fatal.
+
+---
+
 ## 12. Polling vs. Streaming for Long-Running Domain Service Operations
 
 **Decision**: Polling initially, designed for future streaming.

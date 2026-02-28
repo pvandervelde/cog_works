@@ -225,6 +225,128 @@ Remaining                269,200    $6.56
 
 ---
 
+## Performance Metrics
+
+### Metrics Architecture
+
+CogWorks emits structured metric data points at pipeline boundaries for external consumption. CogWorks itself does not store, aggregate, or dashboard metrics — these concerns are delegated to purpose-built external tools.
+
+```mermaid
+graph TD
+    A[CogWorks Pipeline] -->|emits data points| B[Metric Sink Abstraction]
+    B --> C[Prometheus Push Gateway]
+    B --> D[OpenTelemetry Collector]
+    B --> E[Structured Log Output]
+    C --> F[Metrics Backend<br/>Prometheus / Mimir / InfluxDB]
+    D --> F
+    F --> G[Dashboard<br/>Grafana / equivalent]
+```
+
+When no external metric sink is configured, CogWorks logs data points to structured output. The pipeline operates identically whether or not a sink is configured — no metrics system is required for CogWorks to function.
+
+### Metric Categories
+
+CogWorks emits raw data points. The following categories define how external systems should organize and aggregate these data points.
+
+#### Pipeline Effectiveness Metrics
+
+| Metric | Emitted Data Points | External Aggregation |
+|--------|---------------------|---------------------|
+| First-pass success rate | Final disposition per pipeline run (merged, rejected, failed, abandoned) | Count merged-on-first-pass / total runs over period |
+| Convergence rate | Retry count per code generation cycle | Percentage of runs that converge within retry budget over period |
+| Human intervention rate | Whether human gate was triggered per run | Count interventions / total runs over period |
+| Safety finding escape rate | Post-merge safety findings detected (if any) | Count escapes / total runs over period |
+
+#### Pipeline Efficiency Metrics
+
+| Metric | Emitted Data Points | External Aggregation |
+|--------|---------------------|---------------------|
+| Pipeline cycle time | Node start/end timestamps per run | Mean, p50, p95, p99 over period |
+| Per-node latency | Wall-clock duration per node per run | Mean/percentile per node type |
+| LLM cost per pipeline | Total token usage and cost per run | Mean, trend over period |
+| Domain service latency | Per-method invocation timing per run | Mean/percentile per method |
+| Retry overhead | Time and tokens spent on retries per run | Retry cost as percentage of total |
+
+#### Pipeline Quality Metrics
+
+| Metric | Emitted Data Points | External Aggregation |
+|--------|---------------------|---------------------|
+| Satisfaction score distribution | Per-scenario satisfaction score per run | Distribution, mean, trend |
+| Review finding density | Count and severity of review findings per run | Mean per pipeline, trend |
+| Remediation success rate | Whether remediation resolved finding per cycle | Success rate over period |
+| Cross-domain violation rate | Cross-domain constraint violations per run | Count per run, trend |
+
+#### Pipeline Learning Metrics
+
+| Metric | Emitted Data Points | External Aggregation |
+|--------|---------------------|---------------------|
+| Failure root cause distribution | Structured root cause category per failure | Category distribution over period |
+| Retry root cause concentration | Root cause category per retry | Most common retry causes over period |
+| Context Pack effectiveness | Which packs loaded, pipeline outcome | Success rate per pack combination |
+| Budget utilization | Actual cost vs budget per run | Utilization distribution |
+
+### Review Cadence
+
+External dashboards should be configured with views for three review cadences:
+
+| Cadence | Focus | Recommended Actions |
+|---------|-------|-------------------|
+| Weekly | Operational health: failure rate, cycle time anomalies, cost spikes | Investigate failed runs, adjust retry budgets if needed |
+| Monthly | Trend analysis: first-pass success trend, cost efficiency, common root causes | Update Context Packs for common failure patterns, adjust scenario thresholds |
+| Quarterly | Strategic review: overall effectiveness, domain service performance, process improvement ROI | Revise pipeline configuration, invest in domain service improvements, update improvement backlog |
+
+### Improvement Loop
+
+When metrics indicate degradation in pipeline performance, the following diagnostic flow is recommended:
+
+```
+Measure → Detect → Diagnose → Improve → Verify
+```
+
+1. **Measure**: CogWorks emits structured metric data points continuously.
+2. **Detect**: External monitoring detects threshold crossings or trend changes (configured in Grafana alerts, Prometheus alertmanager, etc.).
+3. **Diagnose**: Use the diagnostic tables below to trace symptom → likely cause → improvement action.
+4. **Improve**: Implement the improvement (Context Pack update, scenario addition, pipeline configuration change, domain service fix).
+5. **Verify**: Monitor the metric data points for the next N pipeline runs to confirm improvement.
+
+#### Common Diagnostic Patterns
+
+| Symptom | Likely Cause | Improvement Action |
+|---------|-------------|-------------------|
+| First-pass success rate declining | Context drift (codebase evolves, Context Packs stale) | Update Context Packs with current patterns |
+| Retry count increasing for specific node types | Domain service regression or new code patterns | Investigate domain service logs, add scenarios for new patterns |
+| Cycle time increasing without retry increase | LLM latency regression or larger work items | Check LLM provider status, review work item decomposition |
+| Satisfaction scores declining for specific scenarios | Scenarios becoming outdated or overly strict | Review and update scenario definitions, adjust thresholds |
+| Cost per pipeline increasing steadily | Context growth (more files, more interfaces) | Review pyramid summary levels, consider context window optimization |
+| High remediation failure rate | Systemic code quality issues not covered by scenarios | Add new scenarios or Context Pack guidance, investigate domain service feedback quality |
+| Safety finding escapes detected post-merge | Insufficient scenario coverage for safety-critical paths | Add safety-focused scenarios, review constitutional rules, consider lowering human gate threshold |
+
+### Improvement Backlog
+
+Improvements identified through the review cadence process should be tracked as regular GitHub Issues tagged with the `process:improvement` label. This keeps improvement work visible alongside feature work and allows CogWorks pipeline runs to implement process improvements when appropriate.
+
+### Metric Sink Configuration
+
+The metric sink is configured in `.cogworks/config.toml`:
+
+```toml
+[metrics]
+# No sink configured: metrics appear in structured log output only
+# sink = "none"
+
+# Prometheus Push Gateway
+# sink = "prometheus"
+# prometheus_gateway_url = "http://localhost:9091"
+# prometheus_job = "cogworks"
+
+# OpenTelemetry Collector
+# sink = "otlp"
+# otlp_endpoint = "http://localhost:4317"
+# otlp_protocol = "grpc"  # or "http"
+```
+
+---
+
 ## Operational Runbook
 
 ### Domain Service Unavailable

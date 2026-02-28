@@ -264,6 +264,18 @@ Verification that all artefacts declared by loaded Context Packs are present.
   - Missing artefacts produce blocking findings (preventing PR creation)
   - Each finding identifies which pack declared the requirement and what is missing
 
+### Metric Data Point Computation
+
+Pure function that transforms raw audit trail data into structured metric data points for emission.
+
+- **Input**: Pipeline run audit data (node timings, retry counts with root causes, token usage, domain service invocations, satisfaction scores, final disposition)
+- **Output**: Set of structured metric data points with dimensions (pipeline run ID, work item ID, classification, safety classification, repository identifier, node name, timestamp)
+- **Rules**:
+  - Computation is deterministic: same audit data always produces same metric data points
+  - Each node boundary produces incremental data points (not only pipeline completion)
+  - Root cause categories are structured enums, not free-form strings: compilation error, test failure, review finding, constraint violation, timeout
+  - All dimensions required for external aggregation are populated before emission
+
 ---
 
 ## External System Abstractions
@@ -428,6 +440,18 @@ Persists audit events.
 - **Data flowing across boundary**:
   - Outbound: structured audit events (LLM call records, validation results, state transitions, cost data)
 
+### Metric Sink
+
+Emits structured metric data points to an external metrics backend.
+
+- **Operations**:
+  - `emit(data_points) → Result` — Emit a batch of metric data points to the configured backend
+  - `flush() → Result` — Flush any buffered data points (called at pipeline completion)
+- **Data flowing across boundary**:
+  - Outbound: structured metric data points with dimensions (pipeline run ID, work item ID, classification, safety classification, repository, node, timestamp) and measurements (timings, counts, costs, scores)
+- **Error cases**: Backend unavailable (non-fatal — logged, pipeline continues), authentication failure (non-fatal), serialization error (non-fatal)
+- **Constraint**: Metric emission failures MUST NOT block or slow pipeline execution. Emission is fire-and-forget with best-effort delivery.
+
 ---
 
 ## Infrastructure Implementations
@@ -468,6 +492,21 @@ Each abstraction has one or more concrete implementations. These are the only mo
 - Implements: Audit Store
 - Uses: GitHub Client (posts issue comments or creates artifacts)
 - Handles: Formatting audit events into readable Markdown, batching events into comments
+
+### Prometheus Metric Sink
+
+- Implements: Metric Sink
+- Uses: Prometheus Push Gateway HTTP API
+- Handles: Metric data point serialization to Prometheus exposition format, push to configured gateway endpoint, label mapping from CogWorks dimensions to Prometheus labels
+- Non-blocking: Emission failures are logged, not fatal to the pipeline
+
+### OpenTelemetry Metric Sink
+
+- Implements: Metric Sink
+- Uses: OpenTelemetry Collector OTLP endpoint (HTTP or gRPC)
+- Handles: Metric data point serialization to OTLP format, export to configured collector
+- Non-blocking: Emission failures are logged, not fatal to the pipeline
+- Future: Additional sinks (InfluxDB, StatsD, etc.) implement the same trait
 
 ---
 

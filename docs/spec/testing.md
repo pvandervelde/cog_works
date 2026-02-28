@@ -138,6 +138,16 @@ Business logic is pure — no I/O, no mocks needed. Test with direct input/outpu
 - Multiple packs, all requirements met → no findings
 - Multiple packs, one requirement missing → one blocking finding
 
+### Metric Data Point Computation
+
+- Pipeline audit data with all fields present → correct metric data points with all dimensions populated
+- Pipeline audit data with missing optional fields → data points computed with available data, warning logged for missing fields
+- Multiple retry cycles with different root causes → root cause structured enum correctly assigned per retry
+- Zero-retry pipeline → metric data points show zero retry count, no retry root cause
+- Safety-classified vs non-safety-classified work item → safety classification dimension correctly populated
+- Same audit data input produces identical data points on repeated computation (determinism)
+- Each node boundary in audit data produces corresponding incremental data point
+
 ---
 
 ## Integration Tests (Node Implementations with Mocks)
@@ -278,6 +288,15 @@ Each infrastructure implementation tested against the real external system or a 
 - Test: conflicting parameter definitions across files → detected and reported
 - Test: missing interfaces directory → empty registry (not error)
 - Test: version format validation
+
+### Metric Sink
+
+- Prometheus push gateway sink: emit data points to a mock push gateway → verify correct exposition format and label mapping
+- OpenTelemetry sink: emit data points to a mock collector → verify correct OTLP format
+- Configured sink unavailable → emission fails gracefully, returns warning (not error)
+- No sink configured → data points logged but no external emission attempted
+- Large batch of data points → verify all emitted without truncation or loss
+- Sink returns authentication error → logged as warning, pipeline unaffected
 
 ---
 

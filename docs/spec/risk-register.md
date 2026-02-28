@@ -486,6 +486,49 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 
 ---
 
+### CW-R20: Metric Data Quality Degradation
+
+**Description:** If audit trail data quality degrades (e.g., missing node timings, incomplete retry records), the emitted metric data points become unreliable. External dashboards and alerting based on these metrics may produce misleading conclusions, leading to incorrect process improvement decisions.
+
+**Likelihood:** 2 (Unlikely — audit trail completeness is enforced by ASSERT-INT-002 and constraints)
+
+**Impact:** 3 (Moderate — incorrect improvement decisions waste effort but don't affect pipeline correctness)
+
+**Risk Score:** 6
+
+**Mitigations:**
+
+| ID | Mitigation | Type | Status |
+|----|-----------|------|--------|
+| CW-R20-M1 | Metric data point computation validates required fields before emission. Incomplete data points are logged with specific missing fields identified. | Detective | Designed |
+| CW-R20-M2 | Audit trail completeness enforced by existing assertions (ASSERT-INT-002) and constraints (Observability section). | Preventive | Designed |
+| CW-R20-M3 | External dashboards should include data quality indicators (e.g., “X% of runs have complete metric data”) to surface degradation early. | Detective | Recommendation |
+
+**Residual Risk:** Low. Audit trail completeness is a core invariant with strong enforcement.
+
+---
+
+### CW-R21: Alert Fatigue from External Monitoring
+
+**Description:** Overly aggressive alerting thresholds configured in external monitoring systems (Grafana, Prometheus alertmanager) desensitize operators to alerts, causing genuine performance degradation to go unnoticed.
+
+**Likelihood:** 2 (Unlikely — this is an operational configuration concern, not a CogWorks defect)
+
+**Impact:** 2 (Minor — delayed response to degradation trends, but pipeline continues to function)
+
+**Risk Score:** 4
+
+**Mitigations:**
+
+| ID | Mitigation | Type | Status |
+|----|-----------|------|--------|
+| CW-R21-M1 | Operations documentation provides recommended alert thresholds with graduated severity levels (info/warning/critical). | Preventive | Designed |
+| CW-R21-M2 | Review cadence process (weekly/monthly/quarterly) ensures metrics are reviewed by humans, not only by automated alerts. | Preventive | Designed |
+
+**Residual Risk:** Low. This is primarily an operational concern managed through review cadence discipline.
+
+---
+
 ## Cross-Reference to Spec
 
 The following spec documents contain mitigations or design decisions informed by entries in this risk register:
@@ -506,3 +549,5 @@ The following spec documents contain mitigations or design decisions informed by
 | CW-R15 | constraints.md (pyramid summary accuracy), vocabulary.md (Pyramid Summary Levels) |
 | CW-R18 | requirements.md (REQ-CONST), security.md (THREAT-015) |
 | CW-R19 | edge-cases.md (EDGE-006a, EDGE-006b, EDGE-057, EDGE-058, EDGE-064), constraints.md (Pipeline Graph), assertions.md (ASSERT-GRAPH-004, ASSERT-GRAPH-005, ASSERT-GRAPH-006, ASSERT-GRAPH-014), security.md (THREAT-018) |
+| CW-R20 | constraints.md (Observability — metric completeness), assertions.md (ASSERT-METRIC-001, ASSERT-METRIC-002), operations.md (Performance Metrics) |
+| CW-R21 | operations.md (Review Cadence, Improvement Loop) |

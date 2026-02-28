@@ -24,7 +24,7 @@ Start with **overview.md** for the big picture, then **vocabulary.md** to unders
 
 ## Source Requirements
 
-Functional requirements are defined in [requirements.md](requirements.md), which catalogues ~50 requirements across 14 categories (PIPE, CLASS, ARCH, PLAN, CODE, SCEN, REVIEW, INT, AUDIT, BOUND, DTU, EXT, XDOM, XVAL). Each `REQ-*` identifier in `assertions.md` traces to a corresponding entry in `requirements.md`.
+Functional requirements are defined in [requirements.md](requirements.md), which catalogues ~140 requirements across 22 categories (PIPE, GRAPH, NODE, EDGE, EXEC, CLASS, ARCH, IFACE, PLAN, CODE, SCEN, REVIEW, INT, AUDIT, BOUND, DTU, EXT, XDOM, XVAL, CPACK, CONST, CTX). Each `REQ-*` identifier in `assertions.md` traces to a corresponding entry in `requirements.md`.
 
 ## Key Capabilities
 
@@ -47,6 +47,8 @@ CogWorks provides advanced validation, context management, and extensibility cap
 8. **Context Pack System** — Structured, version-controlled domain knowledge packs loaded deterministically before generation begins. Packs contain domain knowledge, safe patterns, anti-patterns, and required artefact declarations. Selection is driven by work item classification labels and component tags, not by LLM inference. Multiple packs may load simultaneously; conflicting guidance resolves to the most restrictive rule.
 
 9. **Constitutional Security Layer** — Non-overridable behavioral rules loaded as a privileged system prompt component on every pipeline run, before context assembly and before any LLM call. Prevents prompt injection, scope violations, and unauthorized capability generation. Injection detection halts the pipeline immediately; work items enter a hold state requiring human review.
+
+10. **Performance Metrics Emission** — CogWorks emits structured metric data points at pipeline boundaries (per-node and per-pipeline) to a pluggable external metrics backend via a Metric Sink abstraction. CogWorks does not store, aggregate, or dashboard metrics itself — these concerns are delegated to purpose-built external tools (Prometheus, Grafana, etc.). Metric emission is non-blocking and optional; the pipeline operates identically with or without a configured sink.
 
 ## Key Architectural Decisions
 
