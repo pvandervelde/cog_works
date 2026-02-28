@@ -6,15 +6,15 @@ This document catalogs non-standard flows and failure scenarios that the system 
 
 ## Pipeline-Level Edge Cases
 
-### EDGE-001: Crash Mid-Stage
+### EDGE-001: Crash Mid-Node
 
-**Scenario**: CogWorks crashes (or is killed) while executing a stage — e.g., after generating a specification but before creating the PR.
-**Expected behavior**: On next invocation, the step function reads GitHub state. If the PR doesn't exist, it re-generates the specification (idempotent). If the PR exists, it detects it and advances.
-**Key requirement**: Idempotent operations. Check-before-act for all state mutations (PR creation, issue creation, label changes).
+**Scenario**: CogWorks crashes (or is killed) while executing a node — e.g., after generating a specification but before creating the PR.
+**Expected behavior**: On next invocation, the step function reads GitHub state (including the persisted pipeline state JSON). If the PR doesn't exist, it re-generates the specification (idempotent). If the PR exists, it detects it and evaluates outgoing edges. Pipeline resumes from the failed node, not from the beginning.
+**Key requirement**: Idempotent operations. Pipeline state persisted to GitHub at each node boundary. Check-before-act for all state mutations.
 
 ### EDGE-002: Concurrent Label Modification
 
-**Scenario**: A human removes the `cogworks:stage:architecture` label while CogWorks is processing the architecture stage, or adds labels that conflict with the pipeline state.
+**Scenario**: A human removes the `cogworks:node:architecture` label while CogWorks is processing the architecture node, or adds labels that conflict with the pipeline state.
 **Expected behavior**: The step function reads labels at the start of each invocation. If labels are inconsistent with expected state, the system posts a warning comment and halts (does not attempt to "fix" human changes).
 **Key requirement**: Treat GitHub as the source of truth. Never overwrite human-applied labels without explicit policy.
 
@@ -33,14 +33,26 @@ This document catalogs non-standard flows and failure scenarios that the system 
 ### EDGE-005: Multiple `cogworks:run` Labels Applied
 
 **Scenario**: A human applies the `cogworks:run` label to an issue that already has it, or applies it while the pipeline is already running.
-**Expected behavior**: If the pipeline is already running (`cogworks:processing` label present), back off. If the pipeline is complete (`cogworks:stage:complete`), do nothing (or warn). Re-triggering a failed pipeline should be a separate, explicit action (e.g., `cogworks:retry` label).
+**Expected behavior**: If the pipeline is already running (`cogworks:processing` label present), back off. If the pipeline is complete (`cogworks:node:complete`), do nothing (or warn). Re-triggering a failed pipeline resumes from the failed node using the persisted pipeline state (REQ-PIPE-009). A full restart requires an explicit `cogworks:restart` label or `/cogworks restart` comment.
 **Key requirement**: Idempotent trigger handling.
 
 ### EDGE-006: Configuration File Missing or Invalid
 
 **Scenario**: The `.cogworks/config.toml` file doesn't exist, is malformed, or contains invalid values.
-**Expected behavior**: The system posts an error comment on the work item identifying the configuration problem and halts. No pipeline stages execute with invalid or missing configuration.
+**Expected behavior**: The system posts an error comment on the work item identifying the configuration problem and halts. No pipeline nodes execute with invalid or missing configuration.
 **Key requirement**: Fail fast on invalid configuration. Do not use implicit defaults when the configuration file is expected but missing.
+
+### EDGE-006a: Pipeline Configuration File Invalid
+
+**Scenario**: The `.cogworks/pipeline.toml` file exists but contains a cycle without a termination condition, has orphan nodes, or uses invalid TOML syntax.
+**Expected behavior**: Pipeline configuration validation fails at load time. The system posts an error comment identifying the specific graph validation error and halts. The default pipeline is NOT used as a fallback for malformed configuration (only for missing configuration).
+**Key requirement**: Fail fast on invalid pipeline configuration. Missing configuration falls back to default; malformed configuration is an error.
+
+### EDGE-006b: Pipeline Configuration References Unknown Named Pipeline
+
+**Scenario**: The Intake node classifies a work item and selects a pipeline name that is not defined in `.cogworks/pipeline.toml`.
+**Expected behavior**: The system posts an error comment identifying the requested pipeline name and the available pipeline names, and halts.
+**Key requirement**: Pipeline selection errors are non-retryable.
 
 ---
 
@@ -65,8 +77,8 @@ This document catalogs non-standard flows and failure scenarios that the system 
 ### EDGE-009: Specification PR Rejected by Human
 
 **Scenario**: A human reviews the specification PR and requests changes (or closes it).
-**Expected behavior**: The pipeline waits. On next invocation, the step function detects the PR is not approved and exits. If the PR is closed, the system treats this as a failed stage and posts a status update.
-**Key requirement**: Stage gates respect human decisions. Closed PRs = rejected = failed stage.
+**Expected behavior**: The pipeline waits. On next invocation, the step function detects the PR is not approved and exits. If the PR is closed, the system treats this as a failed node and posts a status update.
+**Key requirement**: Node gates respect human decisions. Closed PRs = rejected = failed node.
 
 ### EDGE-010: Interface Definitions Fail Validation After All Retries
 
@@ -92,7 +104,7 @@ This document catalogs non-standard flows and failure scenarios that the system 
 
 ### EDGE-013: Sub-Work-Item Issues Already Exist
 
-**Scenario**: A previous invocation created some sub-work-item issues, but crashed before completing the planning stage.
+**Scenario**: A previous invocation created some sub-work-item issues, but crashed before completing the planning node.
 **Expected behavior**: On re-invocation, detect existing sub-work-items (by matching title pattern, labels, or parent link). Don't create duplicates. Create only the missing ones.
 **Key requirement**: Idempotent issue creation.
 
@@ -369,7 +381,7 @@ This document catalogs non-standard flows and failure scenarios that the system 
 ### EDGE-053: False Positive Injection Detection
 
 **Scenario**: Legitimate technical content triggers the injection detector — e.g., a work item for a security testing module includes pseudocode like "Tell the system to bypass authentication" as part of the test specification.
-**Expected behavior**: The false positive is detected and the work item is in hold state. A human reviews the flagged content, determines it is legitimate, and removes the `cogworks:hold` label with a justification comment ("false positive — pseudocode in security test spec"). The pipeline resumes from the last completed stage on next invocation.
+**Expected behavior**: The false positive is detected and the work item is in hold state. A human reviews the flagged content, determines it is legitimate, and removes the `cogworks:hold` label with a justification comment ("false positive — pseudocode in security test spec"). The pipeline resumes from the last completed node on next invocation.
 **Key requirement**: False positive resolution requires explicit human review with justification recorded. The system accepts false positives as a deliberate tradeoff for low false-negative rate on real injection attempts.
 
 ### EDGE-054: SCOPE_UNDERSPECIFIED — Specification Incomplete for Work Item
@@ -381,11 +393,62 @@ This document catalogs non-standard flows and failure scenarios that the system 
 ### EDGE-055: Required Artefact Declared by Pack is Missing
 
 **Scenario**: The loaded `rust-embedded-safety` pack declares that all generated code must include a "panic path analysis" section in the implementation PR. The generated code doesn't include this section.
-**Expected behavior**: At the Review stage, required artefact checking detects the absence. A blocking finding is produced: "Required artefact 'panic path analysis' declared by pack 'rust-embedded-safety' is missing." PR creation is blocked. The blocking finding is fed back to the Code Generator for remediation.
+**Expected behavior**: At the Review node, required artefact checking detects the absence. A blocking finding is produced: "Required artefact 'panic path analysis' declared by pack 'rust-embedded-safety' is missing." PR creation is blocked. The blocking finding is fed back to the Code Generator for remediation.
 **Key requirement**: Missing required artefacts produce specific, actionable blocking findings identifying the pack and the missing artefact.
 
 ### EDGE-056: Generated Artifact Matches Protected Path Pattern
 
 **Scenario**: A work item's context (from a dependency README or code comment) causes the LLM to generate a file at `.cogworks/constitutional-rules.md` or modify a prompt template.
 **Expected behavior**: Pre-PR validation runs scope enforcement. The generated file path matches a protected path pattern. A `PROTECTED_PATH_VIOLATION` event is emitted. PR creation is blocked. A failure report is posted on the work item identifying the protected path violation. The Code Generator is not retried — this is a scope boundary violation, not a retryable generation error.
-**Key requirement**: Protected path violations block PR creation and are not fed back to the LLM as retryable errors. Modifying protected files is not a recoverable generation failure — it requires human review of the underlying specification.
+**Key requirement**: Protected path violations block PR creation and are not fed back to the LLM as retryable errors. Modifying protected files is not a recoverable generation failure — it requires human review of the underlying specification
+---
+
+## Graph Execution Edge Cases
+
+### EDGE-057: Rework Loop Exhausts Maximum Traversals
+
+**Scenario**: A Review\u2192CodeGen rework edge has `max_traversals: 3`. After 3 rework cycles, the review still fails with blocking findings.
+**Expected behavior**: The rework edge is not taken (traversal limit reached). The pipeline follows the configured overflow action: escalate to human, take an alternative overflow edge, or halt with a clear error summarising all 3 attempts and their failures.
+**Key requirement**: Rework loop termination is enforced. No path to infinite execution.
+
+### EDGE-058: Parallel Node Budget Exhaustion
+
+**Scenario**: Three nodes are executing in parallel. Node A consumes 60% of remaining budget. Node B then attempts an LLM call requiring 50% of the original remaining budget.
+**Expected behavior**: Node B's LLM call is denied (budget exceeded). Node B enters failed state. Node C continues executing. Downstream nodes that depend only on A and C can still proceed.
+**Key requirement**: Budget enforcement is atomic across parallel nodes. Partial failure does not halt the entire parallel execution.
+
+### EDGE-059: Fan-In With One Upstream Failure
+
+**Scenario**: Node D requires inputs from B and C. B completes successfully. C fails.
+**Expected behavior**: Node D cannot execute (missing input from C). D enters `blocked` state. The pipeline reports which input is missing and which upstream node failed. If C has retries remaining, C is retried. If C is exhausted, the pipeline escalates the fan-in failure.
+**Key requirement**: Fan-in clearly reports which upstream failures caused the block.
+
+### EDGE-060: LLM-Evaluated Edge Condition Failure
+
+**Scenario**: An edge has an LLM-evaluated condition. The LLM call for condition evaluation fails (timeout, API error).
+**Expected behavior**: The deterministic fallback specified on the edge is applied (either edge taken or not taken). The fallback application is recorded in the audit trail. The pipeline continues.
+**Key requirement**: LLM edge condition failures are not pipeline-fatal. Fallback behavior must be declared in configuration.
+
+### EDGE-061: Pipeline Working Directory Lost
+
+**Scenario**: The pipeline working directory (git worktree) is deleted or corrupted mid-pipeline (e.g., disk failure, manual cleanup).
+**Expected behavior**: On next invocation, the system detects the missing/corrupted working directory. It reconstructs pipeline state from GitHub artifacts (PRs, issue comments, pipeline state JSON). A new working directory is created and populated from GitHub. The pipeline resumes from the failed node.
+**Key requirement**: Pipeline working directory is a performance optimisation. Its loss must be recoverable from GitHub state.
+
+### EDGE-062: Pipeline Cancellation During Parallel Execution
+
+**Scenario**: Nodes B and C are executing in parallel. A `cogworks:cancel` label is applied.
+**Expected behavior**: Both B and C receive cancellation signals. In-progress LLM calls are allowed to complete (to avoid wasting partial token costs). Current pipeline state is written to GitHub. A summary comment is posted noting the cancellation. Working directory is cleaned up.
+**Key requirement**: Cancellation is graceful. In-progress LLM calls complete. State is persisted.
+
+### EDGE-063: Spawning Node Creates Issue But GitHub API Fails
+
+**Scenario**: A spawning node creates 3 derivative issues. The first two succeed. The third fails due to a GitHub API error.
+**Expected behavior**: The spawning node is non-blocking. It logs the failure for the third issue. The pipeline continues regardless. The audit trail records which issues were created and which creation failed.
+**Key requirement**: Spawning node failures do not block the pipeline. Partial creation is acceptable.
+
+### EDGE-064: All Outgoing Edge Conditions Evaluate False
+
+**Scenario**: Node A completes. All outgoing edges from A have conditions that evaluate to false.
+**Expected behavior**: No downstream nodes are activated. The pipeline detects that no progress is possible from this point. It posts a warning comment identifying the dead-end node and halts with a clear error.
+**Key requirement**: Dead-end detection prevents silent pipeline stalls.

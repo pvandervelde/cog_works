@@ -10,15 +10,15 @@ Requirements are organized by functional area. Each requirement states what the 
 
 ### REQ-PIPE-001: Trigger on label
 
-CogWorks MUST initiate the pipeline when the `cogworks:run` label is applied to a work item that has no current `cogworks:stage:*` label.
+CogWorks MUST initiate the pipeline when the `cogworks:run` label is applied to a work item that has no current `cogworks:node:*` label.
 
-### REQ-PIPE-002: Stage label tracking
+### REQ-PIPE-002: Node label tracking
 
-CogWorks MUST apply a `cogworks:stage:<name>` label to track the current pipeline stage of each work item. Only one stage label may be present at a time.
+CogWorks MUST apply `cogworks:node:<name>` labels to track the currently active node(s) of each work item. Multiple node labels may be present simultaneously when nodes execute in parallel.
 
-### REQ-PIPE-003: Stage advancement
+### REQ-PIPE-003: Node advancement
 
-CogWorks MUST advance to the next pipeline stage when the current stage's gate is satisfied (auto-proceed configuration, or human approval in human-gated configuration).
+CogWorks MUST evaluate outgoing edge conditions when a node completes and activate all downstream nodes whose edge conditions are satisfied and whose other input requirements are met. When no configuration file exists, the default linear pipeline (Intake → Architecture → Interface Design → Planning → Code Generation → Review → Integration) is used.
 
 ### REQ-PIPE-004: Idempotent operations
 
@@ -26,17 +26,125 @@ All pipeline operations MUST be idempotent. Re-invoking the step function for th
 
 ### REQ-PIPE-005: Audit comments
 
-CogWorks MUST post a structured status comment on the work item issue when entering each stage, when a stage completes successfully, and when a failure occurs.
+CogWorks MUST post a structured status comment on the work item issue when entering each node, when a node completes successfully, and when a failure occurs.
 
-### REQ-PIPE-006: Stage gate enforcement
+### REQ-PIPE-006: Node gate enforcement
 
-CogWorks MUST respect stage gate configuration (`auto-proceed` or `human-gated`). Safety-critical work items MUST override all code-producing stage gates to `human-gated` regardless of repository configuration.
+CogWorks MUST respect node gate configuration (`auto-proceed` or `human-gated`). Safety-critical work items MUST override all code-producing node gates to `human-gated` regardless of repository configuration.
 
 **Exception**: Constitutional rules loading (REQ-CONST-001) is unconditional and not subject to gate configuration. It runs on every pipeline invocation regardless of gate settings.
 
 ### REQ-PIPE-007: Processing lock
 
 CogWorks MUST apply a `cogworks:processing` label before processing a work item and MUST back off (exit without taking action) if that label is already present when a new invocation begins.
+
+### REQ-PIPE-008: Duplicate pipeline prevention
+
+The orchestrator MUST prevent duplicate pipeline runs for the same work item. If a pipeline is already running for an issue, a new trigger MUST either be rejected (with a comment explaining the conflict) or queue for execution after the current run completes (configurable).
+
+### REQ-PIPE-009: Pipeline resumption
+
+Re-triggering a failed pipeline MUST support resuming from the failed node (using the persisted pipeline state from REQ-EXEC-002) rather than restarting from the beginning. A full restart MUST be supported only on explicit request (`cogworks:restart` label or `/cogworks restart` comment).
+
+### REQ-PIPE-010: Configurable pipeline graph
+
+The pipeline MUST support configurable directed graphs where nodes are processing steps and edges are transitions with conditions. The default configuration MUST be the existing linear pipeline. Edge conditions MUST support both deterministic evaluation (expression checks against pipeline state) and LLM evaluation (natural language conditions assessed against pipeline context). Graph cycles MUST have termination conditions (maximum traversals, cost budget) to prevent infinite loops.
+
+### REQ-PIPE-011: Shift work boundary
+
+Each work item classification MUST define an explicit shift work boundary — the pipeline node after which CogWorks proceeds non-interactively. Nodes before the boundary MAY require human approval (configurable). Nodes after the boundary run autonomously with gate enforcement as the quality control. The boundary MUST be visible in the GitHub issue (as a label or comment) so humans know when to engage and when to let the system run.
+
+### REQ-PIPE-012: Pipeline working directory
+
+Each pipeline run MUST have a dedicated working directory (git worktree) for intermediate artifacts. The working directory persists across nodes within a single pipeline run. Intermediate artifacts (specs, interface definitions, plans, generated code) are written to the working directory before being committed as PRs. The working directory is cleaned up on pipeline completion. The working directory state MUST be recoverable from GitHub artifacts (PRs, issue comments) in case of failure — the working directory is a performance optimisation, not a durability mechanism.
+
+---
+
+## REQ-GRAPH: Pipeline Graph Structure
+
+### REQ-GRAPH-001: Directed graph with controlled cycles
+
+The pipeline MUST be a directed graph where nodes represent processing steps and edges represent transitions. The graph MUST support sequential execution, parallel fan-out, fan-in synchronisation, and conditional edges. The graph MAY contain cycles (for retry and rework loops). Every cycle MUST have an explicit termination condition that guarantees eventual exit. The orchestrator MUST enforce termination conditions and halt the pipeline with a clear error if a cycle would exceed its limit.
+
+### REQ-GRAPH-002: Node identity and ordering
+
+Each node in the graph MUST have a unique name within the pipeline configuration. The orchestrator MUST compute the execution order from the edge definitions using topological sorting. For nodes that are not connected by any path, the orchestrator MUST support concurrent execution (see REQ-EXEC-006).
+
+### REQ-GRAPH-003: Default linear pipeline
+
+If a repository has no pipeline configuration file, the orchestrator MUST use a default pipeline equivalent to the original 7-node linear sequence: Intake → Architecture → Interface Design → Planning → Code Generation → Review → Integration. Default properties: all edges unconditional, review-to-code-generation rework edge has `max_traversals: 3` (matching REQ-REVIEW-005's default remediation cycle limit), safety-classified work items require human approval at Architecture, Interface Design, and Review, no parallel execution.
+
+### REQ-GRAPH-004: Pipeline configuration file
+
+Pipeline graphs MUST be configurable per repository via a TOML configuration file at `.cogworks/pipeline.toml`. The configuration defines nodes, edges, and pipeline-level settings. Multiple named pipelines MAY be defined in the same file. The pipeline for a work item is selected by the Intake node's classification output.
+
+---
+
+## REQ-NODE: Node Types
+
+### REQ-NODE-001: Node interface
+
+Every node, regardless of type, MUST implement a common interface: name (unique identifier), type (`llm`, `deterministic`, or `spawning`), inputs (required artifacts or state), outputs (produced artifacts or state), validation (how success is determined), timeout (maximum wall-clock time), and cost budget (for LLM nodes). The orchestrator MUST verify all inputs are available before starting a node.
+
+### REQ-NODE-002: LLM nodes
+
+LLM nodes MUST specify a prompt template, context requirements, output schema, and retry behaviour. The orchestrator MUST assemble context, invoke the LLM gateway, validate output against the schema, retry on failure (up to the node's retry budget), and record the full prompt, response, validation result, and cost in the audit trail.
+
+### REQ-NODE-003: Deterministic nodes
+
+Deterministic nodes MUST specify an execution method (`script`, `domain_service`, or `builtin`). The orchestrator MUST execute the specified method, capture output, parse it according to the node's output specification, and record the invocation and result in the audit trail.
+
+### REQ-NODE-004: Spawning nodes
+
+Spawning nodes MUST specify a prompt template (for LLM-based analysis) or a script (for deterministic issue creation), an issue template, labels to apply, and whether to link new issues to the current work item. Spawning nodes MUST be non-blocking by default — the pipeline continues regardless of success. The orchestrator MUST create resulting issues, link them to the parent work item, and record them in the audit trail.
+
+---
+
+## REQ-EDGE: Edge Conditions
+
+### REQ-EDGE-001: Edge condition types
+
+The orchestrator MUST support three types of edge conditions: deterministic conditions (evaluated by the orchestrator against pipeline state via a simple expression language), LLM-evaluated conditions (natural-language conditions assessed by the LLM against current pipeline context), and composite conditions (boolean combinations AND/OR/NOT of deterministic and LLM-evaluated conditions). LLM-evaluated conditions MUST be recorded in the audit trail. LLM-evaluated conditions MUST have a deterministic fallback (edge either taken or not taken) when the LLM is unavailable or returns an ambiguous response.
+
+### REQ-EDGE-002: Edge priority and mutual exclusion
+
+When multiple edges leave the same source node, the orchestrator MUST evaluate them in declared order. The configuration MUST support: `all-matching` (all true edges taken — fan-out), `first-matching` (only first true edge taken — exclusive routing), and `explicit` (node output names the edges to take). The evaluation mode MUST be declared per source node.
+
+### REQ-EDGE-003: Rework edges
+
+Edges that create cycles MUST specify a maximum traversal count, which node outputs to preserve vs. discard on re-entry, and whether to increment the retry or rework counter. The orchestrator MUST track traversal counts per cycle and enforce the maximum. When the maximum is reached, the pipeline MUST either halt with an error, escalate to a human, or take a configured overflow edge.
+
+---
+
+## REQ-EXEC: Pipeline Execution
+
+### REQ-EXEC-001: Working directory
+
+Each pipeline run MUST have a dedicated working directory — a git worktree checked out from the target repository at the relevant branch. The working directory persists across all nodes within a single pipeline run. Nodes read inputs from and write outputs to the working directory (for file artifacts) or to a structured state store (for metadata). The working directory is cleaned up when the pipeline run completes. On pipeline failure, the orchestrator MUST be able to reconstruct pipeline state from GitHub artifacts and resume from the failed node.
+
+### REQ-EXEC-002: Pipeline state machine
+
+The orchestrator MUST maintain a state machine for each pipeline run tracking: current active nodes, completed nodes with outputs, pending nodes (inputs not yet available), blocked nodes (upstream dependency failed — inputs will never arrive), failed nodes with error info, per-cycle traversal counts, and cumulative cost. The state machine MUST be representable as a JSON document and MUST be written to a GitHub comment on the parent work item at each node boundary.
+
+### REQ-EXEC-003: Node execution lifecycle
+
+Each node execution MUST follow this lifecycle: (1) precondition check — verify all declared inputs are available, (2) announce — update pipeline state comment, (3) execute — run the node, (4) validate — check output against validation criteria, (5) record — write outputs and audit trail, (6) announce — update GitHub state, (7) evaluate edges — evaluate outgoing edge conditions. If execution fails and retries are available, the node re-enters execute with error info in context. If retries are exhausted, the node enters `failed` state.
+
+### REQ-EXEC-004: Pipeline triggering
+
+The pipeline MUST be triggerable by: a GitHub Issue label (`cogworks:run`), a GitHub comment command (`/cogworks run`), or a manual CLI invocation (`cogworks run --issue <number>`). The orchestrator MUST prevent duplicate pipeline runs for the same work item.
+
+### REQ-EXEC-005: Pipeline cancellation
+
+A running pipeline MUST be cancellable by removing the `cogworks:run` label, adding a `cogworks:cancel` label, or a comment command (`/cogworks cancel`). On cancellation: active node executions are terminated (in-progress LLM calls are allowed to complete), current state is written to GitHub, a summary comment is posted, and the working directory is cleaned up.
+
+### REQ-EXEC-006: Parallel node execution
+
+When the graph has multiple nodes whose inputs are all available simultaneously, the orchestrator MUST support executing them concurrently as async tasks within the orchestrator process. Parallel execution MUST respect the pipeline's total cost budget (shared), the maximum concurrent LLM calls limit (configurable, default: 3), report progress for each node independently, and handle partial failure (other nodes continue unless a failed node is marked `abort_siblings_on_failure: true`). Fan-in occurs when a downstream node declares inputs from multiple upstream nodes; it stays pending until all inputs complete.
+
+### REQ-EXEC-007: Sub-work-item execution within graph
+
+Sub-work-items produced by a planning node MUST be processed as a sub-graph within the pipeline. Each sub-work-item follows a code-generation → review → integration sequence (or a configured sub-graph). Sub-work-items MUST be processed in topological dependency order. Sub-work-items with no mutual dependency path MAY execute concurrently when the pipeline configuration allows parallel fan-out.
 
 ---
 
@@ -52,7 +160,7 @@ If any module in the `affected_modules` list is registered in the safety-critica
 
 ### REQ-CLASS-003: Scope threshold
 
-When the estimated scope exceeds the configured threshold, the Task Classifier MUST produce an escalation result and MUST NOT proceed to subsequent stages.
+When the estimated scope exceeds the configured threshold, the Task Classifier MUST produce an escalation result and MUST NOT proceed to subsequent nodes.
 
 ---
 
@@ -72,7 +180,7 @@ The specification document MUST be delivered via a Pull Request targeting the ap
 
 ### REQ-ARCH-004: Specification gate
 
-The pipeline MUST NOT advance past the architecture stage until the specification PR is merged or explicitly approved per the gate configuration.
+The pipeline MUST NOT advance past the architecture node until the specification PR is merged or explicitly approved per the gate configuration.
 
 ### REQ-ARCH-005: Specification validation
 
@@ -104,7 +212,7 @@ Validated interface files MUST be delivered via a Pull Request. The PR MUST refe
 
 ### REQ-IFACE-006: Interface design gate
 
-The pipeline MUST NOT advance to the planning stage until the interface design PR is merged or explicitly approved per the stage gate configuration.
+The pipeline MUST NOT advance to the planning node until the interface design PR is merged or explicitly approved per the node gate configuration.
 
 ### REQ-IFACE-007: Cross-domain registry consistency
 
@@ -136,15 +244,15 @@ Each sub-work-item MUST be created as a GitHub Issue linked to the parent work i
 
 ### REQ-PLAN-006: Interface coverage
 
-The Work Planner MUST verify that every interface from the Interface Design stage is covered by at least one sub-work-item.
+The Work Planner MUST verify that every interface from the Interface Design node is covered by at least one sub-work-item.
 
 ---
 
 ## REQ-CODE: Code Generation
 
-### REQ-CODE-001: Sequential processing with prior context
+### REQ-CODE-001: Dependency-ordered processing with prior context
 
-Sub-work-items MUST be processed sequentially in topological dependency order. Each sub-work-item MUST receive the implementation outputs of all prior completed sub-work-items as part of its context.
+Sub-work-items MUST be processed in topological dependency order. Each sub-work-item MUST receive the implementation outputs of all prior completed sub-work-items that it depends on as part of its context. Sub-work-items with no mutual dependency path MAY execute concurrently when the pipeline configuration allows parallel fan-out; each concurrent sub-work-item receives the outputs of its own dependency chain.
 
 ### REQ-CODE-002: Structured feedback loop
 
@@ -156,7 +264,7 @@ Each sub-work-item MUST have a configurable maximum retry count (default: 5). Ex
 
 ### REQ-CODE-004: Cost budget
 
-The pipeline MUST track accumulated LLM token cost and halt when the pipeline budget is exceeded. The halt MUST include a per-stage, per-sub-work-item cost report.
+The pipeline MUST track accumulated LLM token cost and halt when the pipeline budget is exceeded. The halt MUST include a per-node, per-sub-work-item cost report.
 
 ### REQ-CODE-005: Context truncation
 
@@ -253,15 +361,15 @@ Every sub-work-item PR created by CogWorks MUST include references to: the sub-w
 
 ### REQ-AUDIT-001: LLM call recording
 
-Every LLM call MUST be recorded in the audit trail with: model name, input token count, output token count, latency, stage, and sub-work-item identifier (if applicable).
+Every LLM call MUST be recorded in the audit trail with: model name, input token count, output token count, latency, node, and sub-work-item identifier (if applicable).
 
 ### REQ-AUDIT-002: State transition recording
 
-Every pipeline state transition (stage entry, stage completion, gate evaluation) MUST be recorded in the audit trail.
+Every pipeline state transition (node entry, node completion, gate evaluation) MUST be recorded in the audit trail.
 
 ### REQ-AUDIT-003: Failure reporting
 
-When a stage fails, CogWorks MUST post a structured failure report as a GitHub issue comment and apply the `cogworks:stage:failed` label.
+When a node fails, CogWorks MUST post a structured failure report as a GitHub issue comment and apply the `cogworks:node:failed` label.
 
 ---
 
@@ -361,7 +469,7 @@ The Interface Registry Manager MUST detect and report mismatches between the int
 
 ### REQ-XDOM-005: Pre-pipeline validation
 
-The interface registry MUST be validated on every pipeline run, before any stage executes. Registry validation failures MUST prevent any pipeline stage from running.
+The interface registry MUST be validated on every pipeline run, before any node executes. Registry validation failures MUST prevent any pipeline node from running.
 
 ---
 
@@ -383,9 +491,9 @@ Hard constraint violations (values outside declared min/max bounds) MUST produce
 
 Cross-domain constraint validation MUST be able to validate a single domain's artifacts against registry contracts without requiring other participating domains' services to be running.
 
-### REQ-XVAL-005: Architecture-stage validation
+### REQ-XVAL-005: Architecture-node validation
 
-Cross-domain constraint validation MUST also run during the architecture stage to catch violations before implementation begins.
+Cross-domain constraint validation MUST also run during the architecture node to catch violations before implementation begins.
 
 ---
 
@@ -397,7 +505,7 @@ Context Pack loading MUST be driven deterministically by the work item's classif
 
 ### REQ-CPACK-002: Pack loading timing
 
-Context Packs MUST be loaded at the Architecture stage (Stage 2), before any LLM call in the Architecture stage begins. Loaded packs MUST remain active for the entire pipeline run.
+Context Packs MUST be loaded at the Architecture node, before any LLM call in the Architecture node begins. Loaded packs MUST remain active for the entire pipeline run.
 
 ### REQ-CPACK-003: Multiple simultaneous packs
 
@@ -413,7 +521,7 @@ If a work item matches a Context Pack's trigger criteria, the pack MUST be loade
 
 ### REQ-CPACK-006: Required artefact enforcement
 
-Context Packs MAY declare required artefacts. At the Review stage, CogWorks MUST verify all declared required artefacts are present. Missing artefacts MUST produce blocking findings identifying the pack and the specific missing artefact.
+Context Packs MAY declare required artefacts. At the Review node, CogWorks MUST verify all declared required artefacts are present. Missing artefacts MUST produce blocking findings identifying the pack and the specific missing artefact.
 
 ### REQ-CPACK-007: Pack audit trail
 
@@ -421,7 +529,7 @@ The set of Context Packs loaded for each pipeline run MUST be recorded in the au
 
 ### REQ-CPACK-008: Pack content in context assembly
 
-Context Pack domain knowledge, safe patterns, and anti-patterns MUST be included in the context package for all LLM calls from the Architecture stage onward, subject to the standard context priority and truncation rules.
+Context Pack domain knowledge, safe patterns, and anti-patterns MUST be included in the context package for all LLM calls from the Architecture node onward, subject to the standard context priority and truncation rules.
 
 ---
 

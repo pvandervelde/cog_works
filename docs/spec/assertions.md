@@ -8,29 +8,29 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ### ASSERT-PSM-001: Fresh work item enters intake
 
-- **Given**: A work item with `cogworks:run` label and no `cogworks:stage:*` label
+- **Given**: A work item with `cogworks:run` label and no `cogworks:node:*` label
 - **When**: The step function processes this work item
-- **Then**: The Task Classifier is invoked, and `cogworks:stage:intake` label is applied
+- **Then**: The Task Classifier is invoked, and `cogworks:node:intake` label is applied
 - **Traces to**: REQ-PIPE-001, REQ-PIPE-002
 
-### ASSERT-PSM-002: Completed stage advances to next stage
+### ASSERT-PSM-002: Completed node activates downstream nodes
 
-- **Given**: A work item at stage N whose stage gate is satisfied (auto-proceed or human-approved)
+- **Given**: A work item at node N whose outgoing edge conditions are satisfied
 - **When**: The step function processes this work item
-- **Then**: Stage N+1 executor is invoked, and `cogworks:stage:<N+1>` replaces `cogworks:stage:<N>`
-- **Traces to**: REQ-PIPE-003
+- **Then**: All downstream nodes whose edge conditions are satisfied and inputs are available are activated; `cogworks:node:<downstream>` labels are applied
+- **Traces to**: REQ-PIPE-003, REQ-EDGE-001
 
-### ASSERT-PSM-003: Human-gated stage waits for approval
+### ASSERT-PSM-003: Human-gated node waits for approval
 
-- **Given**: A work item at stage N with `human-gated` configuration, and the gate has not been approved
+- **Given**: A work item at node N with `human-gated` configuration, and the gate has not been approved
 - **When**: The step function processes this work item
 - **Then**: The step function exits without advancing; `cogworks:awaiting-review` label is present
 - **Traces to**: REQ-PIPE-006
 
 ### ASSERT-PSM-004: Safety-critical work item forces human gates
 
-- **Given**: A work item classified as safety-affecting, with auto-proceed configured for stage N (a code-producing stage)
-- **When**: The step function evaluates the gate for stage N
+- **Given**: A work item classified as safety-affecting, with auto-proceed configured for node N (a code-producing node)
+- **When**: The step function evaluates the gate for node N
 - **Then**: The gate behaves as human-gated regardless of configuration
 - **Traces to**: REQ-PIPE-006, REQ-CLASS-002
 
@@ -41,19 +41,47 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: The second invocation backs off without taking action
 - **Traces to**: REQ-PIPE-007
 
-### ASSERT-PSM-006: Failed stage reports and halts
+### ASSERT-PSM-006: Failed node reports and halts
 
-- **Given**: A stage executor that fails (unrecoverable error, budget exceeded, or max escalation)
+- **Given**: A node that fails (unrecoverable error, budget exceeded, or max escalation)
 - **When**: The failure is reported
-- **Then**: `cogworks:stage:failed` label is applied, a structured failure report is posted as an issue comment, and the step function exits
+- **Then**: `cogworks:node:failed` label is applied, a structured failure report is posted as an issue comment, and the step function exits
 - **Traces to**: REQ-PIPE-005, REQ-AUDIT-003
 
-### ASSERT-PSM-007: Status update posted on stage entry
+### ASSERT-PSM-007: Status update posted on node entry
 
-- **Given**: A work item advancing from one stage to the next
-- **When**: The new stage begins
-- **Then**: A status comment is posted on the work item issue with the stage name and summary
+- **Given**: A work item where a new node is activated
+- **When**: The new node begins
+- **Then**: A status comment is posted on the work item issue with the node name and summary
 - **Traces to**: REQ-PIPE-005
+
+### ASSERT-PSM-008: Default linear pipeline used when no configuration exists
+
+- **Given**: A repository with no `.cogworks/pipeline.toml` file
+- **When**: The pipeline executor loads the pipeline configuration
+- **Then**: The default 7-node linear pipeline (Intake → Architecture → Interface Design → Planning → Code Generation → Review → Integration) is used
+- **Traces to**: REQ-GRAPH-003, REQ-PIPE-003
+
+### ASSERT-PSM-009: Pipeline resumes from failed node on re-trigger
+
+- **Given**: A pipeline run that failed at node N with pipeline state persisted to GitHub
+- **When**: The pipeline is re-triggered (label re-applied or CLI invocation)
+- **Then**: The pipeline reconstructs state from GitHub and resumes from node N without re-executing completed nodes
+- **Traces to**: REQ-PIPE-009, REQ-EXEC-002
+
+### ASSERT-PSM-010: Pipeline cancellation terminates active nodes
+
+- **Given**: A pipeline running with node N active
+- **When**: The `cogworks:cancel` label is applied (or `/cogworks cancel` command issued)
+- **Then**: Active node execution is terminated, current state is written to GitHub, a summary comment is posted, and the working directory is cleaned up
+- **Traces to**: REQ-EXEC-005
+
+### ASSERT-PSM-011: Duplicate pipeline prevention
+
+- **Given**: A pipeline already running for work item #42
+- **When**: A new trigger event arrives for work item #42
+- **Then**: The new trigger is rejected with a comment explaining the conflict (or queued, per configuration)
+- **Traces to**: REQ-PIPE-008
 
 ---
 
@@ -148,14 +176,14 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ### ASSERT-PLAN-004: Interface coverage verified
 
-- **Given**: A plan where some interface from the Interface Design stage is not covered by any sub-work-item
+- **Given**: A plan where some interface from the Interface Design node is not covered by any sub-work-item
 - **When**: The plan is validated
 - **Then**: Validation fails with a specific error identifying the uncovered interface
 - **Traces to**: REQ-PLAN-006
 
 ### ASSERT-PLAN-005: All interfaces covered
 
-- **Given**: A plan where every interface from the Interface Design stage is covered by at least one sub-work-item
+- **Given**: A plan where every interface from the Interface Design node is covered by at least one sub-work-item
 - **When**: Interface coverage is checked
 - **Then**: Validation passes
 - **Traces to**: REQ-PLAN-006
@@ -197,7 +225,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Given**: A pipeline where accumulated token cost plus the next call's estimated cost exceeds the budget
 - **When**: The budget check runs before the LLM call
 - **Then**: The call is refused, and the pipeline halts with a cost report
-- **And**: The cost report includes per-stage and per-sub-work-item breakdown
+- **And**: The cost report includes per-node and per-sub-work-item breakdown
 - **Traces to**: REQ-CODE-004
 
 ### ASSERT-CODE-006: Context truncation follows priority order
@@ -228,7 +256,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ### ASSERT-SCEN-002: Scenario specifications excluded from code generation context
 
-- **Given**: Context assembly for code generation stage
+- **Given**: Context assembly for code generation node
 - **When**: The context package is built
 - **Then**: No scenario specification files are included, even if they are relevant to the affected modules
 - **Traces to**: REQ-SCEN-002 (holdout principle)
@@ -271,7 +299,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 ### ASSERT-SCEN-008: No applicable scenarios skips validation
 
 - **Given**: A sub-work-item with no applicable scenarios
-- **When**: Scenario validation stage is reached
+- **When**: Scenario validation node is reached
 - **Then**: Validation is skipped (not failed), and the pipeline proceeds to review gate
 - **Traces to**: REQ-SCEN-007
 
@@ -345,21 +373,21 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 ### ASSERT-IDEM-001: Duplicate PR creation is prevented
 
 - **Given**: A specification PR already exists for work item #42
-- **When**: The step function re-processes work item #42 at the architecture stage
+- **When**: The step function re-processes work item #42 at the architecture node
 - **Then**: No duplicate PR is created; the existing PR is detected and used
 - **Traces to**: REQ-PIPE-004
 
 ### ASSERT-IDEM-002: Duplicate sub-issue creation is prevented
 
 - **Given**: Sub-work-item issues already exist for work item #42
-- **When**: The step function re-processes work item #42 at the planning stage
+- **When**: The step function re-processes work item #42 at the planning node
 - **Then**: No duplicate issues are created; the existing issues are detected and used
 - **Traces to**: REQ-PIPE-004
 
 ### ASSERT-IDEM-003: Label transitions are safe to repeat
 
-- **Given**: Work item #42 already has `cogworks:stage:architecture` label
-- **When**: The step function attempts to set `cogworks:stage:architecture` again
+- **Given**: Work item #42 already has `cogworks:node:architecture` label
+- **When**: The step function attempts to set `cogworks:node:architecture` again
 - **Then**: No error occurs; the operation is a no-op
 - **Traces to**: REQ-PIPE-004
 
@@ -431,10 +459,10 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: Cross-domain constraint validation executes first (deterministic, no tokens), before any LLM review pass
 - **Traces to**: REQ-XVAL-001
 
-### ASSERT-XVAL-004: Architecture stage checks cross-domain constraints
+### ASSERT-XVAL-004: Architecture node checks cross-domain constraints
 
 - **Given**: A proposed architecture that would push CAN bus load over the declared maximum
-- **When**: Architecture stage validation runs
+- **When**: Architecture node validation runs
 - **Then**: The constraint violation is caught before implementation begins
 - **Traces to**: REQ-XVAL-005
 
@@ -459,7 +487,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 ### ASSERT-XDOM-001: Registry validates on every pipeline run
 
 - **Given**: A pipeline run starts
-- **When**: Registry validation runs (before any stage)
+- **When**: Registry validation runs (before any node)
 - **Then**: All interface definitions are checked against schema, cross-references validated, conflicts detected
 - **Traces to**: REQ-XDOM-005
 
@@ -468,7 +496,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Given**: An interface definition that doesn't conform to the schema
 - **When**: Registry validation runs
 - **Then**: Validation fails with a clear error identifying the malformed definition
-- **And**: No pipeline stages execute
+- **And**: No pipeline nodes execute
 - **Traces to**: REQ-XDOM-005
 
 ### ASSERT-XDOM-003: Version mismatch detected
@@ -519,7 +547,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 ### ASSERT-CPACK-001: Matched pack is always loaded
 
 - **Given**: A work item whose classification labels match Context Pack P's trigger definition
-- **When**: Context Pack selection runs at the Architecture stage
+- **When**: Context Pack selection runs at the Architecture node
 - **Then**: Pack P is loaded (domain knowledge, safe patterns, anti-patterns, required artefacts)
 - **And**: The loaded pack is recorded in the audit trail
 - **Traces to**: REQ-CPACK-001, REQ-CPACK-005, REQ-CPACK-007
@@ -549,7 +577,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 ### ASSERT-CPACK-005: Missing required artefact is a blocking finding
 
 - **Given**: Pack P declares required artefact "unsafe usage justification" and the generated output does not contain it
-- **When**: The Review stage runs required artefact checking
+- **When**: The Review node runs required artefact checking
 - **Then**: A blocking finding is produced identifying pack P and the missing artefact
 - **And**: PR creation does not occur
 - **Traces to**: REQ-CPACK-006, REQ-REVIEW-004
@@ -557,14 +585,14 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 ### ASSERT-CPACK-006: Present required artefact is not a finding
 
 - **Given**: Pack P declares required artefact A and the generated output contains A
-- **When**: The Review stage runs required artefact checking
+- **When**: The Review node runs required artefact checking
 - **Then**: No finding is produced for this artefact
 - **Traces to**: REQ-CPACK-006
 
-### ASSERT-CPACK-007: Pack content included in context from Architecture stage onward
+### ASSERT-CPACK-007: Pack content included in context from Architecture node onward
 
-- **Given**: Context Pack P is loaded for a work item at the Architecture stage
-- **When**: Context assembly runs for the Architecture stage and subsequent stages
+- **Given**: Context Pack P is loaded for a work item at the Architecture node
+- **When**: Context assembly runs for the Architecture node and subsequent nodes
 - **Then**: Pack P's domain knowledge, safe patterns, and anti-patterns are included in context packages
 - **Traces to**: REQ-CPACK-008
 
@@ -626,3 +654,126 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: A `PROTECTED_PATH_VIOLATION` event is emitted
 - **And**: PR creation does not occur
 - **Traces to**: REQ-CONST-013
+
+---
+
+## Graph Execution
+
+### ASSERT-GRAPH-001: Edge conditions determine downstream activation
+
+- **Given**: Node A completes with output O, and edges A→B (condition: `O.status == "pass"`) and A→C (condition: `O.status == "fail"`)
+- **When**: Edge condition evaluation runs
+- **Then**: Only the edge whose condition is satisfied activates its target node
+- **And**: The non-matching edge's target node remains pending
+- **Traces to**: REQ-EDGE-001, REQ-PIPE-003
+
+### ASSERT-GRAPH-002: Fan-out activates multiple parallel nodes
+
+- **Given**: Node A completes with edges to B and C (both unconditional, `all-matching` mode)
+- **When**: Edge condition evaluation runs
+- **Then**: Both B and C are activated and may execute concurrently
+- **And**: Both B and C have `cogworks:node:<name>` labels applied
+- **Traces to**: REQ-GRAPH-001, REQ-EXEC-006
+
+### ASSERT-GRAPH-003: Fan-in waits for all upstream nodes
+
+- **Given**: Node D declares inputs from nodes B and C; node B has completed but C has not
+- **When**: The step function evaluates D's readiness
+- **Then**: Node D remains pending (not activated)
+- **And**: When C later completes, the next step function invocation activates D
+- **Traces to**: REQ-EXEC-006
+
+### ASSERT-GRAPH-004: Rework edge tracks traversal count
+
+- **Given**: A rework edge from Review→CodeGen with max_traversals: 3, and 2 prior traversals
+- **When**: Review fails and the rework edge condition is true
+- **Then**: CodeGen is re-activated (traversal count becomes 3)
+- **And**: On the next Review failure, the rework edge is NOT taken (max reached) and the overflow action (escalate) is triggered
+- **Traces to**: REQ-EDGE-003
+
+### ASSERT-GRAPH-005: Cycle without termination condition is rejected at configuration load
+
+- **Given**: A pipeline configuration with node A→B→A (cycle) but no `max_traversals` on any edge in the cycle
+- **When**: The Pipeline Configuration Manager validates the graph
+- **Then**: Validation fails with an error identifying the unterminated cycle
+- **And**: The pipeline does not start
+- **Traces to**: REQ-GRAPH-001, REQ-GRAPH-004
+
+### ASSERT-GRAPH-006: LLM-evaluated edge condition falls back on LLM failure
+
+- **Given**: An LLM-evaluated edge condition with fallback `edge_taken: false`
+- **When**: The LLM call fails (timeout, API error, etc.)
+- **Then**: The fallback is applied (edge not taken)
+- **And**: The fallback application is recorded in the audit trail
+- **Traces to**: REQ-EDGE-001
+
+### ASSERT-GRAPH-007: Parallel execution respects max concurrent LLM calls
+
+- **Given**: Nodes B, C, D, and E are all eligible for concurrent execution (all are LLM nodes), and max concurrent LLM calls is configured as 3
+- **When**: The Graph Execution Engine schedules node execution
+- **Then**: At most 3 nodes execute LLM calls simultaneously; the 4th waits until one completes
+- **Traces to**: REQ-EXEC-006
+
+### ASSERT-GRAPH-008: Parallel cost budget is atomic
+
+- **Given**: Nodes B and C executing in parallel, pipeline cost budget remaining is 100 tokens, B estimates 80 tokens, C estimates 80 tokens
+- **When**: Both nodes attempt to acquire budget simultaneously
+- **Then**: Only one node's LLM call is approved; the other is denied (budget exceeded)
+- **And**: The denied node receives a budget exceeded error
+- **Traces to**: REQ-EXEC-006, REQ-CODE-004
+
+### ASSERT-GRAPH-009: Pipeline state written to GitHub at each node boundary
+
+- **Given**: Node A completes successfully
+- **When**: The pipeline executor processes node A's completion
+- **Then**: The full pipeline state (active/completed/pending/failed nodes, traversal counts, cumulative cost) is written as a JSON document to a GitHub comment
+- **Traces to**: REQ-EXEC-002
+
+### ASSERT-GRAPH-010: Spawning node is non-blocking
+
+- **Given**: A spawning node S in the pipeline graph with a downstream edge to node T
+- **When**: Spawning node S completes (whether issues were created or not)
+- **Then**: Downstream node T is activated; spawning node completion does not depend on created issue outcomes
+- **Traces to**: REQ-NODE-004
+
+### ASSERT-GRAPH-011: Pipeline configuration selects named pipeline from classification
+
+- **Given**: Pipeline configuration defines pipelines named "standard" and "hotfix", and intake classification outputs `pipeline: "hotfix"`
+- **When**: The Pipeline Configuration Manager selects the pipeline
+- **Then**: The "hotfix" pipeline graph is used for the remainder of the run
+- **Traces to**: REQ-GRAPH-004
+
+### ASSERT-GRAPH-012: Partial parallel failure continues other nodes
+
+- **Given**: Nodes B and C executing in parallel; node B fails with `abort_siblings_on_failure: false`
+- **When**: Node B reports failure
+- **Then**: Node C continues executing; node B enters `failed` state
+- **And**: Downstream nodes that depend only on C can still proceed
+- **Traces to**: REQ-EXEC-006
+
+### ASSERT-GRAPH-013: Abort-siblings parallel failure stops sibling nodes
+
+- **Given**: Nodes B and C executing in parallel; node B fails with `abort_siblings_on_failure: true`
+- **When**: Node B reports failure
+- **Then**: Node C is terminated (in-progress LLM calls allowed to complete)
+- **And**: The pipeline enters an error state for the failed sub-graph
+- **Traces to**: REQ-EXEC-006
+
+### ASSERT-GRAPH-014: Dead-end node triggers pipeline halt with clear error
+
+- **Given**: Node A completes successfully
+- **When**: All outgoing edges from A have conditions that evaluate to false
+- **Then**: No downstream nodes are activated
+- **And**: The pipeline posts a warning comment identifying A as a dead-end node
+- **And**: The pipeline halts with a structured error (not silently stalls)
+- **Traces to**: REQ-EXEC-003, EDGE-064
+
+### ASSERT-GRAPH-015: Graph traversal state is fully restored on resume
+
+- **Given**: A pipeline run is interrupted mid-graph and has persisted its state to GitHub
+- **When**: The pipeline is reinvoked for the same work item
+- **Then**: The orchestrator reads the persisted pipeline state JSON from the GitHub issue
+- **And**: Per-node traversal counts (rework cycle counts) are restored
+- **And**: Fan-out completion state is restored (which upstream nodes have finished)
+- **And**: Execution resumes from the failed or incomplete node, not from the start
+- **Traces to**: REQ-EXEC-004, ASSERT-PSM-009

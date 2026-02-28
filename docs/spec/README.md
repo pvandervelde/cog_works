@@ -58,5 +58,5 @@ CogWorks provides advanced validation, context management, and extensibility cap
 6. **Domain services as external processes** — domain services run as separate binaries communicating over Unix sockets (default) or HTTP/gRPC; no built-in privileged path
 7. **Clean architecture** — business logic depends only on abstractions; infrastructure implementations are swappable
 8. **Cross-domain interface registry** — human-authored, version-controlled interface contracts enable deterministic cross-domain constraint validation
-9. **Context Packs for domain knowledge** — structured, versioned domain knowledge loaded deterministically at Architecture stage based on classification
+9. **Context Packs for domain knowledge** — structured, versioned domain knowledge loaded deterministically at Architecture node based on classification
 10. **Constitutional security layer** — non-overridable rules loaded before any LLM call; injection detection halts pipeline; scope enforcement prevents unauthorized capabilities

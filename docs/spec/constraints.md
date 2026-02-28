@@ -6,7 +6,7 @@ These constraints MUST be enforced during implementation. They inform the interf
 
 ## Type System
 
-- **Branded/newtype identifiers**: All domain identifiers must use distinct types that cannot be accidentally interchanged. `WorkItemId`, `SubWorkItemId`, `PipelineStageLabel`, `BranchName`, etc. must not be bare strings or integers.
+- **Branded/newtype identifiers**: All domain identifiers must use distinct types that cannot be accidentally interchanged. `WorkItemId`, `SubWorkItemId`, `PipelineNodeLabel`, `BranchName`, `PipelineName`, `EdgeId`, etc. must not be bare strings or integers.
 - **Result-based error handling**: All domain operations must return `Result<T, E>`. Business errors are values in the `Err` variant, not panics or exceptions.
 - **Exhaustive error types**: Each component's error type must be an enum covering all failure modes. No catch-all `Other(String)` variants in domain error types. Infrastructure error types may have a catch-all for truly unexpected failures.
 - **No `unwrap()` in production code**: All `Option` and `Result` values must be explicitly handled. `unwrap()`, `expect()` are allowed only in tests.
@@ -20,12 +20,23 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **Abstractions are traits**: External system interfaces are defined as Rust traits. Business logic depends on these traits via generics or trait objects.
 - **Infrastructure implements traits**: Each infrastructure module implements one or more abstraction traits. Only infrastructure modules import external crates.
 - **No circular dependencies**: Module dependency graph must be a DAG. Business logic → abstractions ← infrastructure. Abstractions never depend on business logic or infrastructure.
-- **Stage executors are orchestration, not business logic**: Stage executors coordinate calls between business logic, abstractions, and other stage executors. They contain sequencing logic, not domain rules.
+- **Node implementations are orchestration, not business logic**: Node implementations coordinate calls between business logic, abstractions, and other components. They contain sequencing logic, not domain rules.
 - **Scenario holdout enforcement**: The Context Assembler MUST enforce that scenario specifications are never included in code generation context packages. This is a hard constraint, not advisory. The configuration must explicitly list scenario directories to exclude.
 - **Domain services are external processes**: CogWorks MUST NOT contain domain-specific code. All domain operations (validate, normalise, review_rules, simulate, validate_deps, extract_interfaces, dependency_graph) are delegated to external domain services via the Extension API.
 - **No built-in privileged path**: The Rust domain service MUST use the Extension API like any other domain service. If the API is insufficient for the Rust domain service, the API must be improved, not bypassed.
 - **Interface registry is human-authored**: CogWorks MUST NOT create or modify interface definitions autonomously. It MAY suggest additions as recommendations for human review.
 - **Domain services do not communicate directly**: CogWorks mediates all cross-domain interactions. Domain services do not invoke or depend on each other.
+
+---
+
+## Pipeline Graph
+
+- **Every cycle must have a termination condition**: The pipeline configuration validator must reject any graph containing a cycle without an explicit `max_traversals` on at least one edge in the cycle. There must be no path to infinite execution.
+- **Cost budget is shared across parallel nodes**: When nodes execute concurrently, budget acquisition must be atomic. Two nodes must not both be approved if their combined estimated cost exceeds the remaining budget.
+- **Pipeline state is recoverable from GitHub**: The pipeline working directory is a performance optimisation. All pipeline state must be reconstructable from GitHub artifacts (issue comments, labels, PRs). Loss of the working directory must not require restarting the pipeline from scratch.
+- **Node inputs must be verified before execution**: The graph execution engine must verify that all declared inputs for a node are available before starting the node. Missing inputs must produce a clear error identifying the node and the missing input.
+- **Edge condition evaluation is audited**: Every edge condition evaluation (deterministic, LLM-evaluated, or composite) must be recorded in the audit trail with the condition definition, the evaluation input, and the result.
+- **Pipeline configuration is validated at load time**: The pipeline configuration must be fully validated when loaded (before any node executes). Invalid configurations must produce clear errors and prevent the pipeline from starting.
 
 ---
 
@@ -44,7 +55,9 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **Business logic: 100% unit test coverage**: Every function in business logic modules must have tests covering happy paths, error cases, and edge conditions. No mocks needed — pure input/output.
 - **Abstraction traits: contract tests**: Each trait must have a test suite that any implementation must pass. Written as generic test functions parameterized by the trait.
 - **Infrastructure: integration tests**: Each infrastructure implementation must be tested against the real external system (or a faithful simulation). Use testcontainers, mock HTTP servers, or temporary git repos as appropriate.
-- **Stage executors: integration tests with mocks**: Test the orchestration logic by providing mock implementations of abstractions. Verify the correct sequence of calls and state transitions.
+- **Node implementations: integration tests with mocks**: Test the orchestration logic by providing mock implementations of abstractions. Verify the correct sequence of calls and state transitions.
+- **Graph execution tests**: The graph execution engine must have tests covering: linear graph traversal, fan-out (parallel activation), fan-in (waiting for all upstreams), rework edges with traversal counting, cycle termination enforcement, edge condition evaluation (deterministic, LLM-evaluated with fallback, composite), partial failure handling (`abort_siblings_on_failure` true and false), pipeline state serialisation and resume from failure, configuration validation (unterminated cycles, orphan nodes).
+- **Pipeline configuration validation tests**: The pipeline configuration loader must have tests for: valid TOML parsing, missing file (falls back to default), malformed TOML, cycles without termination conditions, unreachable nodes, duplicate node names, invalid edge source/target references.
 - **Test naming**: `test_<function>_<scenario>_<expected>` (per `.tech-decisions.yml`).
 - **No test pollution**: Tests must not depend on external state. Each test sets up its own context and tears it down.
 - **Scenarios test generated code, not CogWorks**: Scenario validation tests the code generated by CogWorks. CogWorks' own correctness is tested through unit/integration/E2E tests as defined in testing.md.
@@ -71,7 +84,7 @@ These constraints MUST be enforced during implementation. They inform the interf
 - **Minimum-privilege GitHub token**: The token must have only the permissions needed: issues (read/write), pull requests (read/write), contents (read/write), labels (read/write). No admin access.
 - **No secrets in context packages**: LLM API keys, GitHub tokens, and any other credentials must never appear in context packages, audit trails, or generated code.
 - **No secrets in generated code**: Code generation must use placeholder values for secrets, with documentation on what needs to be configured.
-- **Domain service isolation**: Domain services run as separate processes. CogWorks does not pass secrets to domain services. Domain services receive only the Extension API context (work item info, stage, repository path, relevant interface contracts).
+- **Domain service isolation**: Domain services run as separate processes. CogWorks does not pass secrets to domain services. Domain services receive only the Extension API context (work item info, node, repository path, relevant interface contracts).
 - **Prompt injection awareness**: Issue bodies and repository content are untrusted input. The constitutional layer is the primary defense; schema validation of LLM outputs is the secondary defense. Neither is sufficient alone.
 - **Constitutional rules are mandatory**: Constitutional rules MUST be loaded before any LLM call on every pipeline run. No configuration option may disable this. Failure to load constitutional rules halts the pipeline. This is not a security option — it is a hard constraint.
 - **Protected paths**: CogWorks MUST NOT create or modify files matching protected path patterns through the normal pipeline. Protected paths include at minimum: the constitutional rules file, prompt template files, scenario specification files, and Extension API schemas. The protected path list is version-controlled and configurable.
@@ -108,9 +121,9 @@ These constraints MUST be enforced during implementation. They inform the interf
 
 ## Observability
 
-- **Structured logging**: All log output must be structured (JSON). Each log entry must include: `pipeline_id` (work item number), `stage`, `sub_work_item` (if applicable), `action`, `result`, `duration_ms`.
+- **Structured logging**: All log output must be structured (JSON). Each log entry must include: `pipeline_id` (work item number), `node`, `sub_work_item` (if applicable), `action`, `result`, `duration_ms`.
 - **Audit trail completeness**: Every LLM call, validation result, state transition, and cost event must appear in the audit trail. The trail must be sufficient to reconstruct the full decision history.
-- **Cost visibility**: Token usage and cost must be tracked per-call, per-stage, and per-pipeline. The final cost report must be posted as a comment on the work item.
+- **Cost visibility**: Token usage and cost must be tracked per-call, per-node, and per-pipeline. The final cost report must be posted as a comment on the work item.
 - **Constitutional event visibility**: Every INJECTION_DETECTED, SCOPE_UNDERSPECIFIED, SCOPE_AMBIGUOUS, and PROTECTED_PATH_VIOLATION event must appear in the audit trail with full context (work item ID, source document, offending content or missing capability). These events are never silently suppressed.
 - **Context Pack audit**: The names, version (git ref), and trigger match reasons for all loaded Context Packs must be recorded in the audit trail and included in the PR description.
 
