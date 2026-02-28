@@ -172,6 +172,21 @@ These constraints MUST be enforced during implementation. They inform the interf
 
 ---
 
+## Tool Scoping Constraints
+
+- **Tool profile is mandatory for LLM nodes**: Every pipeline node that invokes an LLM MUST have a resolved tool profile before execution. If no explicit profile is configured, the built-in default profile for the node type MUST be applied. A node MUST NOT execute with an undefined or empty tool profile.
+- **Defence in depth is mandatory**: Tool access control MUST be enforced at all three layers independently: (1) orchestrator-level tool filtering (unscoped tools never appear in LLM tool lists), (2) tool-level scope enforcement (each tool validates parameters against scope constraints before executing), (3) OS-level sandboxing for write-capable nodes. Failure at one layer MUST NOT compromise the others.
+- **Only Code Generation has core write access**: Among the 7 core pipeline nodes, only Code Generation has filesystem write and git commit tools in its default profile. All other core nodes are read-only by default. Pipeline configuration MAY grant write access to custom nodes, but this is an explicit opt-in recorded in the audit trail.
+- **Shell execution is restricted**: The `shell.run_restricted` tool executes infrastructure commands (build, test, lint) from an explicit allowlist — NOT arbitrary LLM-generated shell commands. The allowed command list is defined in the tool profile scope parameters, not by the LLM.
+- **Network access is opt-in**: The `net.fetch` tool is NOT enabled in any default profile. Enabling network access requires explicit configuration in the tool profile. Network-capable profiles MUST specify URL allowlists.
+- **Protected path enforcement at tool level**: Filesystem write tools (`fs.write`, `fs.create`, `fs.delete`) MUST refuse operations targeting protected paths (constitutional rules, prompt templates, scenario specs, Extension API schemas) regardless of the node's profile configuration. This is a hard constraint that cannot be overridden by profile configuration.
+- **Scope parameter template resolution is strict**: Template variables (`{{variable}}`) in scope parameters MUST be resolved from pipeline state before node activation. Unresolvable variables MUST produce a clear error and prevent node activation. Empty-string substitution for missing variables is NOT permitted.
+- **Skill scope enforcement is unconditional**: Tool calls within skill execution MUST be validated against the calling node's tool profile. A skill MUST NOT bypass scope enforcement. This constraint exists because skills are deterministic scripts — but the node's effective scope may change between runs.
+- **Adapter tools are regular tools**: Adapter-generated tool definitions MUST participate in the same tool registry, profile scoping, and scope enforcement as built-in tools. No special bypass for adapter tools.
+- **Tool profile validation at load time**: Tool profile definitions are validated when the pipeline configuration is loaded. Profiles that reference nonexistent tools produce warnings (not errors, to allow profile reuse across repos with different adapter sets). Profiles with invalid scope parameter schemas produce errors and prevent pipeline start.
+
+---
+
 ## Code Style (Rust-Specific)
 
 - **Follow Rust conventions**: `snake_case` for functions/variables, `PascalCase` for types, `SCREAMING_SNAKE_CASE` for constants (per `.tech-decisions.yml`).

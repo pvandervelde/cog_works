@@ -295,6 +295,8 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | CW-R11-M3 | Domain service test execution runs in a network-restricted sandbox — no outbound network except to DTU twins on localhost. | Preventive | Planned |
 | CW-R11-M4 | Container network policies enforce isolation. CogWorks container can reach: LLM API (outbound HTTPS), GitHub API (outbound HTTPS), domain service sockets (local). Nothing else. | Preventive | Planned |
 | CW-R11-M5 | Separate credential store for CogWorks with only CogWorks-relevant secrets. No shared credential store with production systems. | Preventive | Planned |
+| CW-R11-M6 | Tool profile scoping limits each pipeline node to the minimum set of tools it needs. Network access (`net.fetch`) is opt-in and requires explicit URL allowlists. Shell execution is restricted to pre-configured command allowlists. | Preventive | Designed |
+| CW-R11-M7 | OS-level sandboxing (Layer 3) for Code Generation constrains process-level filesystem and network access independently of tool-level enforcement. | Preventive | Designed |
 
 **Residual Risk:** Low with proper isolation. Requires discipline during deployment setup to not take shortcuts.
 
@@ -319,6 +321,7 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | CW-R12-M3 | Constitutional layer treats all issue body content as data, not instructions. Injection attempts are detected and halt the pipeline (see CW-R18 mitigations). | Preventive | Planned |
 | CW-R12-M4 | Security review pass in the review gate checks for common backdoor patterns, unauthorized network calls, and data exfiltration indicators. | Detective | Designed |
 | CW-R12-M5 | Scope enforcement prevents generation of capabilities not in the approved specification. | Preventive | Planned |
+| CW-R12-M6 | Tool scope enforcement limits the LLM's runtime capabilities: filesystem writes constrained to `allowed_write_paths`, git commits to `branch_pattern`, domain service calls to `allowed_services`. Even if the LLM is manipulated by a crafted issue, it cannot write outside its scoped paths. | Preventive | Designed |
 
 **Residual Risk:** Low-moderate. The combination of authorised user filtering, injection detection, scope enforcement, and security review provides defence-in-depth. Subtle social engineering attacks against human reviewers remain a risk beyond CogWorks' scope.
 
@@ -458,6 +461,7 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | CW-R18-M3 | Constitutional layer rule: specification scope is binding. CogWorks cannot implement capabilities not in the approved spec. A work item would need to explicitly specify changes to protected files, which human reviewers would catch. | Preventive | Planned |
 | CW-R18-M4 | Audit trail records all files modified by each pipeline run. Periodic review of modified file lists against protected path patterns detects any violation of CW-R18-M1. | Detective | Planned |
 | CW-R18-M5 | Pre-PR validation: before creating a PR, CogWorks checks whether any generated files match protected path patterns. If they do, the pipeline halts with a `PROTECTED_PATH_VIOLATION` diagnostic rather than creating the PR. | Preventive | Planned |
+| CW-R18-M6 | Tool-level protected path enforcement: `fs.write`, `fs.create`, and `fs.delete` tools refuse operations targeting protected paths regardless of the calling node's profile configuration. This is enforced at the tool implementation level, independent of the pre-PR validation. | Preventive | Designed |
 
 **Residual Risk:** Low with mitigations. The combination of constitutional rules, protected path enforcement, CODEOWNERS, and pre-PR validation creates multiple independent barriers. The highest residual risk is a novel path that is functionally equivalent to a protected path but doesn't match the pattern (e.g., a new config file that influences behaviour).
 
@@ -544,11 +548,11 @@ The following spec documents contain mitigations or design decisions informed by
 | CW-R07 | architecture.md (Cross-Domain Constraint Validation), requirements.md (REQ-XVAL) |
 | CW-R08–09 | vocabulary.md (Digital Twin), operations.md (twin maintenance) |
 | CW-R10 | requirements.md (REQ-CODE-004), operations.md (cost management) |
-| CW-R11 | security.md (THREAT-003, THREAT-004), constraints.md (security) |
-| CW-R12 | security.md (THREAT-001, THREAT-015), requirements.md (REQ-CONST) |
+| CW-R11 | security.md (THREAT-003, THREAT-004, THREAT-019), constraints.md (security, tool scoping) |
+| CW-R12 | security.md (THREAT-001, THREAT-015, THREAT-019), requirements.md (REQ-CONST, REQ-ENFORCE) |
 | CW-R13 | requirements.md (REQ-AUDIT), operations.md (audit trail) |
 | CW-R15 | constraints.md (pyramid summary accuracy), vocabulary.md (Pyramid Summary Levels) |
-| CW-R18 | requirements.md (REQ-CONST), security.md (THREAT-015) |
+| CW-R18 | requirements.md (REQ-CONST, REQ-TOOL-011, REQ-ENFORCE), security.md (THREAT-015, THREAT-017, THREAT-019) |
 | CW-R19 | edge-cases.md (EDGE-006a, EDGE-006b, EDGE-057, EDGE-058, EDGE-064), constraints.md (Pipeline Graph), assertions.md (ASSERT-GRAPH-004, ASSERT-GRAPH-005, ASSERT-GRAPH-006, ASSERT-GRAPH-014), security.md (THREAT-018) |
 | CW-R20 | constraints.md (Observability — metric completeness), assertions.md (ASSERT-METRIC-001, ASSERT-METRIC-002), operations.md (Performance Metrics) |
 | CW-R21 | operations.md (Review Cadence, Improvement Loop) |

@@ -417,6 +417,100 @@ For integration tests that do not need to exercise alignment logic:
 
 ---
 
+## Tool Scoping and Enforcement Tests
+
+### Tool Profile Resolution Tests
+
+- **Default profile application**: No `[tool_profiles]` in config. Assert: each core node receives its built-in default profile with expected tools.
+- **Profile override**: Base profile is `reader`; node has `tool_overrides` adding `fs.write` with `allowed_write_paths`. Assert: resolved profile includes base tools plus `fs.write` with specified scope.
+- **Template variable resolution**: Profile with `allowed_write_paths = ["src/{{affected_modules}}/**"]` and pipeline state `affected_modules = "auth"`. Assert: resolved path is `["src/auth/**"]`.
+- **Unresolvable template variable**: Profile references `{{undefined_var}}`. Assert: profile resolution fails with structured error; node does not activate.
+- **Unknown tool in profile**: Profile references `nonexistent.tool`. Assert: warning logged; profile resolves without the unknown tool.
+
+### Tool Filtering Tests (Layer 1)
+
+- **Only profiled tools in LLM call**: Node profile includes `fs.read`, `search.code`. Assert: LLM tool list contains exactly these tools and no others.
+- **Empty profile**: Node has a profile with no tools. Assert: LLM call includes no tools (but the call itself still proceeds for nodes that may operate without tools).
+- **Adapter tools in profile**: Profile includes an adapter-generated tool. Assert: tool appears in LLM tool list with correct schema.
+- **Skill tools in profile**: Node has Active skills. Assert: `skill.list`, `skill.run`, `skill.inspect` appear in tool list.
+
+### Scope Enforcement Tests (Layer 2)
+
+- **Path within scope**: `fs.write` with path inside `allowed_write_paths`. Assert: operation proceeds.
+- **Path outside scope**: `fs.write` with path outside `allowed_write_paths`. Assert: operation rejected, structured error returned, `SCOPE_VIOLATION` event in audit.
+- **Denied path takes precedence**: Path matches both `allowed_write_paths` and `denied_write_paths`. Assert: operation rejected (deny takes precedence).
+- **Protected path override attempt**: `fs.write` targeting `.cogworks/constitutional-rules.md` even though profile allows the path. Assert: operation rejected with `PROTECTED_PATH_VIOLATION`.
+- **Branch pattern enforcement**: `git.commit` on branch not matching `branch_pattern`. Assert: commit rejected.
+- **Service scope enforcement**: `domain.validate` with service name not in `allowed_services`. Assert: invocation rejected.
+- **Violation threshold**: 5 scope violations in one node execution. Assert: audit warning emitted after 5th violation.
+
+### Tool Audit Tests
+
+- **Invocation recording**: Tool call succeeds. Assert: audit trail entry contains tool name, parameters, scope parameters, result, duration.
+- **Violation recording**: Scope violation occurs. Assert: `SCOPE_VIOLATION` event in audit with tool name, attempted params, violated constraint.
+- **Usage report**: Pipeline completes. Assert: pipeline summary includes tool usage report with per-tool counts, violation counts, invocation type breakdown.
+
+---
+
+## Skill Executor Tests
+
+### Skill Invocation Tests
+
+- **Valid invocation**: Active skill with valid parameters. Assert: skill executes, tool calls proceed through scope enforcement, result returned.
+- **Missing required parameter**: Skill invoked without a required parameter. Assert: execution rejected with structured error before any tool calls.
+- **Invalid parameter type**: Skill invoked with wrong parameter type. Assert: execution rejected with structured error.
+- **Scope violation within skill**: Skill calls `fs.write` to path outside node's scope. Assert: entire skill execution fails, scope violation recorded.
+
+### Skill Lifecycle Tests
+
+- **Only Active skills visible**: Skills in Proposed, Reviewed, Deprecated, Retired states. Assert: `skill.list` returns only Active skills (and Deprecated with warning).
+- **Deprecated skill warning**: Invoking a Deprecated skill. Assert: execution proceeds with warning referencing alternative.
+- **Retired skill rejected**: Invoking a Retired skill. Assert: execution rejected with structured error.
+- **Auto-deprecation**: Skill with 85% success rate (below 90% threshold). Assert: lifecycle state changes to Deprecated with `success_rate_below_threshold` reason.
+
+### Mock Skill Executor
+
+For integration tests that do not need to exercise skill logic:
+
+- Returns configurable skill execution results (success/failure)
+- Records all invocations for assertion
+- Default behavior: always succeeds
+
+---
+
+## Adapter Generator Tests
+
+### Generation Tests
+
+- **OpenAPI 3.1 generation**: Valid OpenAPI spec with 3 endpoints. Assert: 3 TOML tool definition files generated with correct namespacing.
+- **EAB schema generation**: Valid EAB JSON Schema. Assert: tool definitions generated with correct parameter schemas.
+- **Schema conformance**: Generated tool definitions. Assert: all conform to the tool definition schema.
+
+### Drift Detection Tests
+
+- **No drift**: Generated adapters match source spec. Assert: drift check reports no differences.
+- **Removed endpoint**: Source spec has fewer endpoints than generated adapters. Assert: drift report identifies removed endpoint.
+- **Changed parameter**: Source spec has a different parameter type for an endpoint. Assert: drift report identifies the parameter change.
+
+---
+
+## Progressive Discovery Tests
+
+### Activation Tests
+
+- **Above threshold**: Node with 20 tools. Assert: compact index presented, meta-tools available.
+- **Below threshold**: Node with 10 tools. Assert: full schemas presented, no meta-tools.
+- **Exact threshold**: Node with exactly 15 tools (default threshold). Assert: compact index activated.
+
+### Meta-Tool Tests
+
+- **tools.search**: Search query "validate". Assert: returns matching tools with descriptions.
+- **tools.schema**: Request schema for specific tool. Assert: returns full JSON Schema.
+- **tools.call**: Invoke tool via meta-tool. Assert: tool executes with scope enforcement.
+- **Skill priority**: Search matching both a skill and raw tool. Assert: skill ranked first.
+
+---
+
 ## Coverage Requirements
 
 | Layer | Coverage Target | Measured By |

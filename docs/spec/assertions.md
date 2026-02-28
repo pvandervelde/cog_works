@@ -938,3 +938,251 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: The LLM call uses a model different from model X
 - **Or**: If only one model is available, a warning is logged and the check proceeds with the same model
 - **Traces to**: REQ-ALIGN-004, CW-R02
+
+---
+
+## Tool Scoping and Enforcement Assertions
+
+### ASSERT-TOOL-001: Unscoped tools are invisible to LLM
+
+- **Given**: A pipeline node with a tool profile that includes `fs.read`, `fs.list`, and `search.code` but NOT `fs.write`
+- **When**: The LLM call is constructed for this node
+- **Then**: The tool list in the LLM request contains only `fs.read`, `fs.list`, and `search.code`
+- **And**: `fs.write` does not appear in any form (not in tool list, not in descriptions, not referenced)
+- **Traces to**: REQ-TOOL-002, REQ-ENFORCE-001
+
+### ASSERT-TOOL-002: Scope enforcement rejects out-of-scope path
+
+- **Given**: A Code Generation node with `allowed_write_paths` set to `["src/modules/auth/**"]`
+- **When**: The LLM invokes `fs.write` with path `src/modules/payment/handler.rs`
+- **Then**: The tool rejects the invocation with a structured error explaining the path constraint
+- **And**: A `SCOPE_VIOLATION` event is recorded in the audit trail
+- **And**: The file is NOT modified
+- **Traces to**: REQ-TOOL-011, REQ-ENFORCE-002, REQ-TOOL-AUDIT-002
+
+### ASSERT-TOOL-003: Protected path enforcement at tool level
+
+- **Given**: A Code Generation node whose `allowed_write_paths` glob pattern would technically include `.cogworks/constitutional-rules.md`
+- **When**: The LLM invokes `fs.write` targeting `.cogworks/constitutional-rules.md`
+- **Then**: The tool rejects the invocation regardless of the profile's path configuration
+- **And**: A `PROTECTED_PATH_VIOLATION` event is recorded in the audit trail
+- **Traces to**: REQ-TOOL-011, THREAT-017
+
+### ASSERT-TOOL-004: Tool profile resolution with template variables
+
+- **Given**: A tool profile with `allowed_write_paths = ["src/{{affected_modules}}/**"]` and pipeline state containing `affected_modules = "inventory"`
+- **When**: The profile is resolved at node activation time
+- **Then**: The effective `allowed_write_paths` is `["src/inventory/**"]`
+- **And**: The resolved profile is recorded in the audit trail
+- **Traces to**: REQ-PROFILE-002
+
+### ASSERT-TOOL-005: Unresolvable template variable prevents node activation
+
+- **Given**: A tool profile with `allowed_write_paths = ["src/{{affected_modules}}/**"]` but pipeline state does NOT contain `affected_modules`
+- **When**: Profile resolution is attempted at node activation time
+- **Then**: Node activation fails with a structured error identifying the unresolvable variable
+- **And**: No LLM call is made for this node
+- **Traces to**: REQ-PROFILE-002
+
+### ASSERT-TOOL-006: Default profiles applied when no configuration exists
+
+- **Given**: A repository with no `.cogworks/pipeline.toml` file (or a file without `[tool_profiles]`)
+- **When**: The pipeline executes
+- **Then**: Each core node uses its built-in default tool profile
+- **And**: Code Generation has write access; all other nodes are read-only
+- **Traces to**: REQ-PROFILE-003
+
+### ASSERT-TOOL-007: Tool invocation recorded in audit trail
+
+- **Given**: An LLM node that invokes `fs.read` and `domain.validate` during execution
+- **When**: The node completes
+- **Then**: The audit trail contains entries for both invocations with: tool name, parameters, scope parameters, result, and duration
+- **Traces to**: REQ-TOOL-AUDIT-001
+
+### ASSERT-TOOL-008: Scope violation threshold triggers warning
+
+- **Given**: A node with scope violation threshold of 5
+- **When**: The LLM makes 5 tool invocations that are scope violations within a single node execution
+- **Then**: An audit warning is emitted after the 5th violation
+- **And**: The warning includes the violation count and calling node identity
+- **Traces to**: REQ-ENFORCE-002
+
+### ASSERT-TOOL-009: Tool usage report in pipeline summary
+
+- **Given**: A completed pipeline run where Code Generation invoked `fs.write` 12 times, `domain.validate` 3 times, `skill.run` 2 times, and had 1 scope violation
+- **When**: The pipeline completion summary is generated
+- **Then**: The tool usage report shows per-tool counts, 1 scope violation, and invocation type breakdown (12 raw + 3 raw + 2 skill)
+- **Traces to**: REQ-TOOL-AUDIT-003
+
+---
+
+## Skill Assertions
+
+### ASSERT-SKILL-001: Skill scope enforcement
+
+- **Given**: A skill that internally calls `fs.write` to a path outside the calling node's `allowed_write_paths`
+- **When**: `skill.run` is invoked by the LLM
+- **Then**: The skill execution fails with a structured error identifying the violating tool call
+- **And**: The scope violation is recorded in the audit trail
+- **And**: No files are modified by the violating call
+- **Traces to**: REQ-SKILL-004
+
+### ASSERT-SKILL-002: Only active skills are invocable
+
+- **Given**: Four skills — one Active, one Proposed, one Reviewed, one Retired
+- **When**: The LLM calls `skill.list`
+- **Then**: Only the Active skill appears in the list
+- **And**: Attempting `skill.run` on the Proposed, Reviewed, or Retired skill returns a structured error stating the skill is not available
+- **And**: The error does NOT reveal whether the skill exists (to prevent information leakage about unapproved skills)
+- **Traces to**: REQ-SKILL-005, THREAT-020
+
+### ASSERT-SKILL-003: Deprecated skill invocation produces warning
+
+- **Given**: A skill with lifecycle state `Deprecated` and a specified alternative skill
+- **When**: The LLM invokes `skill.run` on the deprecated skill
+- **Then**: The skill executes but a warning is returned to the LLM referencing the preferred alternative
+- **And**: The deprecation warning is recorded in the audit trail
+- **Traces to**: REQ-SKILL-005
+
+### ASSERT-SKILL-004: Skill auto-deprecation on low success rate
+
+- **Given**: A skill with success rate tracking. The skill has failed 3 of its last 20 invocations (85% success rate, below the default 90% threshold).
+- **When**: The orchestrator evaluates skill health
+- **Then**: The skill's lifecycle state changes to Deprecated with reason `success_rate_below_threshold`
+- **And**: The state change is recorded in the audit trail
+- **Traces to**: REQ-SKILL-006
+
+### ASSERT-SKILL-005: Skill parameter validation
+
+- **Given**: A skill that declares parameters `{module: string, target: string required}` and the LLM invokes `skill.run` without providing `target`
+- **When**: The skill executor validates parameters
+- **Then**: Execution is rejected with a structured error identifying the missing required parameter
+- **And**: No tool calls from the skill are executed
+- **Traces to**: REQ-SKILL-001
+
+### ASSERT-SKILL-006: Proposed-to-Active transition requires review
+
+- **Given**: A skill in Proposed state
+- **When**: An operator attempts to activate it directly (skipping the Reviewed state)
+- **Then**: The activation is rejected with a structured error indicating review is required
+- **And**: The skill remains in Proposed state
+- **Traces to**: REQ-SKILL-005, THREAT-020
+
+### ASSERT-SKILL-007: Reviewed skill can be rejected or abandoned
+
+- **Given**: A skill in Reviewed state
+- **When**: An operator invokes `cogworks skill rework` (reject/rework) or `cogworks skill retire` (abandon)
+- **Then**: The skill transitions to Proposed (rework) or Retired (abandon) respectively
+- **And**: The state change is recorded in the audit trail with the operator's reason
+- **Traces to**: REQ-SKILL-005
+
+---
+
+## Progressive Discovery Assertions
+
+### ASSERT-DISC-001: Progressive discovery activates at or above threshold
+
+- **Given**: A node with 15 tools in its resolved profile (at the default threshold of 15)
+- **When**: The LLM call is prepared
+- **Then**: The tool list contains the compact index (name + one-line description) instead of full schemas
+- **And**: Meta-tools `tools.search`, `tools.schema`, `tools.call` are available
+- **Traces to**: REQ-DISC-001, REQ-DISC-002
+
+### ASSERT-DISC-002: Progressive discovery not active below threshold
+
+- **Given**: A node with 10 tools in its resolved profile (below the default threshold of 15)
+- **When**: The LLM call is prepared
+- **Then**: Full tool schemas are included in the tool list as normal
+- **And**: Meta-tools are NOT added
+- **Traces to**: REQ-DISC-001
+
+### ASSERT-DISC-003: Skills rank above raw tools in search
+
+- **Given**: A progressive discovery search query "validate code" that matches both a skill named "validate-rust-module" and a raw tool `domain.validate`
+- **When**: `tools.search` returns results
+- **Then**: The skill appears before the raw tool in the result list
+- **Traces to**: REQ-DISC-004
+
+### ASSERT-DISC-004: tools.call enforces scope identically to direct invocation
+
+- **Given**: A Code Generation node with `allowed_write_paths` set to `["src/modules/auth/**"]` and progressive discovery active
+- **When**: The LLM invokes `tools.call` with tool name `fs.write` and path `src/modules/payment/handler.rs`
+- **Then**: The scope enforcer rejects the invocation with the same structured error as a direct `fs.write` call would produce
+- **And**: A `SCOPE_VIOLATION` event is recorded in the audit trail
+- **And**: The file is NOT modified
+- **Traces to**: REQ-DISC-002, REQ-ENFORCE-002
+
+---
+
+## Adapter Generation Assertions
+
+### ASSERT-ADAPT-001: OpenAPI adapter generation produces valid tool definitions
+
+- **Given**: An OpenAPI 3.1 specification with 5 endpoints
+- **When**: The adapter generator CLI command is run
+- **Then**: 5 TOML tool definition files are generated in `.cogworks/adapters/<name>/`
+- **And**: Each file conforms to the tool definition schema
+- **And**: Tool names are namespaced (e.g., `inventree.stock.list`)
+- **Traces to**: REQ-ADAPT-001, REQ-ADAPT-002
+
+### ASSERT-ADAPT-002: Adapter tools participate in scope enforcement
+
+- **Given**: An adapter-generated tool `inventree.stock.list` registered in the tool registry, and a node profile that includes this tool with scope parameter `allowed_urls = ["https://inventory.example.com"]`
+- **When**: The LLM invokes `inventree.stock.list` targeting a different URL
+- **Then**: The scope enforcer rejects the invocation
+- **And**: A `SCOPE_VIOLATION` event is recorded
+- **Traces to**: REQ-ADAPT-003, REQ-ENFORCE-002
+
+### ASSERT-ADAPT-003: Drift detection identifies removed endpoint
+
+- **Given**: A generated adapter set based on a specification with 5 endpoints, but the source specification has been updated to remove one endpoint
+- **When**: The drift detection CLI command is run
+- **Then**: The report identifies the removed endpoint and the adapter tool definition that no longer has a source
+- **Traces to**: REQ-ADAPT-005
+
+---
+
+## Per-Category Tool Assertions
+
+### ASSERT-TOOL-010: Filesystem read respects read scope
+
+- **Given**: A node with `allowed_read_paths = ["src/**"]` and `denied_read_paths = ["src/secrets/**"]`
+- **When**: The LLM invokes `fs.read` targeting `src/secrets/config.toml`
+- **Then**: The tool rejects the read with a structured error (denied path takes precedence)
+- **And**: A `SCOPE_VIOLATION` event is recorded
+- **Traces to**: REQ-TOOL-010, REQ-TOOL-013
+
+### ASSERT-TOOL-020: Git commit respects branch pattern
+
+- **Given**: A Code Generation node with `branch_pattern = "cogworks/swi-.*"`
+- **When**: The LLM invokes `git.commit` on branch `main`
+- **Then**: The commit is rejected with a structured error explaining the branch constraint
+- **And**: No commit is created
+- **And**: A `SCOPE_VIOLATION` event is recorded
+- **Traces to**: REQ-TOOL-020, REQ-ENFORCE-002
+
+### ASSERT-TOOL-030: Domain service tool respects service scope
+
+- **Given**: A node with `allowed_services = ["rust"]`
+- **When**: The LLM invokes `domain.validate` specifying service `kicad`
+- **Then**: The invocation is rejected with a structured error identifying the service scope violation
+- **And**: A `SCOPE_VIOLATION` event is recorded
+- **Traces to**: REQ-TOOL-030, REQ-ENFORCE-002
+
+### ASSERT-TOOL-040: Shell tool restricts to allowed commands
+
+- **Given**: A node with `allowed_commands = ["cargo build", "cargo test"]`
+- **When**: The LLM invokes `shell.run_restricted` with command `rm -rf /`
+- **Then**: The command is rejected with a structured error (command not in allowlist)
+- **And**: The command is NOT executed
+- **And**: A `SCOPE_VIOLATION` event is recorded
+- **Traces to**: REQ-TOOL-040, REQ-ENFORCE-002
+
+### ASSERT-TOOL-050: Network tool restricts to allowed URLs
+
+- **Given**: A node with `net.fetch` enabled and `allowed_urls = ["https://docs.example.com"]`
+- **When**: The LLM invokes `net.fetch` targeting `https://evil.example.com/exfiltrate`
+- **Then**: The fetch is rejected with a structured error (URL not in allowlist)
+- **And**: No network request is made
+- **And**: A `SCOPE_VIOLATION` event is recorded
+- **Traces to**: REQ-TOOL-051, REQ-ENFORCE-002

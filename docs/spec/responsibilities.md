@@ -858,3 +858,148 @@ Verifies that a pipeline node's output matches the semantic intent of its upstre
 - Alignment failure triggers rework (re-entry with misalignment findings), not retry (re-entry without additional context)
 - Rework budget is separate from retry budget; exhaustion of rework budget escalates to pipeline failure
 - For safety-classified work items: stricter thresholds (0.95 vs 0.90), LLM alignment check cannot be disabled, traceability matrix requires human sign-off
+
+---
+
+## Tool System Components
+
+### Tool Registry
+
+**Responsibilities:**
+
+- Knows: All registered tool definitions (built-in, adapter-generated, skill-derived), each tool's name, parameter schema, scope parameter declarations, and implementation
+- Does: Resolves tool names to implementations for invocation, validates tool existence before execution, manages tool lifecycle (registration, deregistration), provides tool listing and search capabilities
+
+**Collaborators:**
+
+- Tool Profile Manager (provides subset selection criteria for node-specific tool lists)
+- Adapter Generator (registers adapter-generated tools)
+- Skill Executor (registers skill-derived tools as `skill.list`, `skill.run`, `skill.inspect`)
+- Audit Recorder (records tool registration events)
+
+**Roles:**
+
+- Catalog: Maintains the authoritative list of all available tools
+- Resolver: Maps tool names to callable implementations
+- Validator: Rejects invocations of nonexistent tools
+
+**Key behavior:**
+
+- Tools from three sources: built-in (filesystem, git, domain service, shell, network), adapter-generated (from OpenAPI/EAB specs), and skill-derived (from crystallised skills)
+- Tool names are globally unique; registration of a duplicate name is rejected
+- Tool schemas are validated at registration time, not at invocation time
+
+---
+
+### Tool Profile Manager
+
+**Responsibilities:**
+
+- Knows: Tool profile definitions from `.cogworks/pipeline.toml`, per-node profile assignments, per-node tool overrides, template variables pending resolution
+- Does: Resolves a node's effective tool list by combining the base profile with any per-node overrides, resolves template variable placeholders (e.g., `{{affected_modules}}`) from pipeline state at node activation time, provides the filtered tool list to the LLM Gateway for inclusion in LLM calls
+
+**Collaborators:**
+
+- Tool Registry (queries available tools to validate profile contents against registry)
+- Pipeline Configuration Loader (reads profile definitions from `pipeline.toml`)
+- LLM Gateway (receives the resolved tool list for a specific node invocation)
+- Pipeline State (provides runtime values for template variable resolution)
+
+**Roles:**
+
+- Resolver: Computes effective tool list for a given node at a given point in the pipeline
+- Validator: Ensures profiles reference only tools that exist in the registry; warns on unknown tool names
+- Template resolver: Substitutes `{{variable}}` placeholders in scope parameters with values from pipeline state
+
+**Key behavior:**
+
+- Default profiles are provided for all 7 core pipeline nodes when no explicit configuration exists
+- Profile resolution is deterministic: same configuration + same pipeline state = same effective tool list
+- Template variables that cannot be resolved produce a clear error and prevent node activation (do not silently substitute empty values)
+- Profile resolution result is recorded in the audit trail for reproducibility
+
+---
+
+### Tool Scope Enforcer
+
+**Responsibilities:**
+
+- Knows: The calling node's resolved scope parameters for a specific tool (allowed paths, branch patterns, permitted services, etc.)
+- Does: Validates every tool invocation against the calling node's scope parameters before executing the tool, rejects out-of-scope operations with structured error messages, records scope violations in the audit trail
+
+**Collaborators:**
+
+- Tool Profile Manager (provides the resolved scope parameters for the calling node's tool)
+- Tool Registry (provides the tool implementation to be invoked after scope validation passes)
+- Audit Recorder (records scope violations as `SCOPE_VIOLATION` events)
+- OS-Level Sandbox (third layer of defence; constrains the process environment even if tool-level enforcement fails)
+
+**Roles:**
+
+- Gate: Prevents tool execution when scope parameters are violated (second layer of defence in depth, after orchestrator-level filtering)
+- Reporter: Provides clear, actionable error messages to the LLM explaining why a tool call was rejected
+- Monitor: Tracks scope violation counts per node execution; excessive violations (threshold default: 5) trigger a warning
+
+**Key behavior:**
+
+- Defence in depth: the scope enforcer operates independently of orchestrator-level tool filtering. Even if a tool appears in the node's profile, scope parameters constrain how it may be used.
+- Scope enforcement is synchronous — validation completes before the tool executes
+- Protected path enforcement at the tool level: `fs.write`, `fs.create` refuse operations targeting protected paths regardless of profile configuration
+- Scope violations are counted per node execution; exceeding the threshold (default: 5) triggers an audit warning and MAY halt the node
+
+---
+
+### Skill Executor
+
+**Responsibilities:**
+
+- Knows: Registered skill definitions (TOML manifest + script), skill lifecycle states, skill parameter schemas, skill execution history (success/failure rates)
+- Does: Validates skill parameters against the manifest schema, executes skill scripts with parameter substitution, validates every tool call within a skill against the calling node's tool profile (skills do not bypass scope enforcement), records skill execution results in the audit trail
+
+**Collaborators:**
+
+- Tool Scope Enforcer (validates each tool call within the skill against the calling node's profile)
+- Tool Registry (skill tools `skill.list`, `skill.run`, `skill.inspect` are registered here)
+- Audit Recorder (records skill execution events: invocation, parameters, result, duration)
+- Configuration Manager (reads skill lifecycle state, activation/deprecation status)
+
+**Roles:**
+
+- Executor: Runs parameterised scripts that replay proven tool invocation patterns
+- Gate: Validates skill parameters before execution; rejects invalid parameter types or missing required parameters
+- Monitor: Tracks per-skill success/failure rates; auto-deprecates skills falling below success threshold (configurable, default: 90% over last 20 runs)
+
+**Key behavior:**
+
+- Skills are deterministic: the same parameters produce the same sequence of tool invocations
+- Skills CANNOT bypass scope enforcement — each tool call within a skill is validated against the calling node's tool profile
+- Skill lifecycle follows: Proposed → Reviewed → Active → Deprecated → Retired
+- Skills are exposed to LLMs as `skill.list`, `skill.run`, `skill.inspect` tools
+- In progressive discovery mode, skills rank above raw tools in search results
+
+---
+
+### Adapter Generator
+
+**Responsibilities:**
+
+- Knows: Supported API specification formats (OpenAPI 3.0/3.1 JSON/YAML, EAB JSON Schema), adapter output format (TOML tool definitions), namespace conventions
+- Does: Parses API specifications, generates per-operation tool definitions with parameter schemas derived from the spec, creates adapter index files, detects specification drift (signature changes, removed endpoints)
+
+**Collaborators:**
+
+- Tool Registry (registers generated adapter tools)
+- CI/CD Pipeline (drift detection runs as a CI check; regeneration is a CI-triggered action)
+
+**Roles:**
+
+- Generator: Transforms API specs into CogWorks tool definitions
+- Drift detector: Compares generated adapters against their source specs; flags mismatches
+
+**Key behavior:**
+
+- Adapters supersede MCP servers for most external integrations (see ADR-0005)
+- Generated adapters are stored in `.cogworks/adapters/<name>/` and version-controlled as derived artifacts
+- Source spec is the source of truth; adapters can be regenerated at any time
+- CI check verifies no drift between source specs and generated adapters
+- MCP integration is retained only as a fallback for bidirectional/streaming protocols that generated adapters cannot represent

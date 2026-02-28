@@ -661,3 +661,83 @@ The metric sink is configured in `.cogworks/config.toml`:
 - Document twin fidelity requirements clearly (which behaviors must match exactly, which can be simplified).
 - Twins should be fast (support 100+ concurrent scenarios).
 - Include failure injection profiles for common degraded-mode scenarios (timeout, malformed response, rate limit).
+
+---
+
+### Managing Tool Adapters
+
+**Operation**: Generating, updating, and verifying adapter tool definitions from API specifications.
+
+**Commands**:
+
+- `cogworks adapter generate <spec-path> [--output-dir <dir>] [--namespace <name>]` — Generate tool definitions from an API specification (OpenAPI or EAB).
+- `cogworks adapter drift <adapter-dir>` — Compare generated adapters against their source spec and report differences.
+- `cogworks adapter regenerate <adapter-dir>` — Regenerate adapters from the stored source spec reference.
+- `cogworks adapter list` — List all registered adapter sets with their source spec paths and last-generated timestamps.
+
+**Process**:
+
+1. Obtain the API specification (OpenAPI 3.0/3.1 JSON/YAML, or EAB JSON Schema).
+2. Run `cogworks adapter generate` to produce tool definitions in `.cogworks/adapters/<name>/`.
+3. Review the generated definitions and commit them to version control.
+4. Add the generated tools to appropriate tool profiles in `.cogworks/pipeline.toml`.
+5. Set up CI to run `cogworks adapter drift` to detect specification changes.
+
+**Best practices**:
+
+- Run drift detection in CI on every PR that touches API specification files.
+- Regenerate adapters when the source specification changes, rather than manually editing generated files.
+- Use meaningful namespace prefixes (e.g., `inventree.stock`, `ci.github`) to keep tool names organized.
+- Review generated scope parameter defaults before deploying.
+
+---
+
+### Managing Skills
+
+**Operation**: Reviewing, activating, deprecating, and monitoring crystallised skills.
+
+**Commands**:
+
+- `cogworks skill list [--lifecycle <state>]` — List skills, optionally filtered by lifecycle state.
+- `cogworks skill inspect <skill-name>` — Show skill details: manifest, script, parameters, lifecycle state, success rate.
+- `cogworks skill propose <audit-run-id>` — Extract candidate skills from a completed pipeline run's audit trail.
+- `cogworks skill activate <skill-name>` — Transition a Reviewed skill to Active.
+- `cogworks skill deprecate <skill-name> [--alternative <alt-name>]` — Mark a skill as deprecated.
+- `cogworks skill retire <skill-name>` — Remove a skill from active use.
+- `cogworks skill stats` — Show per-skill success/failure rates and invocation counts.
+
+**Process**:
+
+1. After successful pipeline runs, periodically run `cogworks skill propose` to identify repeating tool invocation patterns.
+2. Review proposed skills: inspect the script, verify scope requirements, check parameter schemas.
+3. Commit reviewed skills to `.cogworks/skills/` and run `cogworks skill activate`.
+4. Monitor skill performance with `cogworks skill stats`.
+5. Deprecate skills with declining success rates; retire skills that are no longer relevant.
+
+**Best practices**:
+
+- Review proposed skills carefully — they are extracted from audit data and should be validated for correctness.
+- Set the success rate threshold appropriately for your domain (default: 90% over last 20 runs).
+- Document skill purpose and expected use cases in the manifest description.
+- When deprecating, always specify an alternative when one exists.
+
+---
+
+### Monitoring Tool Usage
+
+**Operation**: Reviewing tool invocation patterns, scope violations, and skill performance across pipeline runs.
+
+**Key metrics to monitor**:
+
+- **Tool call volume**: Per-tool invocation counts across runs. Excessive calls to a single tool may indicate poor prompt instructions or unnecessary work.
+- **Scope violation rate**: High violation rates indicate profile misconfiguration, overly broad LLM instructions, or potential prompt injection attempts.
+- **Skill vs. raw tool ratio**: Higher skill usage indicates successful crystallisation of proven patterns. Low skill usage despite available skills may indicate poor skill discovery or relevance.
+- **Progressive discovery hit rate**: When progressive discovery is active, track how often LLMs use `tools.search` vs. `tools.schema` vs. direct `tools.call`. This indicates whether the compact index provides sufficient information.
+
+**Alerting recommendations**:
+
+| Metric | Warning Threshold | Critical Threshold |
+|--------|-------------------|-------------------|
+| Scope violations per pipeline run | > 5 | > 15 |
+| Skill success rate (any single skill) | < 90% | < 75% |
+| Tool calls per node execution | > 50 | > 100 |

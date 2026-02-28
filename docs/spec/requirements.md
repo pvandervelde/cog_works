@@ -831,3 +831,240 @@ For safety-classified work items, alignment checks MUST be stricter:
 | End-to-end alignment check | Default on | Always on (cannot be disabled) |
 | Traceability matrix | Generated | Generated and requires human sign-off |
 | Blocking finding tolerance | 0 (any blocking finding fails) | 0 (additionally, more than 3 warnings also fails) |
+
+---
+
+## Tool Registry & Scoped Tools
+
+> **Numbering convention**: Tool requirements use categorical groupings: 001–009 for registry-level concerns, 010–019 for filesystem tools, 020–029 for git tools, 030–039 for domain service tools, 040–049 for shell tools, 050–059 for search/network tools. New tool categories should use the next available decade range. Do not fill gaps within a category unless the new requirement belongs to that category.
+
+### REQ-TOOL-001: Tool registry
+
+The orchestrator MUST maintain a central registry of all available tools. Each tool entry contains: unique name, category, description, parameter JSON Schema, scope parameter declarations, and implementation reference. Tools from three sources (built-in, adapter-generated, skill-derived) all register through the same mechanism.
+
+### REQ-TOOL-002: Scoped tool access
+
+Each pipeline node MUST receive a tool list restricted by its assigned tool profile. Tools not in the node's profile MUST NOT appear in the LLM call's tool list. The LLM must not be able to discover or invoke unscoped tools.
+
+---
+
+## Tool Definitions — Filesystem
+
+### REQ-TOOL-010: Filesystem read tool
+
+The orchestrator MUST provide `fs.read` and `fs.list` filesystem read tools. Scope parameters: `allowed_read_paths` (glob patterns), `denied_read_paths` (glob patterns — takes precedence), `max_file_size_bytes`.
+
+### REQ-TOOL-011: Filesystem write tool
+
+The orchestrator MUST provide `fs.write`, `fs.create`, and `fs.delete` filesystem write tools. Scope parameters: `allowed_write_paths` (glob patterns), `denied_write_paths` (glob patterns — takes precedence). Write tools MUST enforce protected path patterns at the tool level — operations targeting protected paths are refused regardless of profile configuration.
+
+### REQ-TOOL-012: Filesystem search tool
+
+The orchestrator MUST provide `fs.search` (content search) and `fs.glob` (path matching) tools. Scope parameters: `allowed_search_paths` (inherits from `allowed_read_paths`).
+
+### REQ-TOOL-013: Filesystem scope enforcement
+
+Every filesystem tool invocation MUST validate its target path(s) against the calling node's scope parameters before executing. Violations produce a structured error returned to the LLM and a `SCOPE_VIOLATION` audit trail event.
+
+---
+
+## Tool Definitions — Git
+
+### REQ-TOOL-020: Git tools
+
+The orchestrator MUST provide git tools: `git.status`, `git.diff`, `git.commit`, `git.branch`, `git.log`. Scope parameters: `branch_pattern` (regex — commits only allowed to branches matching the pattern), `allowed_commit_paths` (glob patterns — only changes within these paths may be committed).
+
+---
+
+## Tool Definitions — Domain Service
+
+### REQ-TOOL-030: Domain service tools
+
+The orchestrator MUST provide `domain.validate`, `domain.simulate`, `domain.normalise`, `domain.review_rules`, `domain.extract_interfaces` tools that delegate to domain services via the Extension API. Scope parameters: `allowed_services` (list of domain service names the node may invoke), `allowed_methods` (list of domain service methods the node may call).
+
+---
+
+## Tool Definitions — Shell
+
+### REQ-TOOL-040: Restricted shell tool
+
+The orchestrator MUST provide a `shell.run_restricted` tool for executing pre-configured commands. Scope parameters: `allowed_commands` (explicit list of permitted command patterns), `working_directory` (path constraint), `max_execution_time_seconds`, `network_access` (boolean — whether the command may access the network). This tool executes infrastructure operations (build, test, lint), not arbitrary LLM-generated shell commands.
+
+---
+
+## Tool Definitions — Search & Network
+
+### REQ-TOOL-050: Search tools
+
+The orchestrator MUST provide `search.code` (code search across repository) and `search.docs` (documentation search) tools. Scope parameters: `allowed_search_scope` (directories or file patterns).
+
+### REQ-TOOL-051: Network tools
+
+The orchestrator MAY provide `net.fetch` for read-only HTTP requests to approved URLs. Scope parameters: `allowed_urls` (URL prefix patterns), `max_response_size_bytes`. Default: not enabled in any profile (opt-in only).
+
+---
+
+## Tool Profiles
+
+### REQ-PROFILE-001: Per-node tool profiles
+
+Every LLM-executing pipeline node MUST have an assigned tool profile. The profile is referenced by name in the pipeline configuration (`.cogworks/pipeline.toml`). If no explicit profile is assigned, the orchestrator MUST apply the built-in default profile appropriate to the node type.
+
+### REQ-PROFILE-002: Profile overrides
+
+Pipeline configuration MUST support per-node `tool_overrides` that modify scope parameters of the base profile without redefining the entire profile. Template variable placeholders (`{{variable}}`) MUST be resolved from pipeline state at node activation time.
+
+### REQ-PROFILE-003: Default profiles
+
+The orchestrator MUST provide default tool profiles for all 7 core pipeline nodes:
+
+| Node | Default Profile | Key Tools | Key Scope Constraints |
+|------|----------------|-----------|----------------------|
+| Intake | `reader` | `fs.read`, `fs.list`, `search.code` | Read-only, full repo read access |
+| Architecture | `reader` | `fs.read`, `fs.list`, `search.code`, `search.docs` | Read-only, full repo read access |
+| Interface Design | `reader` | `fs.read`, `fs.list`, `search.code` | Read-only, full repo read access |
+| Planning | `reader` | `fs.read`, `fs.list`, `search.code` | Read-only, full repo read access |
+| Code Generation | `generator` | All `reader` tools + `fs.write`, `fs.create`, `fs.delete`, `git.commit`, `git.branch`, `domain.*`, `shell.run_restricted` | Write access limited to `{{affected_modules}}`; git commits to `cogworks/swi-*` branches only |
+| Review | `reviewer` | `reader` tools + `domain.validate`, `domain.review_rules`, `domain.simulate` | Read-only filesystem; domain validation only |
+| Integration | `integrator` | `git.status`, `git.diff`, `git.branch`, `git.log`, `fs.read` | Branch operations and status checks only; read-only filesystem; no `git.commit` (merges use GitHub API via Pull Request Manager abstraction) |
+
+---
+
+## Enforcement
+
+### REQ-ENFORCE-001: Tool filtering (Layer 1)
+
+The orchestrator MUST filter the tool list before every LLM call. Only tools present in the node's resolved profile are included in the LLM call's tool/function list. This is the first layer of defence.
+
+### REQ-ENFORCE-002: Scope enforcement (Layer 2)
+
+Each tool implementation MUST validate scope parameters before executing. This validation is independent of Layer 1 — even tools that pass filtering may have their specific invocations rejected based on scope parameters. This is the second layer of defence.
+
+### REQ-ENFORCE-003: OS-level sandboxing (Layer 3)
+
+For Code Generation nodes (the only core node with write access), the orchestrator SHOULD apply OS-level sandboxing (e.g., `landlock`, `seccomp-bpf`, containerised execution) to constrain filesystem and network access at the process level. This is the third layer of defence, independent of Layers 1 and 2. For safety-critical work items (REQ-PIPE-006) or work items from untrusted sources, OS-level sandboxing MUST be applied. SHOULD becomes MUST when the work item's safety classification is set.
+
+---
+
+## Tool Audit
+
+### REQ-TOOL-AUDIT-001: Tool invocation audit
+
+Every tool invocation MUST be recorded in the audit trail with: tool name, parameters (with scope parameters identified separately), result (success/error), duration, and the calling node's identity.
+
+### REQ-TOOL-AUDIT-002: Scope violation audit
+
+Every scope violation MUST be recorded as a `SCOPE_VIOLATION` event in the audit trail with: tool name, attempted parameters, violated scope constraint, calling node identity.
+
+### REQ-TOOL-AUDIT-003: Tool usage report
+
+The pipeline completion summary MUST include a tool usage report containing: per-tool call counts, scope violation counts, invocation type breakdown (raw tool / skill / progressive discovery).
+
+---
+
+## Custom Tools
+
+### REQ-TOOL-CUSTOM-001: Repository-local tool definitions
+
+Repository maintainers MAY define custom tools in `.cogworks/tools/` as TOML files following the tool definition schema. Custom tools are registered in the tool registry at pipeline startup.
+
+### REQ-TOOL-CUSTOM-002: Custom tool scope binding
+
+Custom tool definitions MUST declare their scope parameter schema. Tools without scope parameter declarations are rejected at registration time.
+
+---
+
+## Skill Crystallisation
+
+### REQ-SKILL-001: Skill definition format
+
+Skills MUST be defined as a TOML manifest (declaring name, parameters, scope, lifecycle state, description) paired with a shell script (containing the parameterised tool invocation sequence). Skills are stored in `.cogworks/skills/`.
+
+### REQ-SKILL-002: Skill extraction
+
+The orchestrator MUST support offline skill extraction from audit trail data. Extraction identifies repeating tool invocation patterns across successful pipeline runs and proposes them as candidate skills for human review.
+
+### REQ-SKILL-003: Skill invocation by LLM
+
+Active skills MUST be exposed to LLM nodes via `skill.list` (enumerate available skills with descriptions), `skill.run` (execute a named skill with parameters), and `skill.inspect` (view a skill's parameter schema and description).
+
+### REQ-SKILL-004: Skill scope enforcement
+
+Every tool call within a skill execution MUST be validated against the calling node's tool profile. A skill MUST NOT bypass scope restrictions. If a tool call within a skill violates scope, the entire skill execution fails with a structured error identifying the violating call.
+
+### REQ-SKILL-005: Skill lifecycle management
+
+Skills MUST follow a lifecycle: Proposed → Reviewed → Active → Deprecated → Retired. Only Active skills are available to LLM nodes. Deprecated skills remain available but produce a warning when invoked, referencing the preferred alternative. Retired skills are removed from tool lists.
+
+Valid state transitions:
+
+| From | To | Trigger | Approval |
+|------|----|---------|----------|
+| Proposed | Reviewed | Human reviews and approves the skill script and parameter schema | Human (required) |
+| Reviewed | Active | Operator activates via `cogworks skill activate` | Human (required) |
+| Reviewed | Proposed | Operator rejects and sends back for revision via `cogworks skill rework` | Human (required) |
+| Reviewed | Retired | Operator abandons the skill via `cogworks skill retire` | Human (required) |
+| Active | Deprecated | Manual deprecation or auto-deprecation via REQ-SKILL-006 (success rate below threshold) | Automatic (REQ-SKILL-006) or human |
+| Deprecated | Active | Operator re-activates after fixing the underlying issue | Human (required) |
+| Deprecated | Retired | Operator retires via `cogworks skill retire` | Human (required) |
+| Active | Retired | Operator retires directly (e.g., skill no longer applicable) | Human (required) |
+
+Transitions not listed above are invalid. The Proposed → Active transition (skipping review) is explicitly prohibited.
+
+### REQ-SKILL-006: Skill success tracking
+
+The orchestrator MUST track per-skill success/failure rates. When a skill's success rate drops below a configurable threshold (default: 90% over the last 20 invocations), the skill MUST be automatically flagged for review (status change to Deprecated with reason `success_rate_below_threshold`).
+
+---
+
+## Progressive Discovery
+
+### REQ-DISC-001: Compact tool index
+
+When a node's resolved tool list meets or exceeds a configurable threshold (default: 15 tools), the orchestrator MUST present a compact tool index (name + one-line description) instead of full schemas in the LLM tool list.
+
+### REQ-DISC-002: Meta-tools for on-demand schema
+
+When progressive discovery is active, the orchestrator MUST provide three meta-tools: `tools.search` (semantic search across tool names and descriptions), `tools.schema` (retrieve full JSON Schema for a named tool), and `tools.call` (invoke a tool by name with parameters). Tool invocations through `tools.call` MUST pass through the same scope enforcement as direct tool invocations (REQ-ENFORCE-002). The `tools.call` meta-tool MUST NOT provide a bypass of any enforcement layer.
+
+### REQ-DISC-003: Tool index generation
+
+The compact tool index MUST be regenerated whenever the node's resolved tool list changes (profile update, adapter regeneration, skill lifecycle transition). The index MUST be deterministic — same tool list produces the same index.
+
+### REQ-DISC-004: Skill priority in search
+
+In progressive discovery search results, skills MUST rank above raw tools when both match a query, to encourage reuse of proven patterns.
+
+---
+
+## Adapter Generation
+
+### REQ-ADAPT-001: OpenAPI adapter generation
+
+The orchestrator MUST provide a CLI command to generate CogWorks tool definitions from OpenAPI 3.0/3.1 specifications (JSON and YAML formats). Each API operation produces a separate tool definition.
+
+### REQ-ADAPT-002: Tool definition output
+
+Generated adapter tool definitions MUST be TOML files conforming to the tool definition schema. Each definition includes: namespaced tool name (e.g., `inventree.stock.list`), parameter schema derived from the API spec, and authentication/connection scope parameters.
+
+### REQ-ADAPT-003: Scope integration
+
+Generated adapter tools MUST participate in the same scope enforcement as all other tools. Adapter tool definitions MUST declare scope parameters for endpoint URL, authentication, and rate limiting.
+
+### REQ-ADAPT-004: EAB schema format
+
+The orchestrator MUST support adapter generation from EAB (Extension API Bridge) JSON Schema format, in addition to OpenAPI. The generated tool definitions follow the same schema and registration mechanism.
+
+### REQ-ADAPT-005: Drift detection
+
+The orchestrator MUST provide a CLI command to compare generated adapter definitions against their source API specifications and report differences (new endpoints, removed endpoints, parameter changes). This command SHOULD be runnable as a CI check.
+
+### REQ-ADAPT-006: Supported specification formats
+
+The adapter generator MUST support: OpenAPI 3.0 (JSON + YAML), OpenAPI 3.1 (JSON + YAML), and EAB JSON Schema. Additional formats MAY be added as extensions.
+
+---
+
+## MCP Integration (Superseded)
+
+> **Note**: Requirement IDs REQ-MCP-001 through REQ-MCP-004 were defined in COGWORKS-TOOLSCOPE-001 §9 and are superseded by REQ-ADAPT-001 through REQ-ADAPT-006. See ADR-0005 for decision context. MCP integration is retained only as a fallback for bidirectional or streaming protocols that generated adapters cannot represent. No new requirements should use the REQ-MCP-* prefix.

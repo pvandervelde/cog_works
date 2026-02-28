@@ -24,7 +24,7 @@ Start with **overview.md** for the big picture, then **vocabulary.md** to unders
 
 ## Source Requirements
 
-Functional requirements are defined in [requirements.md](requirements.md), which catalogues ~160 requirements across 23 categories (PIPE, GRAPH, NODE, EDGE, EXEC, CLASS, ARCH, IFACE, PLAN, CODE, SCEN, REVIEW, INT, AUDIT, BOUND, DTU, EXT, XDOM, XVAL, CPACK, CONST, CTX, ALIGN). Each `REQ-*` identifier in `assertions.md` traces to a corresponding entry in `requirements.md`.
+Functional requirements are defined in [requirements.md](requirements.md), which catalogues ~160 requirements across 23 categories (PIPE, GRAPH, NODE, EDGE, EXEC, CLASS, ARCH, IFACE, PLAN, CODE, SCEN, REVIEW, INT, AUDIT, BOUND, DTU, EXT, XDOM, XVAL, CPACK, CONST, CTX, ALIGN) plus 6 tool-related categories (TOOL, PROFILE, ENFORCE, SKILL, DISC, ADAPT). Each `REQ-*` identifier in `assertions.md` traces to a corresponding entry in `requirements.md`.
 
 ## Key Capabilities
 
@@ -50,6 +50,14 @@ CogWorks provides advanced validation, context management, and extensibility cap
 
 10. **Performance Metrics Emission** — CogWorks emits structured metric data points at pipeline boundaries (per-node and per-pipeline) to a pluggable external metrics backend via a Metric Sink abstraction. CogWorks does not store, aggregate, or dashboard metrics itself — these concerns are delegated to purpose-built external tools (Prometheus, Grafana, etc.). Metric emission is non-blocking and optional; the pipeline operates identically with or without a configured sink.
 
+11. **Tool Access Control** — Each pipeline node receives a scoped tool profile controlling which tools (filesystem, git, domain service, shell, network) it can access and with what constraints. Defence-in-depth enforcement operates at three independent layers: orchestrator filtering (unscoped tools never appear in LLM calls), tool-level scope validation (each tool validates parameters against constraints), and OS-level sandboxing for write-capable nodes. Only Code Generation has write access by default.
+
+12. **Skill Crystallisation** — Proven tool invocation patterns are extracted from audit trails and crystallised as parameterised, deterministic scripts that replay without LLM involvement. Skills are human-reviewed, scope-enforced, and lifecycle-managed (Proposed → Reviewed → Active → Deprecated → Retired).
+
+13. **Progressive Discovery** — When a node's tool count exceeds a threshold, the LLM receives a compact tool index with meta-tools for on-demand schema expansion, reducing context token consumption while maintaining full tool access.
+
+14. **Adapter Generation** — CogWorks tool definitions are auto-generated from external API specifications (OpenAPI, EAB schemas) via a CLI command. Generated adapters participate in standard tool profile scoping and are version-controlled as derived artifacts with CI drift detection.
+
 ## Key Architectural Decisions
 
 1. **CLI-first execution model** — each invocation is a stateless step function; service modes are additive wrappers
@@ -62,3 +70,4 @@ CogWorks provides advanced validation, context management, and extensibility cap
 8. **Cross-domain interface registry** — human-authored, version-controlled interface contracts enable deterministic cross-domain constraint validation
 9. **Context Packs for domain knowledge** — structured, versioned domain knowledge loaded deterministically at Architecture node based on classification
 10. **Constitutional security layer** — non-overridable rules loaded before any LLM call; injection detection halts pipeline; scope enforcement prevents unauthorized capabilities
+11. **Tool profiles with defence in depth** — per-node tool scoping with three independent enforcement layers; generated adapters preferred over MCP servers (see ADR-0005)
