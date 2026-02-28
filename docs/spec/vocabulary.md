@@ -764,6 +764,105 @@ A domain service's assessment of whether it could confidently extract all releva
 A file path pattern identifying files that CogWorks must never create or modify through the normal pipeline.
 
 - Examples: Constitutional rules file, prompt templates, scenario specifications, conformance test suite, output schemas, Extension API schemas
-- Enforcement: Pre-PR validation checks generated files against protected path patterns
+- Enforcement: Pre-PR validation checks generated files against protected path patterns; tool-level scope enforcement prevents writes to protected paths (REQ-TOOL-011)
 - Change control: Protected paths require human-approved PR via CODEOWNERS or equivalent
 - Related risk: CW-R18 (CogWorks modifies its own prompts or scenarios)
+
+---
+
+## Tool System Concepts
+
+### Tool
+
+A function available to an LLM node during pipeline execution that allows it to interact with the environment (read files, write files, run git commands, invoke domain services).
+
+- Identified by: Unique name in the tool registry (e.g., `fs.read`, `git.commit`, `domain.validate`)
+- Contains: Name, category, description, parameter schema (JSON Schema), scope parameters, implementation
+- Scope parameters: Parameters injected by the orchestrator (not visible to the LLM) that enforce boundaries (allowed paths, branch patterns, etc.)
+- Constraint: A tool not in the node's profile does not exist from the LLM's perspective — it is never offered in the LLM call's tool list
+
+### Tool Registry
+
+The orchestrator's central registry of all available tools, including built-in tools, skill-derived tools, and adapter-generated tools.
+
+- Contains: Tool definitions with schemas, scope parameter declarations, and implementations
+- Sources: Built-in tools (filesystem, git, domain service), generated adapter tools (from OpenAPI/EAB specs), registered skills
+- Resolution: Maps tool names to implementations for invocation; validates tool existence before execution
+- Access control: Tool profiles select subsets of the registry for each node
+
+### Tool Profile
+
+A named collection of tools with their scope parameters, assigned to pipeline nodes to control what the LLM can access during execution.
+
+- Identified by: Human-readable name (e.g., `reader`, `generator`, `reviewer`, `architect`)
+- Contains: List of allowed tool names, per-tool scope parameter values (allowed paths, branch patterns, etc.)
+- Configuration: Defined in `.cogworks/pipeline.toml` under `[tool_profiles.*]`
+- Inheritance: Nodes reference a base profile and MAY override specific scope parameters via `tool_overrides`
+- Default profiles: The orchestrator provides default profiles for all 7 core nodes (Intake, Architecture, Interface Design, Planning, Code Generation, Review, Integration)
+- Template variables: Scope parameters support `{{variable}}` placeholders resolved at runtime (e.g., `{{affected_modules}}` from architecture output)
+
+### Scope Parameter
+
+A parameter injected by the orchestrator into a tool invocation that constrains the tool's behavior, invisible to the LLM.
+
+- Examples: `allowed_write_paths`, `denied_read_paths`, `branch_pattern`, `allowed_services`, `max_file_size_bytes`
+- Enforcement: Validated by the tool implementation before executing (defence in depth — independent of orchestrator filtering)
+- Violation handling: Refused operation, clear error message to LLM, audit trail entry
+
+### Tool Scope Violation
+
+An event where a tool call is rejected because it violates the calling node's scope parameters.
+
+- Examples: Writing to a path outside `allowed_write_paths`, committing to a branch not matching `branch_pattern`
+- Handling: Tool refuses the operation, returns an error explaining the constraint, logs the violation in the audit trail
+- Monitoring: High scope violation rates may indicate prompt injection, tool profile misconfiguration, or poor prompt instructions
+- Threshold: Repeated violations within a single node execution (default: 5) trigger a warning and may halt the node
+
+### Skill
+
+A parameterised, deterministic script that replays a proven tool invocation pattern without LLM involvement.
+
+- Stored: `.cogworks/skills/` as a TOML manifest + bash script
+- Extracted from: Successful pipeline runs by analysing the audit trail (offline, human-reviewed)
+- Parameters: Named, typed parameters replacing values that vary between runs (e.g., module paths, compilation targets)
+- Scope enforcement: Every tool call within a skill is validated against the calling node's tool profile — a skill cannot bypass scope restrictions
+- Exposed as tools: `skill.list`, `skill.run`, `skill.inspect` appear in the LLM's tool list
+- Lifecycle: Proposed → Reviewed → Active → Deprecated → Retired
+
+### Skill Lifecycle State
+
+The current state of a skill in its lifecycle.
+
+- **Proposed**: Extracted from audit trail analysis; not yet available to pipeline nodes
+- **Reviewed**: Human has reviewed and approved; committed to `.cogworks/skills/`
+- **Active**: Available to pipeline nodes; included in tool lists
+- **Deprecated**: Marked as outdated (e.g., success rate dropped below threshold); still available but alternatives are preferred
+- **Retired**: Removed from tool lists; retained in version control for reference
+
+### Adapter
+
+A set of auto-generated tool definitions produced from an external API specification (OpenAPI, EAB schema) that register in the tool registry.
+
+- Sources: OpenAPI 3.0/3.1 specs (JSON/YAML), EAB schema format (JSON Schema)
+- Produces: Per-operation tool definition (TOML), index file, configuration file
+- Namespaced: `inventree.stock.list`, `domain.validate`, etc.
+- Scope integration: Adapter tools are subject to the same tool profile scoping as all other tools
+- Storage: `.cogworks/adapters/<name>/`, version-controlled as derived artifacts (spec is source of truth)
+- Regeneration: Regenerable at any time from the source spec; CI check verifies no drift
+
+### Progressive Discovery
+
+A mode of tool presentation where the LLM receives a compact tool index (name + one-line description) instead of full schemas, and requests full schemas on demand via meta-tools.
+
+- Trigger: Automatically activated when the node's tool count exceeds a threshold (default: 15)
+- Meta-tools: `tools.search` (semantic search), `tools.schema` (get full schema), `tools.call` (invoke tool)
+- Skills priority: Skills rank above raw tools in search results
+- Token savings: Reduces context usage when nodes have access to many tools (especially with adapters)
+
+### Tool Usage Report
+
+A summary of tool invocations included in the pipeline completion summary.
+
+- Contains: Per-tool call counts, scope violation counts, invocation type breakdown (raw/skill/discovery)
+- Purpose: Identifies tool usage patterns — excessive calls may indicate poor context assembly or prompt instructions
+- Audit: Every individual tool call is recorded in the audit trail with parameters, scope, result, and duration

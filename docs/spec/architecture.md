@@ -22,6 +22,8 @@ This document defines the clean architecture boundaries — what is business log
 │  Context Pack selection    │  Constitutional rules enforcement          │
 │  Injection detection       │  Scope enforcement                         │
 │  Required artefact check   │  Protected path validation                 │
+│  Tool scope enforcement    │  Tool profile resolution                   │
+│  Skill execution           │  Progressive discovery index               │
 └─────────────────────┬───────────────────────────────────────────────────┘
                       │ depends on (abstractions only)
                       ▼
@@ -35,6 +37,7 @@ This document defines the clean architecture boundaries — what is business log
 │  Interface Registry Loader │  Audit Store                               │
 │  Scenario Executor         │  Twin Provisioner                          │
 │  Summary Cache             │  Pipeline Configuration Loader             │
+│  Tool Profile Store        │  Adapter Spec Loader                       │
 └─────────────────────┬───────────────────────────────────────────────────┘
                       │ implemented by
                       ▼
@@ -46,6 +49,7 @@ This document defines the clean architecture boundaries — what is business log
 │  Extension API Client      │  Handlebars template engine                │
 │  (Unix socket / HTTP)      │  GitHub issue comments (audit)             │
 │  (Future: gRPC transport)  │  (Future: OpenAI, GitLab, etc.)            │
+│  TOML Profile Loader       │  OpenAPI/EAB Adapter Generator             │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -263,6 +267,56 @@ Verification that all artefacts declared by loaded Context Packs are present.
   - Checked during the Review node
   - Missing artefacts produce blocking findings (preventing PR creation)
   - Each finding identifies which pack declared the requirement and what is missing
+
+### Tool Profile Resolution
+
+Determines the effective tool list for a pipeline node at activation time.
+
+- **Input**: Node identifier, base profile name (from pipeline configuration), per-node tool overrides, pipeline state (for template variable resolution), tool registry contents
+- **Output**: Resolved tool list with per-tool scope parameters (all template variables substituted)
+- **Rules**:
+  - Profile resolution is deterministic: same configuration + same pipeline state = same tool list
+  - Unknown tool names in a profile produce a configuration warning (not a hard error — allows profile reuse across repos with different adapter sets)
+  - Template variables (e.g., `{{affected_modules}}`) are resolved from pipeline state at activation time; unresolvable variables produce a clear error and prevent node activation
+  - Default profiles exist for all 7 core nodes; no configuration needed for out-of-the-box operation
+  - The resolved tool list is recorded in the audit trail
+
+### Tool Scope Validation
+
+Validates a tool invocation against the calling node's scope parameters before execution.
+
+- **Input**: Tool name, tool invocation parameters (LLM-supplied), scope parameters (orchestrator-injected, from the resolved tool profile)
+- **Output**: Pass (tool may execute) or scope violation (structured error identifying the violated constraint)
+- **Rules**:
+  - This is the second layer of defence in depth (after orchestrator-level tool filtering, before OS-level sandboxing)
+  - Operates independently of orchestrator filtering — even if a tool is in the profile, scope parameters may reject a specific invocation
+  - Protected path enforcement: `fs.write` and `fs.create` refuse operations targeting protected paths regardless of profile configuration
+  - Scope violations are counted per node execution; exceeding the threshold (default: 5) produces an audit warning and MAY halt the node
+  - Each violation is recorded as a `SCOPE_VIOLATION` event in the audit trail
+
+### Skill Validation and Execution
+
+Validates skill parameters and orchestrates skill script execution, enforcing scope constraints on every tool call within the skill.
+
+- **Input**: Skill name, skill parameters (from LLM invocation), skill manifest (TOML), calling node's tool profile
+- **Output**: Skill execution result (success with output, or failure with error)
+- **Rules**:
+  - Skill parameters are validated against the manifest schema before execution
+  - Each tool call within a skill is validated against the calling node's tool profile — skills cannot bypass scope enforcement
+  - Skill execution is deterministic: same parameters produce the same sequence of tool invocations
+  - Skill lifecycle state is checked: only Active skills can be invoked (Proposed, Deprecated with alternatives, Retired are rejected)
+
+### Progressive Discovery Index
+
+Generates a compact tool index for nodes with many tools, and handles meta-tool requests for on-demand schema expansion.
+
+- **Input**: Resolved tool list for a node, tool count threshold (default: 15), search query (for `tools.search`), tool name (for `tools.schema`)
+- **Output**: Compact tool index (name + one-line description per tool), or full schema for a specific tool, or search results ranked by relevance
+- **Rules**:
+  - Activated automatically when tool count exceeds the threshold
+  - Skills rank above raw tools in search results
+  - Meta-tools (`tools.search`, `tools.schema`, `tools.call`) are always available when progressive discovery is active
+  - The compact index replaces full schemas in the LLM tool list to reduce context token consumption
 
 ### Metric Data Point Computation
 
@@ -484,6 +538,32 @@ Emits structured metric data points to an external metrics backend.
 - **Error cases**: Backend unavailable (non-fatal — logged, pipeline continues), authentication failure (non-fatal), serialization error (non-fatal), flush timeout exceeded (non-fatal — logged, pipeline shutdown continues)
 - **Constraint**: Metric emission failures MUST NOT block or slow pipeline execution. Emission is fire-and-forget with best-effort delivery. `flush()` is best-effort with a bounded timeout — a metrics backend outage at pipeline completion MUST NOT delay process exit.
 
+### Tool Profile Store
+
+Loads tool profile definitions and per-node tool overrides from the pipeline configuration file.
+
+- **Operations**:
+  - `load_profiles(config) → Map<ProfileName, ToolProfile>` — Load all tool profile definitions from `.cogworks/pipeline.toml`
+  - `get_node_profile(node_id) → ProfileName` — Get the base profile name assigned to a node
+  - `get_node_overrides(node_id) → ToolOverrides` — Get per-node scope parameter overrides
+  - `get_default_profiles() → Map<ProfileName, ToolProfile>` — Return built-in default profiles for core nodes
+- **Data flowing across boundary**:
+  - Inbound: parsed profile definitions (tool lists, scope parameters, overrides)
+  - Outbound: configuration file path, raw file contents
+- **Error cases**: Missing configuration (falls back to defaults), invalid profile reference (non-retryable with error details), schema violation (non-retryable)
+
+### Adapter Spec Loader
+
+Loads API specification files for adapter generation.
+
+- **Operations**:
+  - `load_spec(path) → ApiSpec` — Load and parse an API specification file (OpenAPI 3.0/3.1 JSON/YAML, or EAB JSON Schema)
+  - `list_specs(directory) → Vec<SpecInfo>` — List available API specification files in the adapters directory
+- **Data flowing across boundary**:
+  - Inbound: parsed API specification (endpoints, parameters, schemas)
+  - Outbound: file path, raw file contents
+- **Error cases**: Unsupported format (non-retryable), parse error (non-retryable with error details)
+
 ---
 
 ## Infrastructure Implementations
@@ -547,6 +627,20 @@ Each abstraction has one or more concrete implementations. These are the only mo
 - Non-blocking: Emission failures are logged, not fatal to the pipeline
 - `flush()`: Issues a synchronous HTTP write bounded by the configurable flush timeout (default: 2 seconds); failure is logged and does not block pipeline shutdown
 
+### TOML Profile Loader
+
+- Implements: Tool Profile Store
+- Uses: `toml` crate for parsing `.cogworks/pipeline.toml` `[tool_profiles.*]` sections
+- Handles: Loading profile definitions, resolving profile inheritance/overrides, validating profile contents against tool registry
+
+### OpenAPI / EAB Adapter Generator
+
+- Implements: Adapter Spec Loader (for loading specs), generates tool definitions registered in Tool Registry
+- Uses: OpenAPI 3.x parser (JSON/YAML), JSON Schema parser for EAB format
+- Handles: Parsing API specs, generating per-operation TOML tool definitions, namespace assignment, drift detection between generated adapters and source specs
+- Output: Generated tool definitions stored in `.cogworks/adapters/<name>/`, index file, and configuration file
+- CI integration: Drift detection runs as a CI check; regeneration is a CLI command
+
 ---
 
 ## Data Flow: End-to-End Example (Code Generation)
@@ -556,6 +650,9 @@ This traces data flow across all boundaries for a single sub-work-item code gene
 ```
 Graph Execution Engine
   │  "Execute code-generation node for sub-work-item #5 of work item #42"
+  │  Resolves tool profile for this node (Tool Profile Resolution — business logic)
+  │  Template variables (e.g., {{affected_modules}}) resolved from pipeline state
+  │  Effective tool list recorded in audit trail
   ▼
 Code Generator (business logic)
   │  Requests context assembly

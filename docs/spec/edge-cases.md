@@ -512,3 +512,49 @@ This document catalogs non-standard flows and failure scenarios that the system 
 **Scenario**: The deployment has only one LLM model configured. The alignment check cannot use a different model from the generator.
 **Expected behavior**: The alignment check proceeds with the same model. A warning is logged noting the correlated bias risk. Metrics track same-model alignment checks separately for analysis. For safety-critical work items, the alignment threshold is automatically raised by 0.02 (e.g., 0.95 → 0.97) to compensate for increased correlated-bias risk, and the traceability matrix entry for the affected stage is annotated with a `same_model_bias_risk` flag visible to human reviewers during gate sign-off.
 **Key requirement**: Model separation is SHOULD (not MUST). Single-model deployments are supported with documented risk and compensating controls for safety-critical items.
+
+---
+
+## Tool Scoping and Enforcement Edge Cases
+
+### EDGE-074: Tool Scope Violation During Code Generation
+
+**Scenario**: The Code Generation node's LLM attempts to write a file to a path outside the node's `allowed_write_paths` (e.g., the LLM tries to modify a test helper in a shared module while working on a specific sub-work-item scoped to `src/modules/auth/`).
+**Expected behavior**: The `fs.write` tool rejects the operation with a structured error explaining that the path is outside the allowed scope. The error is returned to the LLM, which may adjust its approach. A `SCOPE_VIOLATION` event is recorded in the audit trail. The file is NOT modified. If the LLM repeatedly violates scope (>5 times in one execution), an audit warning is emitted.
+**Key requirement**: Scope enforcement is independent of orchestrator-level tool filtering — this is Layer 2 defence in depth.
+
+### EDGE-075: Skill Execution Fails Mid-Way Through Tool Sequence
+
+**Scenario**: A skill that normally performs 4 tool calls succeeds on the first 2, but the 3rd call violates the calling node's scope (because the node's effective scope changed since the skill was last used, e.g., `allowed_write_paths` was narrowed).
+**Expected behavior**: The 3rd tool call is rejected by the scope enforcer. The entire skill execution fails with a structured error identifying the specific tool call that violated scope. The first 2 tool calls' effects remain (they were within scope). The LLM receives an error explaining the failure and may attempt the remaining operations individually or via a different approach. The scope violation is recorded in the audit trail and counts against the node's violation threshold.
+**Key requirement**: Skills do not bypass scope enforcement. Each tool call within a skill is independently validated.
+
+### EDGE-076: Adapter Drift Detected by CI Check
+
+**Scenario**: A developer updates an OpenAPI spec in the repository but forgets to regenerate the CogWorks adapter definitions. The CI drift detection check identifies that the generated adapters no longer match the source specification (e.g., a new endpoint was added to the spec but no corresponding tool definition exists).
+**Expected behavior**: The CI check fails with a report identifying the drift: new endpoints not represented, removed endpoints still represented, or parameter changes between spec and adapter. The developer must run the adapter regeneration CLI command and commit the updated adapter files.
+**Key requirement**: Adapters are derived artifacts; the source spec is the source of truth. CI verification prevents silent drift.
+
+### EDGE-077: Progressive Discovery with No Matching Tools
+
+**Scenario**: The LLM invokes `tools.search` with a query that matches no tools in the node's resolved tool list (e.g., searching for "deploy" in a Review node that has no deployment tools).
+**Expected behavior**: `tools.search` returns an empty result set with a message indicating no tools match the query. The LLM may refine its search or request the full tool index. This is not an error — it's valid behavior when the node's tool set doesn't include what the LLM is looking for.
+**Key requirement**: Progressive discovery gracefully handles zero-match queries without error.
+
+### EDGE-078: Template Variable Refers to Empty Pipeline State
+
+**Scenario**: A Code Generation node's profile uses `allowed_write_paths = ["src/{{affected_modules}}/**"]`, but the Architecture node's output did not populate `affected_modules` in the pipeline state (e.g., the architecture was so broad that no specific modules were identified).
+**Expected behavior**: Profile resolution fails with a structured error: "Template variable `affected_modules` could not be resolved from pipeline state." The node does NOT activate. The pipeline escalates the issue. No LLM call is made with an overly-permissive empty-string substitution.
+**Key requirement**: Strict template resolution prevents accidental scope widening through empty values.
+
+### EDGE-079: Custom Tool Registration at Pipeline Startup
+
+**Scenario**: A repository defines 3 custom tools in `.cogworks/tools/` and 2 adapter-generated tool sets in `.cogworks/adapters/`. At pipeline startup, one custom tool definition has an invalid schema (missing required `scope_parameters` field).
+**Expected behavior**: The two valid custom tools and both adapter tool sets register successfully. The invalid custom tool is rejected with a clear error message identifying the file and the schema violation. The pipeline proceeds with the valid tools. The rejection is logged as a warning.
+**Key requirement**: Invalid tool definitions are rejected individually without preventing the entire pipeline from starting.
+
+### EDGE-080: Scope Violation Threshold Exceeded
+
+**Scenario**: During a Code Generation node execution, the LLM makes 7 tool calls that violate scope constraints (e.g., repeatedly trying to write to paths outside its scope, possibly due to poor prompt instructions or a misunderstanding of the task scope).
+**Expected behavior**: Each violation is returned to the LLM as a structured error. After the 5th violation (default threshold), an audit warning is emitted. The node MAY be halted at this point (configurable behavior). If the node continues and the LLM eventually succeeds within scope, the pipeline continues but the high violation count is prominently noted in the tool usage report.
+**Key requirement**: Excessive scope violations are a signal of misconfiguration or prompt issues, not just individual rejections.

@@ -342,3 +342,24 @@ This also clarifies the boundary of the "GitHub as sole durable state" principle
 | **Audit trail** | Built-in (comment history) | Must be separately captured |
 
 **Rationale**: The system's design principle is "GitHub is the sole durable state store" (no external databases, no persistent local state that isn't reproducible). Writing pipeline state to the issue ensures that a crash-and-resume on a different host can pick up exactly where the previous run left off. The latency cost of an API call per node transition is acceptable because node execution itself (LLM calls, domain service operations) dominates wall-clock time. State writes are infrequent (once per node boundary) so rate-limit impact is minimal.
+
+---
+
+## 20. MCP Servers vs. Generated Adapters for External Integrations
+
+**Decision**: Generated adapters from API specifications are the default mechanism for integrating external services. MCP (Model Context Protocol) servers are retained only as a fallback for bidirectional/streaming protocols that static tool definitions cannot represent.
+
+| Factor | MCP Servers | Generated Adapters | In-Process (Direct API Client) |
+|--------|-------------|-------------------|-------------------------------|
+| **Operational overhead** | Separate process per integration; lifecycle management needed | No runtime process; tool definitions are configuration | No additional process; compiled into CogWorks |
+| **Scope enforcement** | Difficult — MCP server owns its execution; scope enforced by proxy | Native — generated tools participate in standard scope enforcement | Native — but requires CogWorks code changes per service |
+| **Audit trail** | Requires MCP-to-audit bridge | Standard tool invocation audit (same as built-in tools) | Standard (built into CogWorks) |
+| **Versioning** | MCP server version must match CogWorks expectations | Regenerate from updated spec; CI drift detection | Recompile CogWorks |
+| **Bidirectional/streaming** | Supported natively | Not representable as static tool definitions | Requires explicit async implementation |
+| **Adding new integrations** | Deploy new MCP server process | Run CLI command against API spec | Modify CogWorks source code |
+| **Domain-ignorant principle** | MCP servers are external; CogWorks doesn't know their internals | Adapter definitions are external config; CogWorks doesn't know their internals | Violates domain-ignorant principle |
+| **Failure modes** | MCP server crash, connection timeout, version mismatch | Spec drift (detectable via CI), invalid generated definition (caught at registration) | API changes require CogWorks rebuild |
+
+**Rationale**: Most external service integrations (inventory systems, CI/CD APIs, monitoring APIs) are request-response with published API specifications. Generated adapters handle these with zero runtime overhead and full scope enforcement integration. MCP servers add operational complexity (process management, connection lifecycle, audit bridging) without benefit for the common case. The MCP fallback path is retained for genuinely bidirectional protocols (e.g., language servers, real-time data feeds) where a persistent process is inherently required. In-process clients are rejected because they violate the domain-ignorant principle and create recompilation dependencies.
+
+See ADR-0005 for full decision context.

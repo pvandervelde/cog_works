@@ -61,6 +61,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 4. **Output is never executed**: CogWorks never executes LLM output as code within its own process. Generated code is written to files and validated by external tools (compiler, linter).
 5. **Prompt structure**: Issue body is clearly delimited in the prompt template (e.g., inside XML/Markdown tags) and framed as data, not instructions.
 6. **Human review**: Node gates (especially for safety-critical work items) provide human checkpoints before any generated code is merged.
+7. **Tool scope enforcement**: Even if prompt injection causes the LLM to attempt unauthorized operations, the tool profile and scope enforcement layers reject tool calls that violate the node's permissions. The LLM cannot write to files outside `allowed_write_paths`, commit to branches outside `branch_pattern`, or invoke domain services outside `allowed_services`.
 
 **Residual risk**: The constitutional layer reduces risk but cannot guarantee zero false negatives. A sufficiently sophisticated injection might evade detection. Mitigated by schema validation, multi-dimensional review (security pass), and human gates.
 
@@ -78,6 +79,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 2. **Architecture compliance review**: Verifies generated code matches the approved specification — unauthorized additions would be flagged as unplanned.
 3. **Schema-validated output**: The LLM must produce output matching a defined schema. Arbitrary code execution instructions won't match the schema.
 4. **Human gates for safety-critical**: All safety-critical work items require human review before merge.
+5. **Tool scope constraints**: Code Generation's write access is limited to `{{affected_modules}}` paths. Even if context manipulation causes the LLM to generate code outside the intended scope, filesystem write tools reject writes to paths outside the allowed set.
 
 **Residual risk**: Subtle vulnerabilities that pass automated review. Mitigated by human review of all PRs.
 
@@ -339,6 +341,42 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 ---
 
+### THREAT-019: Tool Scope Bypass via Misconfigured Profile or Skill
+
+**Description**: An attacker modifies `.cogworks/pipeline.toml` to expand a node's tool profile permissions (e.g., granting the Review node write access), or crafts a skill that attempts filesystem operations outside the node's intended scope.
+
+**Impact**: A node gains capabilities beyond its intended role, potentially allowing data exfiltration (via `net.fetch`), unauthorized file modification, or privilege escalation across pipeline stages.
+
+**Mitigations**:
+
+1. **Pipeline configuration in protected paths**: `.cogworks/pipeline.toml` changes require human-reviewed PR (CODEOWNERS). Tool profile changes are visible in diff review.
+2. **Defence in depth**: Tool access is enforced at three independent layers (orchestrator filtering, tool-level scope validation, OS-level sandboxing). Expanding a profile at Layer 1 does not automatically bypass Layer 2 scope constraints or Layer 3 OS restrictions.
+3. **Skill scope enforcement**: Every tool call within a skill is validated against the calling node's profile. Skills cannot bypass scope enforcement — they are convenience wrappers, not privilege escalation mechanisms.
+4. **Skill review lifecycle**: Skills must pass through human review (Proposed → Reviewed → Active) before they appear in LLM tool lists. Malicious skill content would be caught during review.
+5. **Audit trail**: All tool invocations, scope violations, and profile resolutions are recorded. Post-hoc review can detect unauthorized capability expansion.
+6. **Default profiles are conservative**: Built-in default profiles follow least-privilege: only Code Generation has write access; all other core nodes are read-only. Expanding beyond defaults requires explicit configuration.
+
+**Residual risk**: An attacker with human-reviewed PR access can intentionally expand profiles. Mitigation: the tool usage report in the pipeline summary makes capability changes visible, and scope violation monitoring detects runtime misuse.
+
+---
+
+### THREAT-020: Skill Injection via Audit Trail Manipulation
+
+**Description**: If an attacker can influence the audit trail data used for offline skill extraction, they could cause malicious tool invocation patterns to be proposed as candidate skills. If the human reviewer does not catch the malicious pattern, the skill becomes available to LLM nodes.
+
+**Impact**: A skill containing malicious tool invocations (e.g., exfiltrating data via `net.fetch` or writing to unexpected paths) becomes an Active tool available to pipeline nodes.
+
+**Mitigations**:
+
+1. **Human review gate**: All proposed skills MUST be reviewed by a human before transitioning to Active. The review includes inspecting the skill script and its scope requirements.
+2. **Skill scope enforcement**: Even if a malicious skill is activated, every tool call within it is validated against the calling node's profile. The skill cannot exceed the node's permissions.
+3. **Audit trail integrity**: The audit trail is written to GitHub issue comments (immutable once posted). Tampering requires GitHub API access with the CogWorks token.
+4. **Skill success tracking**: A skill that frequently causes scope violations will have a low success rate and be auto-deprecated.
+
+**Residual risk**: A malicious skill that operates within scope but performs subtly harmful actions (e.g., introducing benign-looking but vulnerable code patterns). Mitigated by the review gate and the multi-dimensional code review pass.
+
+---
+
 ## Security Requirements Summary
 
 | Requirement | Description | Enforcement |
@@ -359,3 +397,7 @@ This document identifies security threats to CogWorks and specifies mitigations.
 | Pipeline configuration validation | `.cogworks/pipeline.toml` validated against schema at load time; unknown node types rejected | Unit tests for pipeline config loader |
 | Pipeline configuration change control | `.cogworks/pipeline.toml` in CODEOWNERS protected paths; changes require human approval | CODEOWNERS + repository branch protection |
 | Constitutional rules change control | Human-reviewed PR required for rule changes | Constitutional Rules Loader branch validation |
+| Tool profile enforcement | LLM nodes receive only profiled tools; scope validated per invocation | Unit tests for tool filtering + scope enforcement |
+| Tool scope defence in depth | Three independent enforcement layers (filtering, scope validation, OS sandbox) | Integration tests for each layer; E2E test for combined enforcement |
+| Skill review lifecycle | Skills require human review before activation | Lifecycle state machine enforcement + audit trail |
+| Adapter scope integration | Generated adapters participate in same scope enforcement as built-in tools | Unit tests for adapter tool registration + scope enforcement |
