@@ -29,6 +29,47 @@ These constraints MUST be enforced during implementation. They inform the interf
 
 ---
 
+## Workspace Architecture
+
+These rules govern the physical crate structure and inter-crate dependency
+direction. See `docs/spec/interfaces/README.md` for the full dependency graph.
+
+- **Crate names are domain-meaningful**: Crates are named after their domain
+  concern (`pipeline`, `nodes`, `github`, `llm`, `extension-api`, `listener`,
+  `cli`). Architectural names like `core`, `adapters`, `ports` are forbidden.
+- **`pipeline` has no I/O dependencies**: The `pipeline` crate must not declare
+  `tokio`, `reqwest`, `std::fs`, `std::process`, or any other I/O crate as a
+  dependency. Trait definitions that involve async are the only exception — they
+  are defined in `pipeline` but implemented in infrastructure crates.
+- **Infrastructure crates depend on `pipeline`, not on each other**: The `github`,
+  `llm`, `extension-api`, and `listener` crates each depend on `pipeline`.
+  They must not depend on each other. Cross-cutting infrastructure concerns
+  (e.g. shared HTTP client configuration) must be resolved by composition in
+  `cli`, not by introducing inter-infrastructure dependencies.
+- **`nodes` depends on `pipeline` only** (among workspace crates): The `nodes`
+  crate depends on `pipeline` for types and trait objects. At runtime, concrete
+  infrastructure implementations are injected via trait objects
+  (`Arc<dyn IssueTracker>`, etc.) — `nodes` never imports `github`, `llm`,
+  `extension-api`, or `listener` directly.
+- **`cli` is the sole composition root**: Only `cli` imports all other workspace
+  crates and constructs concrete infrastructure instances. This is the only place
+  where `GithubClient`, `AnthropicProvider`, `ExtensionApiClient`,
+  `GitHubWebhookEventSource`, and `QueueEventSource` are instantiated.
+- **Trigger modes are infrastructure concerns**: The three trigger modes (single-shot
+  CLI, webhook, cloud queue) are all implemented in terms of the `pipeline::EventSource`
+  trait. The `listener` crate provides the webhook and queue implementations.
+  Phase 1 CLI single-shot mode synthesises a `GitHubEvent` directly in `cli`
+  without using `listener` at all.
+- **Workspace dependency versions are pinned centrally**: All external dependency
+  versions are declared in the `[workspace.dependencies]` table in the root
+  `Cargo.toml`. Individual crate `Cargo.toml` files use `{ workspace = true }`.
+  Introducing a version that is not in the workspace table is not permitted without
+  an explicit justification in the PR description.
+- **`docs/spec/shared-registry.md` is kept current**: Every PR that adds a new
+  public type, trait, or pattern must add it to the shared registry before merge.
+
+---
+
 ## Pipeline Graph
 
 - **Every cycle must have a termination condition**: The pipeline configuration validator must reject any graph containing a cycle without an explicit `max_traversals` on at least one edge in the cycle. There must be no path to infinite execution.
