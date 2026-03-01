@@ -96,7 +96,8 @@ Wraps `f64` (US dollars). Represents the monetary cost of LLM token usage.
 Implements `Add`, `AddAssign`, `PartialOrd`.
 
 ```rust
-pub fn new(value: f64) -> TokenCost      // panics in debug if negative/NaN
+pub fn new(value: f64) -> Option<TokenCost>   // None if negative, infinite, or NaN
+pub fn zero() -> TokenCost                    // infallible zero cost
 pub fn as_f64(self) -> f64
 pub fn is_zero(self) -> bool
 ```
@@ -109,7 +110,7 @@ Wraps `f64` (US dollars). Represents a maximum token cost cap for a run, node,
 or parallel budget window.
 
 ```rust
-pub fn new(limit: f64) -> CostBudget     // panics in debug if not positive/finite
+pub fn new(limit: f64) -> Option<CostBudget>  // None if not strictly positive/finite
 pub fn as_f64(self) -> f64
 pub fn is_exceeded_by(self, accumulated: TokenCost) -> bool
 ```
@@ -265,15 +266,19 @@ use pipeline::{WorkItemId, PipelineRunId, TokenCost, CostBudget, CogWorksError};
 let work_item = WorkItemId::new(42);
 let run_id = PipelineRunId::new_random();
 
-// Cost tracking
-let call_cost = TokenCost::new(0.000_123);
-let budget = CostBudget::new(1.00);
+// Cost tracking — constructors return Option; the ? operator propagates None as a
+// ConfigurationError in contexts where invalid values are programmer errors.
+let call_cost = TokenCost::new(0.000_123).expect("literal is valid");
+let budget = CostBudget::new(1.00).expect("literal is valid");
 if budget.is_exceeded_by(call_cost) {
     return Err(CogWorksError::BudgetExceeded {
         accumulated: call_cost,
         limit: budget,
     });
 }
+
+// Zero cost (e.g. for accumulator initialisation) — use the infallible constructor:
+let mut accumulated = TokenCost::zero();
 ```
 
 ---

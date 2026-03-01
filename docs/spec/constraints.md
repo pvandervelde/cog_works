@@ -6,7 +6,7 @@ These constraints MUST be enforced during implementation. They inform the interf
 
 ## Type System
 
-- **Branded/newtype identifiers**: All domain identifiers must use distinct types that cannot be accidentally interchanged. `WorkItemId`, `SubWorkItemId`, `PipelineNodeLabel`, `BranchName`, `PipelineName`, `EdgeId`, etc. must not be bare strings or integers.
+- **Branded/newtype identifiers**: All domain identifiers must use distinct types that cannot be accidentally interchanged. `WorkItemId`, `SubWorkItemId`, `NodeId`, `BranchName`, `PipelineName`, `EdgeId`, etc. must not be bare strings or integers.
 - **Result-based error handling**: All domain operations must return `Result<T, E>`. Business errors are values in the `Err` variant, not panics or exceptions.
 - **Exhaustive error types**: Each component's error type must be an enum covering all failure modes. No catch-all `Other(String)` variants in domain error types. Infrastructure error types may have a catch-all for truly unexpected failures.
 - **No `unwrap()` in production code**: All `Option` and `Result` values must be explicitly handled. `unwrap()`, `expect()` are allowed only in tests.

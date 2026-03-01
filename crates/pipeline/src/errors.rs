@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{ArtifactPath, CostBudget, TokenCost};
@@ -31,7 +32,7 @@ use crate::{ArtifactPath, CostBudget, TokenCost};
 /// - `Retryable` errors: API timeouts, transient rate-limit responses.
 /// - `NonRetryable` errors: budget exceeded, invalid configuration, injection
 ///   detected, constitutional rules missing.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RetryPolicy {
     /// The operation may be retried.
     ///
@@ -60,7 +61,7 @@ pub enum RetryPolicy {
 ///
 /// See `docs/spec/interfaces/shared-types.md` §CogWorksError for the full
 /// list of variants and when each is produced.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Serialize, Deserialize)]
 pub enum CogWorksError {
     /// The pipeline has been halted by an explicit decision (not a transient failure).
     ///

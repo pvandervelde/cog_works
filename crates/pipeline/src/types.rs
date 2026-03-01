@@ -70,15 +70,19 @@ pub struct TokenCost(f64);
 impl TokenCost {
     /// Creates a [`TokenCost`] from a raw float value (USD).
     ///
-    /// # Panics (debug only)
-    ///
-    /// Panics in debug builds if `value` is negative or NaN.
-    pub fn new(value: f64) -> Self {
-        debug_assert!(
-            value.is_finite() && value >= 0.0,
-            "TokenCost must be non-negative"
-        );
-        Self(value)
+    /// Returns `None` if `value` is negative, infinite, or NaN.
+    #[must_use]
+    pub fn new(value: f64) -> Option<Self> {
+        if value.is_finite() && value >= 0.0 {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    /// Creates a [`TokenCost`] of exactly zero.
+    pub fn zero() -> Self {
+        Self(0.0)
     }
 
     /// Returns the underlying `f64` value (USD).
@@ -124,15 +128,14 @@ pub struct CostBudget(f64);
 impl CostBudget {
     /// Creates a [`CostBudget`] cap (USD).
     ///
-    /// # Panics (debug only)
-    ///
-    /// Panics in debug builds if `limit` is negative, zero, or NaN.
-    pub fn new(limit: f64) -> Self {
-        debug_assert!(
-            limit.is_finite() && limit > 0.0,
-            "CostBudget must be positive"
-        );
-        Self(limit)
+    /// Returns `None` if `limit` is not strictly positive, infinite, or NaN.
+    #[must_use]
+    pub fn new(limit: f64) -> Option<Self> {
+        if limit.is_finite() && limit > 0.0 {
+            Some(Self(limit))
+        } else {
+            None
+        }
     }
 
     /// Returns the budget limit as a `f64` (USD).
@@ -166,6 +169,7 @@ pub struct SatisfactionScore(f64);
 impl SatisfactionScore {
     /// Creates a [`SatisfactionScore`], returning `None` if `value` is outside
     /// the valid range `[0.0, 1.0]`.
+    #[must_use]
     pub fn new(value: f64) -> Option<Self> {
         if value.is_finite() && (0.0..=1.0).contains(&value) {
             Some(Self(value))
@@ -198,6 +202,7 @@ pub struct AlignmentScore(f64);
 impl AlignmentScore {
     /// Creates an [`AlignmentScore`], returning `None` if `value` is outside
     /// the valid range `[0.0, 1.0]`.
+    #[must_use]
     pub fn new(value: f64) -> Option<Self> {
         if value.is_finite() && (0.0..=1.0).contains(&value) {
             Some(Self(value))

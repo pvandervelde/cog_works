@@ -992,7 +992,7 @@ dependencies = [
 [[package]]
 name = "github-bot-sdk"
 version = "0.1.0"
-source = "git+https://github.com/pvandervelde/github-bot-sdk#ba1e456cb25ea038e69b78432c2bb8f2050ef65d"
+source = "git+https://github.com/pvandervelde/github-bot-sdk?rev=ba1e456cb25ea038e69b78432c2bb8f2050ef65d#ba1e456cb25ea038e69b78432c2bb8f2050ef65d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2088,7 +2088,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
@@ -2215,7 +2214,7 @@ dependencies = [
 [[package]]
 name = "queue-runtime"
 version = "0.1.0"
-source = "git+https://github.com/pvandervelde/queue-runtime#ac848ffa72608db4e531297cae7ce0f5ba8fcaa2"
+source = "git+https://github.com/pvandervelde/queue-runtime?rev=ac848ffa72608db4e531297cae7ce0f5ba8fcaa2#ac848ffa72608db4e531297cae7ce0f5ba8fcaa2"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -27,6 +27,7 @@ macro_rules! string_id {
 
         impl $name {
             /// Creates a new identifier, returning `None` if the value is empty.
+            #[must_use]
             pub fn new(value: impl Into<String>) -> Option<Self> {
                 let v = value.into();
                 if v.is_empty() { None } else { Some(Self(v)) }
@@ -174,12 +175,20 @@ string_id! {
 }
 
 string_id! {
-    /// A Git commit SHA (40-character lowercase hex string).
+    /// A Git commit SHA (expected format: 40-character lowercase hex string).
+    ///
+    /// The constructor only rejects empty strings; format conformance is the
+    /// responsibility of the caller (values typically originate from GitHub API
+    /// responses or validated config files).
     CommitSha
 }
 
 string_id! {
-    /// Identifies a GitHub repository in `"owner/repo"` format.
+    /// Identifies a GitHub repository (expected format: `"owner/repo"`).
+    ///
+    /// The constructor only rejects empty strings; two-segment format conformance
+    /// is the responsibility of the caller (values typically originate from
+    /// validated config files or GitHub API responses).
     RepositoryId
 }
 

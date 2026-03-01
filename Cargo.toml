@@ -54,10 +54,12 @@ reqwest = { version = "0.12", features = [
 ], default-features = false }
 
 # GitHub SDK (pvandervelde/github-bot-sdk)
-github-bot-sdk = { git = "https://github.com/pvandervelde/github-bot-sdk" }
+# rev is the commit reviewed in PR 11; update intentionally when upgrading.
+github-bot-sdk = { git = "https://github.com/pvandervelde/github-bot-sdk", rev = "ba1e456cb25ea038e69b78432c2bb8f2050ef65d" }
 
 # Cloud queue SDK (pvandervelde/queue-runtime)
-queue-runtime = { git = "https://github.com/pvandervelde/queue-runtime" }
+# rev is the commit reviewed in PR 11; update intentionally when upgrading.
+queue-runtime = { git = "https://github.com/pvandervelde/queue-runtime", rev = "ac848ffa72608db4e531297cae7ce0f5ba8fcaa2" }
 
 # Internal workspace crates
 pipeline = { path = "crates/pipeline" }
