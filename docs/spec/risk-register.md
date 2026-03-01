@@ -271,6 +271,7 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | CW-R10-M2 | Per-call token limit so no single LLM invocation consumes a disproportionate share of the budget. | Preventive | Planned |
 | CW-R10-M3 | Hard billing alert at the LLM provider level (independent of CogWorks' own tracking). Defence-in-depth against bugs in cost tracking. | Detective | Planned |
 | CW-R10-M4 | Per-node cost breakdown in the audit trail (REQ-AUDIT-002). Review weekly for anomalies. | Detective | Designed |
+| CW-R10-M5 | Semantic stalling detection (REQ-CODE-006). If the same error category recurs across consecutive retries (default: 3), escalate early instead of burning remaining retry budget on a problem the LLM cannot solve. | Preventive | Designed |
 
 **Residual Risk:** Low. Multiple independent cost controls make undetected runaway spending unlikely.
 
@@ -437,6 +438,8 @@ This document catalogs identified risks to CogWorks operations, their assessed l
 | CW-R17-M2 | Pin model versions in configuration. Do not use "latest" model aliases. Test against specific model versions. | Preventive | Planned |
 | CW-R17-M3 | Multi-provider support planned (see tradeoffs.md). Adding a second provider (e.g., OpenAI) provides failover capability. | Preventive | Future |
 | CW-R17-M4 | Monitor provider status pages and API changelog. Proactively test against new API versions before migration. | Detective | Planned |
+| CW-R17-M5 | LLM rate limit handling with proactive throttling and reactive backoff (REQ-LLM-001). Prevents CogWorks from triggering provider-side blocks due to excessive request rates. | Preventive | Designed |
+| CW-R17-M6 | Halt threshold (REQ-LLM-003, default 30 min). If rate limiting persists, pipeline aborts cleanly rather than waiting indefinitely for provider recovery. | Preventive | Designed |
 
 **Residual Risk:** Low with single provider; very low with multi-provider failover. The abstraction trait ensures the migration path exists; implementing a second provider is the key remaining mitigation.
 
@@ -547,12 +550,13 @@ The following spec documents contain mitigations or design decisions informed by
 | CW-R06 | edge-cases.md (EDGE-043, EDGE-044), testing.md (conformance tests) |
 | CW-R07 | architecture.md (Cross-Domain Constraint Validation), requirements.md (REQ-XVAL) |
 | CW-R08–09 | vocabulary.md (Digital Twin), operations.md (twin maintenance) |
-| CW-R10 | requirements.md (REQ-CODE-004), operations.md (cost management) |
+| CW-R10 | requirements.md (REQ-CODE-004, REQ-CODE-006), operations.md (cost management, semantic stalling runbook) |
 | CW-R11 | security.md (THREAT-003, THREAT-004, THREAT-019), constraints.md (security, tool scoping) |
 | CW-R12 | security.md (THREAT-001, THREAT-015, THREAT-019), requirements.md (REQ-CONST, REQ-ENFORCE) |
 | CW-R13 | requirements.md (REQ-AUDIT), operations.md (audit trail) |
 | CW-R15 | constraints.md (pyramid summary accuracy), vocabulary.md (Pyramid Summary Levels) |
 | CW-R18 | requirements.md (REQ-CONST, REQ-TOOL-011, REQ-ENFORCE), security.md (THREAT-015, THREAT-017, THREAT-019) |
+| CW-R17 | requirements.md (REQ-LLM-001 through REQ-LLM-004), security.md (THREAT-021), operations.md (LLM rate limit runbook) |
 | CW-R19 | edge-cases.md (EDGE-006a, EDGE-006b, EDGE-057, EDGE-058, EDGE-064), constraints.md (Pipeline Graph), assertions.md (ASSERT-GRAPH-004, ASSERT-GRAPH-005, ASSERT-GRAPH-006, ASSERT-GRAPH-014), security.md (THREAT-018) |
 | CW-R20 | constraints.md (Observability — metric completeness), assertions.md (ASSERT-METRIC-001, ASSERT-METRIC-002), operations.md (Performance Metrics) |
 | CW-R21 | operations.md (Review Cadence, Improvement Loop) |

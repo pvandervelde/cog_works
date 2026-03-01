@@ -38,6 +38,7 @@ This document defines the clean architecture boundaries — what is business log
 │  Scenario Executor         │  Twin Provisioner                          │
 │  Summary Cache             │  Pipeline Configuration Loader             │
 │  Tool Profile Store        │  Adapter Spec Loader                       │
+│  Project Board (optional)  │                                            │
 └─────────────────────┬───────────────────────────────────────────────────┘
                       │ implemented by
                       ▼
@@ -45,7 +46,7 @@ This document defines the clean architecture boundaries — what is business log
 │                   Infrastructure Implementations                        │
 │  (Concrete adapters — the only code that touches external systems)      │
 │                                                                         │
-│  Anthropic Messages API    │  GitHub REST/GraphQL API                   │
+│  Anthropic Messages API    │  GitHub REST/GraphQL/Projects API          │
 │  Extension API Client      │  Handlebars template engine                │
 │  (Unix socket / HTTP)      │  GitHub issue comments (audit)             │
 │  (Future: gRPC transport)  │  (Future: OpenAI, GitLab, etc.)            │
@@ -165,7 +166,8 @@ Deterministic selection of context items when the full package exceeds the model
 
 Converts between structured pipeline state and GitHub label strings.
 
-- **Input/Output**: Bidirectional mapping between structured types (node, status, dependency, order) and label strings (`cogworks:node:architecture`, `cogworks:depends-on:42`, etc.)
+- **Input/Output**: Bidirectional mapping between structured types (node, status) and label strings (`cogworks:node:architecture`, `cogworks:status:pending`, etc.)
+- **Note**: Dependency and ordering information is read from native GitHub typed issue links (`blocks` / `is blocked by`) and the sub-issue API, not from labels.
 
 ### Interface Registry Validation
 
@@ -386,16 +388,20 @@ Reads and manages work items and sub-work-items.
 
 - **Operations**:
   - `get_issue(id) → Issue` — Read an issue's full details
-  - `list_sub_issues(parent_id) → Vec<Issue>` — List sub-issues of a parent
-  - `create_issue(parent_id, details) → Issue` — Create a sub-work-item issue
+  - `list_sub_issues(parent_id) → Vec<Issue>` — List native sub-issues of a parent
+  - `create_sub_issue(parent_id, details) → Issue` — Create a native sub-issue of the parent work item
+  - `add_typed_link(source_id, target_id, link_type)` — Create a typed issue link (e.g., `blocks` / `is blocked by`) for dependency tracking
+  - `get_typed_links(issue_id) → Vec<TypedLink>` — Read typed issue links for dependency resolution
   - `get_labels(issue_id) → Vec<Label>` — Read labels
   - `add_label(issue_id, label)` — Apply a label
   - `remove_label(issue_id, label)` — Remove a label
   - `post_comment(issue_id, body)` — Post a comment
   - `get_issue_state(issue_id) → IssueState` — Check if open/closed
+  - `get_milestone(issue_id) → Option<Milestone>` — Read the milestone assigned to an issue
+  - `set_milestone(issue_id, milestone_id)` — Set the milestone on an issue (used for inheritance from parent to sub-work-items)
 - **Data flowing across boundary**:
-  - Inbound (from external): issue details (title, body, labels, state), sub-issue lists
-  - Outbound (to external): issue creation details, label changes, comments
+  - Inbound (from external): issue details (title, body, labels, state, milestone), sub-issue lists, typed link lists
+  - Outbound (to external): issue creation details, label changes, comments, typed link creation, milestone assignment
 
 ### Pull Request Manager
 
@@ -526,6 +532,18 @@ Persists audit events.
 - **Data flowing across boundary**:
   - Outbound: structured audit events (LLM call records, validation results, state transitions, cost data)
 
+### Project Board (Optional)
+
+Synchronises work item status to an external project board for human oversight.
+
+- **Operations**:
+  - `sync_item_status(issue_id, status_field, value) → Result` — Update a work item's status field on the project board
+  - `sync_custom_field(issue_id, field_name, value) → Result` — Set a custom field value (e.g., current pipeline node, classification)
+- **Data flowing across boundary**:
+  - Outbound: issue identifiers, field names, field values
+- **Error cases**: Board unavailable (non-fatal — logged, pipeline continues), field not found (non-fatal — logged), authentication failure (non-fatal — logged)
+- **Constraint**: Project board operations are fire-and-forget. Failures MUST NOT block or slow pipeline execution. This abstraction is optional — if not configured, no calls are made.
+
 ### Metric Sink
 
 Emits structured metric data points to an external metrics backend.
@@ -581,8 +599,16 @@ Each abstraction has one or more concrete implementations. These are the only mo
 
 - Implements: Issue Tracker, Pull Request Manager, Code Repository
 - Uses: GitHub REST API and GraphQL API via `octocrab` or direct HTTP
-- Handles: Authentication (GitHub App token or PAT), pagination, rate limiting (X-RateLimit headers), error mapping
+- Handles: Authentication (GitHub App token or PAT), pagination, rate limiting (X-RateLimit headers), error mapping, native sub-issue API (REST), typed issue links (GraphQL), milestone read/write
 - Note: One GitHub client implementation serves three abstractions. Internally organized by concern, but all share the authenticated HTTP client.
+
+### GitHub Projects V2 Board
+
+- Implements: Project Board (optional)
+- Uses: GitHub Projects V2 GraphQL API
+- Handles: Authentication (same GitHub App token as Issue Tracker), project item lookup, status field updates, custom field mapping
+- Non-blocking: All operations are fire-and-forget; failures are logged, not fatal to the pipeline
+- Note: Requires the project number to be configured in `config.toml`. If not configured, this implementation is not instantiated.
 
 ### Extension API Client (Unix Socket / HTTP)
 

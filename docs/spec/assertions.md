@@ -1186,3 +1186,193 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **And**: No network request is made
 - **And**: A `SCOPE_VIOLATION` event is recorded
 - **Traces to**: REQ-TOOL-051, REQ-ENFORCE-002
+
+---
+
+## LLM Rate Limiting
+
+### ASSERT-LLM-001: Rate limit headers are respected
+
+- **Given**: An LLM API response includes rate limit headers indicating 5 remaining requests and a reset time 30 seconds in the future
+- **When**: The LLM Gateway processes the response
+- **Then**: The rate limit state is updated with the remaining count and reset time
+- **And**: Subsequent requests are paced so that the remaining budget is not exhausted before the reset time
+- **Traces to**: REQ-LLM-001
+
+### ASSERT-LLM-002: Proactive throttling delays requests before 429
+
+- **Given**: The LLM Gateway rate limit state shows 2 remaining requests with a reset time 60 seconds in the future
+- **When**: A pipeline node requests an LLM call
+- **Then**: The request is delayed (throttled) to spread remaining capacity across the window
+- **And**: No HTTP 429 response is received
+- **Traces to**: REQ-LLM-001, REQ-LLM-002
+
+### ASSERT-LLM-003: Reactive backoff on 429 response
+
+- **Given**: The LLM API returns an HTTP 429 response with a `Retry-After` header of 10 seconds
+- **When**: The LLM Gateway receives this response
+- **Then**: The request is retried after at least 10 seconds
+- **And**: Other queued requests are paused until the retry succeeds
+- **Traces to**: REQ-LLM-001
+
+### ASSERT-LLM-004: Parallel nodes share a single rate limit budget
+
+- **Given**: Two pipeline nodes executing in parallel, both requesting LLM calls
+- **When**: The shared rate limit state shows 1 remaining request
+- **Then**: Only one node's request proceeds; the other is queued until the rate limit resets
+- **And**: No race condition causes both requests to fire simultaneously
+- **Traces to**: REQ-LLM-002
+
+### ASSERT-LLM-005: Halt threshold triggers pipeline abort
+
+- **Given**: The LLM API has been continuously rate-limited (all requests throttled or returning 429) for 30 minutes (default threshold)
+- **When**: The halt-threshold timer expires
+- **Then**: The pipeline is aborted with a clear error indicating prolonged rate limiting
+- **And**: The abort reason is recorded in the audit trail
+- **And**: The work item is updated with the abort status
+- **Traces to**: REQ-LLM-003
+
+### ASSERT-LLM-006: Rate limit events are logged with visibility
+
+- **Given**: An LLM API response triggers a rate limit state change (remaining count drops below 20% of window capacity)
+- **When**: The LLM Gateway updates its state
+- **Then**: A structured log entry is emitted at warning level containing: remaining count, reset time, throttle delay applied
+- **And**: The `cogworks_llm_rate_limit_remaining` metric is updated
+- **Traces to**: REQ-LLM-004
+
+---
+
+## Label Configuration
+
+### ASSERT-LABEL-001: Pipeline-internal labels are always prefixed and not configurable
+
+- **Given**: A configuration file that attempts to override the name of `cogworks:run` or `cogworks:node:*` labels
+- **When**: The configuration is loaded
+- **Then**: The configuration is rejected with a clear error message and the pipeline halts
+- **And**: Pipeline-internal labels retain their `cogworks:` prefix
+- **Traces to**: REQ-LABEL-002
+
+### ASSERT-LABEL-002: Workflow-semantic labels use configured names
+
+- **Given**: A configuration that maps the `safety` workflow label to `priority:safety-critical`
+- **When**: The pipeline applies the safety label to a work item
+- **Then**: The label applied is `priority:safety-critical`, not the default name
+- **Traces to**: REQ-LABEL-001
+
+### ASSERT-LABEL-003: Duplicate label names are rejected at startup
+
+- **Given**: A configuration where two different workflow labels map to the same GitHub label name
+- **When**: The configuration is loaded
+- **Then**: An error is emitted identifying the duplicate
+- **And**: The pipeline refuses to start
+- **Traces to**: REQ-LABEL-003
+
+### ASSERT-LABEL-004: Workflow label matching a pipeline-internal label is rejected at startup
+
+- **Given**: A configuration that maps a workflow label to a pipeline-internal label string (e.g., `trigger = "cogworks:processing"`)
+- **When**: The configuration is loaded
+- **Then**: The configuration is rejected with a clear error identifying the conflict with the named pipeline-internal label
+- **And**: The pipeline refuses to start
+- **Traces to**: REQ-LABEL-003
+
+---
+
+## GitHub Projects Integration
+
+### ASSERT-PROJECT-001: Status is synced to project board on node transition
+
+- **Given**: A work item configured with a GitHub Projects V2 board, and the pipeline moves the item from node A to node B
+- **When**: The node transition completes
+- **Then**: The project board item's status field is updated to reflect the new node
+- **Traces to**: REQ-PROJECT-001, REQ-PROJECT-003
+
+### ASSERT-PROJECT-002: Project board failure does not block pipeline
+
+- **Given**: The GitHub Projects V2 API is unavailable (returns HTTP 500)
+- **When**: CogWorks attempts to sync a work item status to the project board
+- **Then**: The failure is logged at warning level
+- **And**: The pipeline continues execution without delay
+- **Traces to**: REQ-PROJECT-002
+
+### ASSERT-PROJECT-003: No project board calls when not configured
+
+- **Given**: The `config.toml` does not contain a `[github_project]` section
+- **When**: A pipeline run executes
+- **Then**: No GitHub Projects V2 API calls are made
+- **And**: No errors or warnings are logged about project board integration
+- **Traces to**: REQ-PROJECT-001
+
+---
+
+## Milestone Inheritance
+
+### ASSERT-MILESTONE-001: Sub-work-items inherit parent milestone
+
+- **Given**: A parent work item assigned to milestone "v2.1"
+- **When**: CogWorks creates a sub-work-item from the parent
+- **Then**: The sub-work-item is automatically assigned to milestone "v2.1"
+- **Traces to**: REQ-PLAN-007
+
+### ASSERT-MILESTONE-002: No milestone on parent means no milestone on child
+
+- **Given**: A parent work item with no milestone assigned
+- **When**: CogWorks creates a sub-work-item from the parent
+- **Then**: The sub-work-item has no milestone assigned
+- **And**: No error or warning is logged
+- **Traces to**: REQ-PLAN-007, EDGE-084
+
+---
+
+## Semantic Stalling Detection
+
+### ASSERT-STALL-001: Repeated same-category diagnostics trigger early escalation
+
+- **Given**: A code generation node that has retried 3 times, and all 3 retries produced diagnostics in the same error category (e.g., `type_error`)
+- **When**: The retry loop evaluates the latest diagnostics
+- **Then**: The node escalates early (before exhausting the full retry budget)
+- **And**: The escalation reason includes the stalling category and repetition count
+- **Traces to**: REQ-CODE-006
+
+### ASSERT-STALL-002: Different diagnostic categories do not trigger stalling
+
+- **Given**: A code generation node that has retried 3 times, with categories `type_error`, `interface_mismatch`, and `syntax_error`
+- **When**: The retry loop evaluates the latest diagnostics
+- **Then**: No stalling is detected
+- **And**: The node continues retrying normally using its standard retry budget
+- **Traces to**: REQ-CODE-006
+
+### ASSERT-STALL-003: Stalling detection tracks categories across retries
+
+- **Given**: A code generation node that retries with diagnostics: retry 1 = `type_error`, retry 2 = `interface_mismatch`, retry 3 = `type_error`, retry 4 = `type_error`, retry 5 = `type_error`
+- **When**: The retry loop evaluates after retry 5
+- **Then**: Stalling is detected because 3 consecutive retries (3, 4, 5) produced the same category
+- **And**: The stalling metric `cogworks_semantic_stalling_total` is incremented
+- **Traces to**: REQ-CODE-006
+
+---
+
+## Native Sub-Issues and Typed Links
+
+### ASSERT-SUBISSUE-001: Sub-work-items created via native sub-issue API
+
+- **Given**: A parent work item that needs to be broken into sub-work-items during planning
+- **When**: The planner creates sub-work-items
+- **Then**: Each sub-work-item is created using the GitHub native sub-issue API (not just a label reference)
+- **And**: The parent-child relationship is visible in the GitHub UI
+- **Traces to**: REQ-PLAN-005
+
+### ASSERT-SUBISSUE-002: Dependencies expressed via typed issue links
+
+- **Given**: Sub-work-item B depends on sub-work-item A
+- **When**: The planner records this dependency
+- **Then**: A typed issue link of type `blocks` is created **from A to B** (the canonical direction: dependency source blocks the dependent target)
+- **And**: No `cogworks:depends-on:*` label is used
+- **Traces to**: REQ-PLAN-005
+
+### ASSERT-STALL-004: Stalling threshold exceeding retry budget produces a warning at startup
+
+- **Given**: A pipeline configuration where the stalling threshold (`semantic_stall_threshold`) is set to 5 but the node's `max_retries` is 3
+- **When**: The pipeline configuration is loaded
+- **Then**: A warning is emitted noting that stalling detection cannot fire for this node (threshold 5 > retry budget 3)
+- **And**: Stalling detection is treated as disabled for that node (pipeline still starts — this is a warning, not an error)
+- **Traces to**: REQ-CODE-006

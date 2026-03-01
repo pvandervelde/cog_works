@@ -377,6 +377,25 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 ---
 
+### THREAT-021: LLM API Rate Limit Exhaustion
+
+**Description**: CogWorks exhausts the LLM provider's API rate limit — either through legitimate heavy usage (many parallel nodes, large work items) or through an attacker crafting work items that maximize LLM calls. Unlike GitHub API rate limits (THREAT-008), LLM rate limits directly block all pipeline progress since every LLM node depends on API availability.
+
+**Impact**: Pipeline stalls indefinitely; cost budget may not be exceeded (calls are free when rate-limited), but time and scheduling are wasted. If multiple CogWorks instances share the same API key, one instance can starve others.
+
+**Mitigations**:
+
+1. **Proactive throttling**: The LLM Gateway reads rate limit headers from every response and paces requests to avoid hitting the limit (REQ-LLM-001).
+2. **Reactive backoff**: On HTTP 429, the gateway respects the `Retry-After` header and pauses all LLM requests (REQ-LLM-001).
+3. **Parallel coordination**: A shared rate limit budget prevents parallel nodes from independently exhausting the limit (REQ-LLM-002).
+4. **Halt threshold**: If rate limiting persists beyond a configurable duration (default: 30 minutes), the pipeline aborts rather than waiting indefinitely (REQ-LLM-003).
+5. **Visibility**: Rate limit state changes are logged at warning level and emitted as metrics for operational monitoring (REQ-LLM-004).
+6. **Cost budget**: The existing per-pipeline cost budget (REQ-CODE-004) limits total LLM consumption, indirectly reducing rate limit pressure.
+
+**Residual risk**: If the LLM provider changes rate limit semantics without updating response headers, proactive throttling may not function correctly. Mitigated by the reactive 429 backoff as a fallback.
+
+---
+
 ## Security Requirements Summary
 
 | Requirement | Description | Enforcement |
@@ -389,7 +408,8 @@ This document identifies security threats to CogWorks and specifies mitigations.
 | Domain service isolation | Separate processes, no shared secrets | Integration tests for Extension API client |
 | Extension API response validation | All responses validated against JSON Schema | Unit tests + conformance test suite |
 | Interface registry validation | Definitions validated against schema | Unit tests for registry loader |
-| Rate limit respect | Proactive tracking and backoff | Integration tests for GitHub client |
+| Rate limit respect | Proactive tracking and backoff for GitHub API | Integration tests for GitHub client |
+| LLM rate limit respect | Proactive throttling, reactive backoff, parallel coordination, halt threshold for LLM API | Unit tests for LLM Gateway rate limit logic |
 | Cost budget enforcement | Per-pipeline token budget | Unit tests for budget logic |
 | Constitutional rules loaded | Non-overridable rules before any LLM call | Unit test: missing rules file halts pipeline |
 | Injection detection | External content scanned before prompt inclusion | Property-based tests for injection patterns |

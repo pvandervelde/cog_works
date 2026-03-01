@@ -88,7 +88,8 @@ Business logic is pure — no I/O, no mocks needed. Test with direct input/outpu
 ### Label Parsing and Generation
 
 - Round-trip: structured type → label string → structured type = identity
-- All label patterns: node, status, depends-on, order, processing, safety-critical, hold
+- All label patterns: node, status, processing, safety-critical, hold, awaiting-review
+- Dependency and ordering information is read from native GitHub typed issue links and the sub-issue API, not from labels
 - Invalid label strings → parse error (not panic)
 
 ### Context Pack Selection

@@ -322,8 +322,8 @@ Thin abstraction over LLM API calls with validation, cost tracking, budget enfor
 
 **Responsibilities:**
 
-- Knows: Model capabilities (context window size, token limits), cost per token per model, output schemas for each node type, rate limits, loaded constitutional rules, maximum concurrent LLM calls limit
-- Does: Injects constitutional rules as a privileged, non-overridable component of the system prompt before any other context, sends prompts to LLM API, validates responses against output schemas, tracks token usage and cost, enforces pipeline cost budget (atomic across parallel nodes), retries on API failures and schema validation failures, routes to different models per node configuration
+- Knows: Model capabilities (context window size, token limits), cost per token per model, output schemas for each node type, rate limits (per-provider request quotas), loaded constitutional rules, maximum concurrent LLM calls limit, rate-limit state from provider response headers
+- Does: Injects constitutional rules as a privileged, non-overridable component of the system prompt before any other context, sends prompts to LLM API, validates responses against output schemas, tracks token usage and cost, enforces pipeline cost budget (atomic across parallel nodes), retries on API failures and schema validation failures, routes to different models per node configuration, tracks rate-limit state per provider and proactively throttles requests to avoid exhausting quotas, queues pending calls when rate-limited, halts with retriable exit code if required wait exceeds threshold
 
 **Collaborators:**
 
@@ -337,7 +337,7 @@ Thin abstraction over LLM API calls with validation, cost tracking, budget enfor
 - Schema enforcer: Rejects invalid outputs and retries automatically
 - Cost tracker: Accumulates token usage per call
 - Budget gate: Refuses calls that would exceed pipeline budget
-- Rate limiter: Applies backoff on API-level failures
+- Rate limiter: Tracks per-provider request budgets from response headers, proactively throttles when budget is low, applies backoff on HTTP 429, coordinates across parallel nodes
 
 ---
 
@@ -531,8 +531,8 @@ Handles all GitHub API interaction. The system's sole interface to durable state
 
 **Responsibilities:**
 
-- Knows: GitHub API (REST and GraphQL), authentication, rate limit headers
-- Does: CRUD on issues (including sub-issues), labels, comments; creates and reads PRs; reads file contents; creates branches; commits files; reads PR review status
+- Knows: GitHub API (REST and GraphQL), authentication, rate limit headers, sub-issue API, typed issue links API, Projects V2 API
+- Does: CRUD on issues (including native sub-issues via the sub-issue API), labels, comments; creates and reads PRs; reads file contents; creates branches; commits files; reads PR review status; creates and reads typed issue links (`blocks` / `is blocked by`) for dependency tracking; optionally syncs pipeline state to GitHub Projects V2 boards; reads and preserves milestone assignments
 
 **Collaborators:**
 
@@ -540,10 +540,12 @@ Handles all GitHub API interaction. The system's sole interface to durable state
 
 **Roles:**
 
-- State reader: Reconstructs pipeline state from GitHub
-- State writer: Updates labels, creates issues, posts comments, creates PRs
+- State reader: Reconstructs pipeline state from GitHub (labels, sub-issues, typed issue links, PR status, state comments)
+- State writer: Updates labels, creates issues (as native sub-issues), posts comments, creates PRs, creates typed issue links for dependencies
 - File reader: Reads repository file contents via Contents API
 - Rate limit manager: Tracks remaining API budget, applies backoff when needed
+- Project syncer: Optionally updates GitHub Projects V2 board fields at pipeline boundaries (non-blocking, fire-and-forget)
+- Milestone propagator: Reads parent work item milestone and applies it to sub-work-items
 
 ---
 
