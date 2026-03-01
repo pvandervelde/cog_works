@@ -1,0 +1,70 @@
+# cargo-deny configuration file
+# See https://embarkstudios.github.io/cargo-deny/
+
+# Note: running `cargo deny check` requires this file to be at the root of the workspace
+
+[advisories]
+# Vulnerability database source; db-path defaults to $CARGO_HOME/advisory-dbs
+db-urls = ["https://github.com/rustsec/advisory-db"]
+
+# Ignore specific advisories (use with caution and document why)
+ignore = []
+
+[licenses]
+# Licenses we allow
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "OpenSSL",
+]
+
+# License clarity requirements
+confidence-threshold = 0.8
+
+[bans]
+# Lint level for when multiple versions of the same crate are detected
+multiple-versions = "allow"
+# Wildcards (*) are not allowed in version requirements
+# Exception: workspace git dependencies are allowed as wildcards since they're pinned by commit
+wildcards = "allow"
+# Highlight crates with specific issues
+highlight = "all"
+
+# List of crates that are allowed despite having duplicates
+# (mostly Windows system dependencies that can't be unified easily)
+skip = [
+    { name = "windows_x86_64_gnullvm" },
+    { name = "windows_x86_64_msvc" },
+    { name = "windows_x86_64_gnu" },
+    { name = "windows_i686_msvc" },
+    { name = "windows-sys" },
+    { name = "windows-targets" },
+]
+
+# Allow wildcards for external git dependencies (pinned by commit hash in workspace)
+skip-tree = []
+
+# Specific crate bans (if any)
+deny = [
+    # Deny old openssl versions
+    #{ name = "openssl", version = "<0.10" },
+]
+
+[sources]
+# Lint level for what to happen when a crate from a crate registry that is not
+# in the allow list is encountered
+unknown-registry = "deny"
+unknown-git = "deny"
+
+# Allowed registries
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Allow git sources from these organizations for extracted dependencies
+allow-git = []
