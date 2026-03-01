@@ -1,0 +1,413 @@
+name: Version Suggestion
+
+on:
+    issue_comment:
+        types: [created]
+
+permissions:
+    contents: write
+    pull-requests: write
+    issues: write
+
+jobs:
+    handle-version-suggestion:
+        name: Handle version suggestion command
+        # Only run on PR comments, not issue comments
+        if: github.event.issue.pull_request != null
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check if comment contains version command
+              id: check_command
+              run: |
+                  COMMENT="${{ github.event.comment.body }}"
+                  echo "Comment body: $COMMENT"
+
+                  # Check if comment starts with /version
+                  if [[ "$COMMENT" =~ ^/version[[:space:]]+(minor|major)([[:space:]]|$) ]]; then
+                    BUMP_TYPE="${BASH_REMATCH[1]}"
+                    echo "valid=true" >> $GITHUB_OUTPUT
+                    echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+                    echo "Found valid version command: /version $BUMP_TYPE"
+                  else
+                    echo "valid=false" >> $GITHUB_OUTPUT
+                    echo "No valid version command found"
+                  fi
+
+            - name: Get PR details
+              if: steps.check_command.outputs.valid == 'true'
+              id: pr_details
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  PR_NUMBER="${{ github.event.issue.number }}"
+
+                  # Get PR details using GitHub CLI
+                  PR_JSON=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefName,title,labels)
+
+                  HEAD_BRANCH=$(echo "$PR_JSON" | jq -r '.headRefName')
+                  PR_TITLE=$(echo "$PR_JSON" | jq -r '.title')
+                  IS_RELEASE_PR=$(echo "$PR_JSON" | jq -r '.labels[] | select(.name == "release") | .name' | grep -q "release" && echo "true" || echo "false")
+
+                  echo "head_branch=$HEAD_BRANCH" >> $GITHUB_OUTPUT
+                  echo "pr_title=$PR_TITLE" >> $GITHUB_OUTPUT
+                  echo "is_release_pr=$IS_RELEASE_PR" >> $GITHUB_OUTPUT
+
+                  echo "PR #$PR_NUMBER details:"
+                  echo "  Branch: $HEAD_BRANCH"
+                  echo "  Title: $PR_TITLE"
+                  echo "  Is Release PR: $IS_RELEASE_PR"
+
+            - name: Validate release PR
+              if: steps.check_command.outputs.valid == 'true'
+              id: validate
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  if [ "${{ steps.pr_details.outputs.is_release_pr }}" != "true" ]; then
+                    echo "valid_pr=false" >> $GITHUB_OUTPUT
+                    echo "error=This command only works on release PRs" >> $GITHUB_OUTPUT
+                    echo "❌ Not a release PR"
+
+                    # Add error reaction
+                    gh api \
+                      --method POST \
+                      -H "Accept: application/vnd.github+json" \
+                      "/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+                      -f content='-1'
+
+                    # Post error comment
+                    echo "❌ The \`/version\` command only works on release PRs (PRs with the 'release' label)." > error_comment.md
+                    gh pr comment "${{ github.event.issue.number }}" \
+                      --repo "${{ github.repository }}" \
+                      --body-file error_comment.md
+
+                    exit 0
+                  fi
+
+                  echo "valid_pr=true" >> $GITHUB_OUTPUT
+                  echo "✅ Valid release PR"
+
+            - name: Checkout code
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+              uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+              with:
+                  ref: ${{ steps.pr_details.outputs.head_branch }}
+                  fetch-depth: 0
+
+            - name: Set up Rust toolchain
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+              uses: dtolnay/rust-toolchain@stable
+
+            - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+
+            - name: Install cargo binstall
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+              uses: cargo-bins/cargo-binstall@main
+
+            - name: Install tools
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+              run: |
+                  cargo binstall conventional_commits_next_version --no-confirm
+                  cargo binstall git-cliff --no-confirm
+
+            - name: Configure git
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            - name: Extract current version from branch
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+              id: current_version
+              run: |
+                  BRANCH="${{ steps.pr_details.outputs.head_branch }}"
+
+                  # Extract version from branch name (release/X.Y.Z)
+                  if [[ "$BRANCH" =~ ^release/([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                    CURRENT_VERSION="${BASH_REMATCH[1]}"
+                    echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+                    echo "Current version from branch: $CURRENT_VERSION"
+                  else
+                    echo "❌ Could not extract version from branch name: $BRANCH"
+                    exit 1
+                  fi
+
+            - name: Calculate suggested version
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+              id: suggested_version
+              run: |
+                  CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
+                  BUMP_TYPE="${{ steps.check_command.outputs.bump_type }}"
+
+                  # Parse current version
+                  IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+                  # Calculate suggested version based on bump type
+                  if [ "$BUMP_TYPE" = "minor" ]; then
+                    # Bump minor, reset patch
+                    SUGGESTED_VERSION="${MAJOR}.$((MINOR + 1)).0"
+                  elif [ "$BUMP_TYPE" = "major" ]; then
+                    # Bump major, reset minor and patch
+                    SUGGESTED_VERSION="$((MAJOR + 1)).0.0"
+                  fi
+
+                  echo "version=$SUGGESTED_VERSION" >> $GITHUB_OUTPUT
+                  echo "Suggested version: $SUGGESTED_VERSION"
+
+            - name: Validate version bump
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
+              id: validate_bump
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
+                  SUGGESTED_VERSION="${{ steps.suggested_version.outputs.version }}"
+                  BUMP_TYPE="${{ steps.check_command.outputs.bump_type }}"
+
+                  # Parse versions for comparison
+                  IFS='.' read -r CURR_MAJOR CURR_MINOR CURR_PATCH <<< "$CURRENT_VERSION"
+                  IFS='.' read -r SUGG_MAJOR SUGG_MINOR SUGG_PATCH <<< "$SUGGESTED_VERSION"
+
+                  # Check if this is actually an upward bump
+                  VALID=true
+                  ERROR_MSG=""
+
+                  if [ "$SUGG_MAJOR" -lt "$CURR_MAJOR" ]; then
+                    VALID=false
+                    ERROR_MSG="Cannot downgrade major version ($CURRENT_VERSION → $SUGGESTED_VERSION)"
+                  elif [ "$SUGG_MAJOR" -eq "$CURR_MAJOR" ] && [ "$SUGG_MINOR" -lt "$CURR_MINOR" ]; then
+                    VALID=false
+                    ERROR_MSG="Cannot downgrade minor version ($CURRENT_VERSION → $SUGGESTED_VERSION)"
+                  elif [ "$SUGG_MAJOR" -eq "$CURR_MAJOR" ] && [ "$SUGG_MINOR" -eq "$CURR_MINOR" ] && [ "$SUGG_PATCH" -le "$CURR_PATCH" ]; then
+                    VALID=false
+                    ERROR_MSG="Version must be higher than current ($CURRENT_VERSION)"
+                  fi
+
+                  if [ "$VALID" = false ]; then
+                    echo "valid=false" >> $GITHUB_OUTPUT
+                    echo "error=$ERROR_MSG" >> $GITHUB_OUTPUT
+                    echo "❌ Invalid version bump: $ERROR_MSG"
+
+                    # Add error reaction
+                    gh api \
+                      --method POST \
+                      -H "Accept: application/vnd.github+json" \
+                      "/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+                      -f content='-1'
+
+                    # Post error comment using file to avoid YAML escaping issues
+                    cat > error_comment.md <<EOF
+                  ❌ **Invalid version suggestion**
+
+                  **Error:** $ERROR_MSG
+
+                  **Current version:** \`$CURRENT_VERSION\`
+                  **Suggested version:** \`$SUGGESTED_VERSION\`
+
+                  **Valid commands:**
+                  - \`/version minor\` - Bump minor version (e.g., 0.1.0 → 0.2.0)
+                  - \`/version major\` - Bump major version (e.g., 0.1.0 → 1.0.0)
+
+                  Version bumps must always be upward (no downgrades allowed).
+                  EOF
+
+                    gh pr comment "${{ github.event.issue.number }}" \
+                      --repo "${{ github.repository }}" \
+                      --body-file error_comment.md
+
+                    exit 0
+                  fi
+
+                  echo "valid=true" >> $GITHUB_OUTPUT
+                  echo "✅ Valid version bump: $CURRENT_VERSION → $SUGGESTED_VERSION"
+
+            - name: Add success reaction
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true' && steps.validate_bump.outputs.valid == 'true'
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  # Add thumbs up reaction to indicate processing
+                  gh api \
+                    --method POST \
+                    -H "Accept: application/vnd.github+json" \
+                    "/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+                    -f content='+1'
+
+            - name: Generate updated changelog
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true' && steps.validate_bump.outputs.valid == 'true'
+              id: changelog
+              run: |
+                  SUGGESTED_VERSION="${{ steps.suggested_version.outputs.version }}"
+
+                  # Generate changelog for the new version
+                  git-cliff --tag "${SUGGESTED_VERSION}" --unreleased --strip all > release_notes.md
+
+                  echo "Generated changelog for version ${SUGGESTED_VERSION}"
+
+                  # Store changelog for PR update
+                  if [ -s release_notes.md ]; then
+                    {
+                      echo 'changelog<<EOF'
+                      cat release_notes.md
+                      echo EOF
+                    } >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Update version files
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true' && steps.validate_bump.outputs.valid == 'true'
+              run: |
+                  SUGGESTED_VERSION="${{ steps.suggested_version.outputs.version }}"
+
+                  # Update workspace version in root Cargo.toml
+                  sed -i "s/^version = \".*\"/version = \"${SUGGESTED_VERSION}\"/" Cargo.toml
+
+                  # Update version in all crate Cargo.toml files
+                  for cargo_toml in crates/*/Cargo.toml; do
+                    if [ -f "$cargo_toml" ]; then
+                      sed -i "s/^version = \".*\"/version = \"${SUGGESTED_VERSION}\"/" "$cargo_toml"
+                      echo "Updated version in $cargo_toml"
+                    fi
+                  done
+
+            - name: Update CHANGELOG.md
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true' && steps.validate_bump.outputs.valid == 'true'
+              run: |
+                  SUGGESTED_VERSION="${{ steps.suggested_version.outputs.version }}"
+                  RELEASE_DATE=$(date +%Y-%m-%d)
+
+                  # Update CHANGELOG.md with new version
+                  {
+                    echo "# Changelog"
+                    echo ""
+                    echo "All notable changes to this project will be documented in this file."
+                    echo ""
+                    echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),"
+                    echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)."
+                    echo ""
+                    echo "## [${SUGGESTED_VERSION}] - ${RELEASE_DATE}"
+                    echo ""
+                    cat release_notes.md
+                    echo ""
+                    tail -n +8 CHANGELOG.md 2>/dev/null || true
+                  } > CHANGELOG.md.new
+                  mv CHANGELOG.md.new CHANGELOG.md
+
+                  echo "Updated CHANGELOG.md with version ${SUGGESTED_VERSION}"
+
+            - name: Commit and push changes
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true' && steps.validate_bump.outputs.valid == 'true'
+              run: |
+                  SUGGESTED_VERSION="${{ steps.suggested_version.outputs.version }}"
+                  BRANCH="${{ steps.pr_details.outputs.head_branch }}"
+
+                  # Stage changes
+                  git add Cargo.toml crates/*/Cargo.toml CHANGELOG.md
+
+                  # Commit if there are changes
+                  if ! git diff --staged --quiet; then
+                    git commit -m "chore(release): bump version to ${SUGGESTED_VERSION}" \
+                      -m "Updated by version suggestion command from @${{ github.event.comment.user.login }}"
+
+                    # Force push to update the release branch
+                    git push origin "$BRANCH" --force
+
+                    echo "✅ Pushed version ${SUGGESTED_VERSION} to branch $BRANCH"
+                  else
+                    echo "No changes to commit"
+                  fi
+
+            - name: Update release branch name
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true' && steps.validate_bump.outputs.valid == 'true'
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
+                  SUGGESTED_VERSION="${{ steps.suggested_version.outputs.version }}"
+                  OLD_BRANCH="${{ steps.pr_details.outputs.head_branch }}"
+                  NEW_BRANCH="release/${SUGGESTED_VERSION}"
+
+                  # Only rename if versions are different
+                  if [ "$OLD_BRANCH" != "$NEW_BRANCH" ]; then
+                    # Create new branch from current state
+                    git checkout -b "$NEW_BRANCH"
+                    git push origin "$NEW_BRANCH"
+
+                    # Update PR to point to new branch
+                    gh api \
+                      --method PATCH \
+                      -H "Accept: application/vnd.github+json" \
+                      "/repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}" \
+                      -f head="$NEW_BRANCH"
+
+                    # Delete old branch
+                    git push origin --delete "$OLD_BRANCH" || true
+
+                    echo "✅ Renamed branch from $OLD_BRANCH to $NEW_BRANCH"
+                  fi
+
+            - name: Update PR details
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true' && steps.validate_bump.outputs.valid == 'true'
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  SUGGESTED_VERSION="${{ steps.suggested_version.outputs.version }}"
+                  CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
+                  BUMP_TYPE="${{ steps.check_command.outputs.bump_type }}"
+
+                  # Create updated PR body in a file
+                  cat > pr_body.md <<EOF
+                  ## Release v${SUGGESTED_VERSION}
+
+                  This PR was automatically generated to prepare for the v${SUGGESTED_VERSION} release.
+
+                  **Version updated:** \`${CURRENT_VERSION}\` → \`${SUGGESTED_VERSION}\` (\`${BUMP_TYPE}\` bump requested by @${{ github.event.comment.user.login }})
+
+                  ### Changes
+
+                  ${{ steps.changelog.outputs.changelog }}
+
+                  ### Release Process
+
+                  1. Review the version bump and changelog
+                  2. To suggest a different version bump, comment: \`/version <bump-type>\` where bump-type is \`minor\` or \`major\`
+                  3. Once approved, merge this PR to trigger the release workflow
+                  4. The release workflow will create a Git tag, GitHub release, and publish artifacts
+
+                  ### Modified Files
+
+                  - \`Cargo.toml\` - Updated workspace version
+                  - \`crates/*/Cargo.toml\` - Updated all crate versions
+                  - \`CHANGELOG.md\` - Added changelog for this version
+                  EOF
+
+                  # Update PR title and body
+                  gh pr edit "${{ github.event.issue.number }}" \
+                    --repo "${{ github.repository }}" \
+                    --title "Release v${SUGGESTED_VERSION}" \
+                    --body-file pr_body.md
+
+                  echo "✅ Updated PR title and description"
+
+            - name: Post success comment
+              if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true' && steps.validate_bump.outputs.valid == 'true'
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
+                  SUGGESTED_VERSION="${{ steps.suggested_version.outputs.version }}"
+                  BUMP_TYPE="${{ steps.check_command.outputs.bump_type }}"
+
+                  cat > success_comment.md <<EOF
+                  ✅ **Version updated successfully**
+
+                  **Previous version:** \`${CURRENT_VERSION}\`
+                  **New version:** \`${SUGGESTED_VERSION}\`
+                  **Bump type:** \`${BUMP_TYPE}\`
+
+                  The PR has been updated with the new version. All Cargo.toml files and CHANGELOG.md have been updated accordingly.
+                  EOF
+
+                  gh pr comment "${{ github.event.issue.number }}" \
+                    --repo "${{ github.repository }}" \
+                    --body-file success_comment.md

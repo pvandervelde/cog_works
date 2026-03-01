@@ -1,0 +1,345 @@
+name: Rust CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  calculate-version:
+    name: Calculate version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          # Fetch all history for version calculation and changelog generation
+          fetch-depth: 0
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+
+      - name: Install cargo binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install Conventional Commits Next Version
+        run: cargo install conventional_commits_next_version
+
+      - name: Install git-cliff
+        run: cargo install git-cliff
+
+      - name: Install cargo typos
+        run: cargo install typos-cli
+
+      - name: Calculate next version
+        id: calc_version
+        run: |
+          # Use Conventional Commits Next Version to calculate the next version
+          # Check if there are any tags first
+          if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+            # There are tags, use the latest tag as starting point
+            LATEST_TAG=$(git describe --tags --abbrev=0)
+            LATEST_COMMIT=$(git rev-parse $LATEST_TAG)
+            NEXT_VERSION=$(conventional_commits_next_version --from-version ${LATEST_TAG} --calculation-mode Batch ${LATEST_COMMIT} )
+          else
+            # No tags, start from the beginning of the repository
+            FIRST_COMMIT=$(git rev-list --max-parents=0 HEAD)
+            NEXT_VERSION=$(conventional_commits_next_version --from-version "0.0.0" --calculation-mode Batch ${FIRST_COMMIT})
+          fi
+          echo "NEXT_VERSION=${NEXT_VERSION}" >> $GITHUB_OUTPUT
+          echo "The next version is: ${NEXT_VERSION}"
+
+      - name: Show stale release branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEXT_VERSION="${{ steps.calc_version.outputs.NEXT_VERSION }}"
+          echo "Next calculated version: ${NEXT_VERSION}"
+          # List all remote release branches
+          git fetch origin 'refs/heads/release/*:refs/remotes/origin/release/*'
+          for branch in $(git branch -r --list 'origin/release/*' | sed 's|origin/||'); do
+            # Extract version from branch name (e.g., release/1.2.3 -> 1.2.3)
+            branch_version=$(echo "$branch" | sed 's|release/||')
+            echo "Found existing release branch: ${branch} (version: ${branch_version})"
+
+            if [[ "$branch_version" != "$NEXT_VERSION" ]]; then
+              echo "Branch ${branch} is stale (version ${branch_version} != ${NEXT_VERSION}). Cleaning up..."
+              # Find PR associated with the stale branch
+              PR_NUMBER=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
+              if [[ -n "$PR_NUMBER" ]]; then
+                echo "PR #${PR_NUMBER} is on stale branch ${branch}..."
+              else
+                echo "No open PR found for stale branch ${branch}."
+              fi
+              # Delete the stale remote branch
+              echo "stale remote branch ${branch}..."
+            fi
+          done
+
+      - name: Check if release branch already exists
+        id: check_branch
+        run: |
+          NEXT_VERSION="${{ steps.calc_version.outputs.NEXT_VERSION }}"
+          BRANCH_NAME="release/${NEXT_VERSION}"
+          if git rev-parse --verify --quiet "origin/${BRANCH_NAME}"; then
+            echo "Branch ${BRANCH_NAME} already exists."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Branch ${BRANCH_NAME} does not exist."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Changelog Section
+        id: generate_changelog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEXT_VERSION="${{ steps.calc_version.outputs.NEXT_VERSION }}"
+          # Generate notes for the upcoming version
+          # Use the tag format decided earlier (no 'v' prefix)
+          git-cliff --tag "${NEXT_VERSION}" --unreleased --strip all > release_notes.md
+          echo "Generated release notes for ${NEXT_VERSION}"
+          # Check if notes were actually generated (might be empty if no relevant commits)
+          if [ -s release_notes.md ]; then
+            echo "has_notes=true" >> $GITHUB_OUTPUT
+          else
+            echo "No relevant commits found for changelog."
+            echo "has_notes=false" >> $GITHUB_OUTPUT
+          fi
+
+  check_secrets:
+    name: Check for secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for secrets
+        run: |
+          pip install detect-secrets
+          if [ -f ".secrets.baseline" ]; then
+            detect-secrets scan --baseline .secrets.baseline
+          else
+            echo "No .secrets.baseline found. Creating one for review..."
+            detect-secrets scan > .secrets.baseline
+            echo "::warning::No .secrets.baseline was committed. A baseline has been generated — please commit it to the repository."
+          fi
+
+  test:
+    name: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Install Rust
+        run: rustup update stable
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@92f69c195229fe62d58b4d697ab4bc75def98e76 # v2
+        with:
+          tool: cargo-llvm-cov@0.6.10
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+
+      - name: Generate code coverage
+        run: |
+          # Run coverage for all crates excluding integration test scenarios
+          cargo llvm-cov --all-features --workspace --codecov --output-path codecov.json --lib --bins
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
+          files: codecov.json
+          fail_ci_if_error: true
+
+  doc_test:
+    name: doc-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+      - name: Install Rust
+        run: rustup update stable
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+
+      - name: Run doc-tests
+        run: cargo test --doc --all-features --workspace
+
+  # docker_build:
+  #   name: docker-build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+
+  #     - name: Set up Docker Buildx
+  #       uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+  #     - name: Build Docker image
+  #       uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+  #       with:
+  #         context: .
+  #         push: false
+  #         tags: queue-keeper:ci-test
+  #         cache-from: type=gha
+  #         cache-to: type=gha,mode=max
+
+  # bench_test:
+  #   name: bench-tests
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+  #
+  #     - name: Install Rust
+  #       run: rustup update stable
+  #
+  #     - name: Run bench-tests
+  #       run: cargo test --benches
+
+  # build-function:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #   - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+  #     with:
+  #       fetch-depth: 0  # Fetch all history for all tags and branches
+
+  #   - name: Set up Rust
+  #     uses: dtolnay/rust-toolchain@stable # v1
+  #     with:
+  #       target: x86_64-unknown-linux-musl
+  #       toolchain: stable
+
+  #   - name: Install cargo binstall
+  #     uses: cargo-bins/cargo-binstall@main
+
+  #   - name: Install cross
+  #     run: cargo binstall cross --no-confirm --no-track
+
+  #   - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2
+
+  #   - name: Build az_handler
+  #     run: |
+  #       cross build --release --package az_handler --target x86_64-unknown-linux-musl --target-dir target/temp
+
+  #   - name: show directories after compile
+  #     run: |
+  #       ls -la
+  #       ls -la target
+  #       ls -la target/temp
+  #       ls -la target/temp/x86_64-unknown-linux-musl
+  #       ls -la target/temp/x86_64-unknown-linux-musl/release
+
+  #   # Copy the files for the azure function into a single directory
+  #   #
+  #   # For the azure function we need the following directories and files in the following layout.
+  #   # Where [D] means directory and [F] means file
+  #   #
+  #   # [D] <function_name>       --> <target>/<function_name>
+  #   #     [F] function.json     --> <target>/<function_name>/function.json
+  #   # [F] host.json             --> <target>/host.json
+  #   # [F] az_handler               --> <target>/az_handler
+  #   - name: Copy Azure functions configs
+  #     run: |
+  #       mkdir -p target/func/merge_warden
+  #       cp -r ./target/temp/x86_64-unknown-linux-musl/release/az_handler target/func
+  #       cp -r ./configs/az_func/merge_warden/* target/func/merge_warden
+  #       cp -r ./configs/az_func/host.json target/func
+
+  #   - name: show directories after assemble
+  #     run: |
+  #       ls -la
+  #       ls -la target
+  #       ls -la target/func
+  #       ls -la target/func/merge_warden
+
+  # # Can only run this in PRs because the Azure OIDC is linked to PRs and building on the 'master' branch
+  # tf-test:
+  #   name: Terraform Test
+  #   runs-on: ubuntu-latest
+
+  #   permissions:
+  #     contents: read
+  #     id-token: write
+
+  #   if: ${{ github.event_name == 'pull_request' }}
+  #   steps:
+  #   - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+  #     with:
+  #       ref: ${{ github.event.pull_request.head.ref }}
+  #       fetch-depth: 0  # Fetch all history for all tags and branches
+
+  #   - name: Fetch all history for all tags and branches
+  #     run: |
+  #       git fetch --prune --tags
+  #       git branch
+
+  #   # Keep GitVersion for Terraform planning in PRs
+  #   - name: Install GitVersion
+  #     uses: gittools/actions/gitversion/setup@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+  #     with:
+  #       versionSpec: '6.0.0'
+
+  #   - name: Determine Version
+  #     id: get-version # step id used as reference for output values
+  #     uses: gittools/actions/gitversion/execute@51d325634925d7d9ce0a7efc2c586c0bc2b9eee6 # v3.2.1
+  #     with:
+  #       useConfigFile: true
+
+  #   - name: Setup Terraform
+  #     uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+
+  #   - name: Azure Login
+  #     uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+  #     with:
+  #       client-id: ${{ secrets.ARM_CLIENT_ID }}
+  #       tenant-id: ${{ secrets.ARM_TENANT_ID }}
+  #       subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+  #   - name: Terraform Init
+  #     working-directory: ops/azure
+  #     run: terraform init
+  #     env:
+  #       ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  #       ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  #       ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+  #       ARM_USE_OIDC: true
+
+  #   - name: Create GitHub App Key File
+  #     shell: bash # Explicitly use bash for redirection
+  #     run: |
+  #       printf '%s\n' "${{ secrets.GH_APP_PRIVATE_KEY }}" > ${{ github.workspace }}/ops/azure/gh_app_key.pem
+  #       if [ -f ${{ github.workspace }}/ops/azure/gh_app_key.pem ]; then
+  #         echo "GitHub App Key File created successfully."
+  #       else
+  #         echo "Failed to create GitHub App Key File."
+  #         exit 1
+  #       fi
+
+  #   - name: Terraform Plan
+  #     working-directory: ops/azure
+  #     run: |
+  #       terraform plan
+  #     env:
+  #       ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  #       ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  #       ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+  #       ARM_USE_OIDC: true
+  #       TF_VAR_github_app_id: ${{ secrets.GH_APP_ID }}
+  #       TF_VAR_github_app_private_key_path: "${{ github.workspace }}/ops/azure/gh_app_key.pem"
+  #       TF_VAR_github_webhook_secret: ${{ secrets.GH_WEBHOOK_SECRET }}
+  #       TF_VAR_meta_git_sha: ${{ github.sha }}
+  #       TF_VAR_meta_version: ${{ steps.get-version.outputs.majorMinorPatch }} # Use GitVersion output here
+
+  #   - name: Remove GitHub App Key File
+  #     if: always()
+  #     run: rm ${{ github.workspace }}/ops/azure/gh_app_key.pem
+  #     shell: bash
