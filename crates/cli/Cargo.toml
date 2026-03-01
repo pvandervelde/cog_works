@@ -1,0 +1,30 @@
+[package]
+name = "cli"
+description = "CogWorks CLI entry point: composition root, observability wiring, and trigger-mode selection."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cogworks"
+path = "src/main.rs"
+
+[dependencies]
+pipeline = { workspace = true }
+nodes = { workspace = true }
+github = { workspace = true }
+llm = { workspace = true }
+extension-api = { workspace = true }
+listener = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

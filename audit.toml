@@ -1,0 +1,22 @@
+# cargo-audit configuration
+# See https://github.com/rustsec/rustsec/tree/main/cargo-audit
+
+[advisories]
+# Advisory IDs to ignore.
+# Each entry must include a documented reason — do not add ignores without
+# explaining why the risk is accepted and what the remediation path is.
+ignore = [
+    # RUSTSEC-2023-0071: Marvin Attack timing side-channel in `rsa` v0.9.x
+    # Severity: medium (CVSS 5.9)
+    # Affected path: rsa <- github-bot-sdk (our own first-party library)
+    # Status: No patched `rsa` version is available as of 2026-03-02.
+    #         `github-bot-sdk` uses `rsa` only for JWT/webhook signature
+    #         verification, not for long-term key storage or decryption of
+    #         attacker-controlled ciphertext.  The attack requires many
+    #         oracle queries against a live process; our webhook handler
+    #         does not expose such an oracle.
+    # Remediation: Upgrade `github-bot-sdk` as soon as an upstream fix or
+    #              replacement crate (e.g. rsa 0.10) is released.
+    #              Track via: https://github.com/RustCrypto/RSA/issues/19
+    "RUSTSEC-2023-0071",
+]

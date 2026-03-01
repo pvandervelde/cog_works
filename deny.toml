@@ -66,5 +66,8 @@ unknown-git = "deny"
 
 # Allowed registries
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Allow git sources from these organizations for extracted dependencies
-allow-git = []
+# Allow git sources for first-party libraries not yet published to crates.io
+allow-git = [
+    "https://github.com/pvandervelde/github-bot-sdk",
+    "https://github.com/pvandervelde/queue-runtime",
+]
