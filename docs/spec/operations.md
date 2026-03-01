@@ -515,7 +515,12 @@ The metric sink is configured in `.cogworks/config.toml`:
 **Resolution**:
 
 1. Wait for the provider's rate limit window to reset.
-2. If recurring, reduce `max_concurrent_llm_calls` in `.cogworks/pipeline.toml` to lower the request rate.
+2. If recurring, reduce `max_concurrent_llm_calls` in `.cogworks/pipeline.toml` to lower the request rate:
+   ```toml
+   # .cogworks/pipeline.toml
+   [pipeline]
+   max_concurrent_llm_calls = 1  # default: 3
+   ```
 3. If the provider supports higher rate limits on a paid tier, consider upgrading.
 4. If multiple CogWorks instances share the same API key, consider using separate keys or staggering pipeline runs.
 5. Review the `llm_rate_limit.halt_threshold_minutes` setting — increase if the wait is acceptable, or decrease if faster failure is preferred.

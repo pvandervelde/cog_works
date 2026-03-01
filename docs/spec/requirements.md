@@ -441,7 +441,7 @@ Pipeline-internal labels (`cogworks:processing`, `cogworks:node:<name>`, `cogwor
 
 ### REQ-LABEL-003: Label configuration validation
 
-Label configuration MUST be validated at load time. If two workflow labels are configured to the same string, the system MUST produce a clear error and halt.
+Label configuration MUST be validated at load time. If two workflow labels are configured to the same string, the system MUST produce a clear error and halt. Additionally, if any workflow label is configured to the same string as a pipeline-internal label (e.g., `cogworks:processing`, `cogworks:node:*`), the system MUST produce a clear error and halt — the same GitHub label string carrying two distinct semantic meanings causes undefined pipeline behavior.
 
 ---
 

@@ -38,6 +38,7 @@ This document defines the clean architecture boundaries — what is business log
 │  Scenario Executor         │  Twin Provisioner                          │
 │  Summary Cache             │  Pipeline Configuration Loader             │
 │  Tool Profile Store        │  Adapter Spec Loader                       │
+│  Project Board (optional)  │                                            │
 └─────────────────────┬───────────────────────────────────────────────────┘
                       │ implemented by
                       ▼
@@ -45,7 +46,7 @@ This document defines the clean architecture boundaries — what is business log
 │                   Infrastructure Implementations                        │
 │  (Concrete adapters — the only code that touches external systems)      │
 │                                                                         │
-│  Anthropic Messages API    │  GitHub REST/GraphQL API                   │
+│  Anthropic Messages API    │  GitHub REST/GraphQL/Projects API          │
 │  Extension API Client      │  Handlebars template engine                │
 │  (Unix socket / HTTP)      │  GitHub issue comments (audit)             │
 │  (Future: gRPC transport)  │  (Future: OpenAI, GitLab, etc.)            │

@@ -1248,7 +1248,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 - **Given**: A configuration file that attempts to override the name of `cogworks:run` or `cogworks:node:*` labels
 - **When**: The configuration is loaded
-- **Then**: The override is ignored (or rejected with an error)
+- **Then**: The configuration is rejected with a clear error message and the pipeline halts
 - **And**: Pipeline-internal labels retain their `cogworks:` prefix
 - **Traces to**: REQ-LABEL-002
 
@@ -1264,6 +1264,14 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Given**: A configuration where two different workflow labels map to the same GitHub label name
 - **When**: The configuration is loaded
 - **Then**: An error is emitted identifying the duplicate
+- **And**: The pipeline refuses to start
+- **Traces to**: REQ-LABEL-003
+
+### ASSERT-LABEL-004: Workflow label matching a pipeline-internal label is rejected at startup
+
+- **Given**: A configuration that maps a workflow label to a pipeline-internal label string (e.g., `trigger = "cogworks:processing"`)
+- **When**: The configuration is loaded
+- **Then**: The configuration is rejected with a clear error identifying the conflict with the named pipeline-internal label
 - **And**: The pipeline refuses to start
 - **Traces to**: REQ-LABEL-003
 
@@ -1311,7 +1319,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **When**: CogWorks creates a sub-work-item from the parent
 - **Then**: The sub-work-item has no milestone assigned
 - **And**: No error or warning is logged
-- **Traces to**: REQ-PLAN-007, EDGE-083
+- **Traces to**: REQ-PLAN-007, EDGE-084
 
 ---
 
@@ -1319,7 +1327,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ### ASSERT-STALL-001: Repeated same-category diagnostics trigger early escalation
 
-- **Given**: A code generation node that has retried 3 times, and all 3 retries produced diagnostics in the same error category (e.g., "type mismatch")
+- **Given**: A code generation node that has retried 3 times, and all 3 retries produced diagnostics in the same error category (e.g., `type_error`)
 - **When**: The retry loop evaluates the latest diagnostics
 - **Then**: The node escalates early (before exhausting the full retry budget)
 - **And**: The escalation reason includes the stalling category and repetition count
@@ -1327,7 +1335,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ### ASSERT-STALL-002: Different diagnostic categories do not trigger stalling
 
-- **Given**: A code generation node that has retried 3 times, with categories "type mismatch", "missing import", and "syntax error"
+- **Given**: A code generation node that has retried 3 times, with categories `type_error`, `interface_mismatch`, and `syntax_error`
 - **When**: The retry loop evaluates the latest diagnostics
 - **Then**: No stalling is detected
 - **And**: The node continues retrying normally using its standard retry budget
@@ -1335,7 +1343,7 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 ### ASSERT-STALL-003: Stalling detection tracks categories across retries
 
-- **Given**: A code generation node that retries with diagnostics: retry 1 = "type mismatch", retry 2 = "missing import", retry 3 = "type mismatch", retry 4 = "type mismatch", retry 5 = "type mismatch"
+- **Given**: A code generation node that retries with diagnostics: retry 1 = `type_error`, retry 2 = `interface_mismatch`, retry 3 = `type_error`, retry 4 = `type_error`, retry 5 = `type_error`
 - **When**: The retry loop evaluates after retry 5
 - **Then**: Stalling is detected because 3 consecutive retries (3, 4, 5) produced the same category
 - **And**: The stalling metric `cogworks_semantic_stalling_total` is incremented
@@ -1357,6 +1365,14 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 
 - **Given**: Sub-work-item B depends on sub-work-item A
 - **When**: The planner records this dependency
-- **Then**: A typed issue link of type "blocked by" is created from B to A (or "blocks" from A to B)
+- **Then**: A typed issue link of type `blocks` is created **from A to B** (the canonical direction: dependency source blocks the dependent target)
 - **And**: No `cogworks:depends-on:*` label is used
 - **Traces to**: REQ-PLAN-005
+
+### ASSERT-STALL-004: Stalling threshold exceeding retry budget produces a warning at startup
+
+- **Given**: A pipeline configuration where the stalling threshold (`semantic_stall_threshold`) is set to 5 but the node's `max_retries` is 3
+- **When**: The pipeline configuration is loaded
+- **Then**: A warning is emitted noting that stalling detection cannot fire for this node (threshold 5 > retry budget 3)
+- **And**: Stalling detection is treated as disabled for that node (pipeline still starts — this is a warning, not an error)
+- **Traces to**: REQ-CODE-006
