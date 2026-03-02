@@ -74,9 +74,73 @@ The following domains will add entries here as work proceeds:
 
 ### Pipeline Graph (`pipeline/src/graph.rs`)
 
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/pipeline-graph.md`.
+
+**Auxiliary scalars**
+
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | Node/edge definitions, runtime state, evaluation records |
+| `Expression` | Newtype — deterministic boolean predicate string |
+| `NaturalLanguageCondition` | Newtype — LLM-evaluated condition description string |
+| `TimeoutSeconds` | Newtype — serialisable timeout (wraps `u64` seconds) |
+
+**Graph structure enums**
+
+| Type | Purpose |
+|------|---------|
+| `NodeType` | `Llm` / `Deterministic` / `Spawning` |
+| `NodeGate` | `AutoProceed` / `HumanGated` |
+| `ValidationKind` | `None` / `DomainService` / `Scenario` |
+| `EvaluationMode` | `AllMatching` / `FirstMatching` / `Explicit` |
+| `ReworkSemantics` | `Retry` / `Rework` |
+| `OverflowBehaviour` | `HaltWithError` / `Escalate` / `TakeEdge(EdgeId)` |
+| `EdgeConditionKind` | `Deterministic(Expression)` / `LlmEvaluated` / `Composite` |
+| `CompositeCondition` | `And` / `Or` / `Not` combinator |
+
+**Graph structure structs**
+
+| Type | Purpose |
+|------|---------|
+| `NodeDefinition` | Static node declaration (id, type, inputs, outputs, timeout, gate, …) |
+| `ReworkEdge` | Back-edge metadata (max traversals, semantics, overflow behaviour) |
+| `EdgeDefinition` | Static edge declaration (source, target, condition, rework metadata) |
+| `PipelineSettings` | Pipeline-level execution defaults |
+| `PipelineGraph` | Validated graph (nodes + edges + eval modes + settings) |
+| `PipelineToolProfileConfig` | Tool-profile overrides per node |
+| `PipelineConfiguration` | Full `.cogworks/pipeline.toml` contents |
+
+**Runtime state enums**
+
+| Type | Purpose |
+|------|---------|
+| `NodeStatus` | `Pending` / `Active` / `Completed` / `Failed` / `HumanGated` |
+| `EvaluatorKind` | `Deterministic` / `LlmModel { model_id }` / `Composite` |
+
+**Runtime state structs**
+
+| Type | Purpose |
+|------|---------|
+| `NodeState` | Per-node mutable state (status, attempts, rework counts, error) |
+| `PipelineState` | Full run state (node states, parallel branches, cost accumulator) |
+| `EdgeEvaluationRecord` | Audit record for one edge-condition evaluation |
+| `PipelineStateComment` | Self-contained GitHub comment payload for state persistence |
+
+**Error types**
+
+| Type | Purpose |
+|------|---------|
+| `CycleError` | Returned by `topological_sort` when forward-edge cycle detected |
+| `GraphValidationError` | Single structural violation from `validate_pipeline_graph` |
+
+**Pure functions**
+
+| Function | Signature summary |
+|----------|------------------|
+| `topological_sort` | `(&[NodeDefinition], &[EdgeDefinition]) → Result<Vec<NodeId>, CycleError>` |
+| `evaluate_deterministic_condition` | `(&Expression, &PipelineState) → bool` |
+| `validate_pipeline_graph` | `(&PipelineGraph) → Result<(), Vec<GraphValidationError>>` |
+| `compute_eligible_nodes` | `(&PipelineState, &PipelineGraph) → Vec<NodeId>` |
 
 ### GitHub & Events (`pipeline/src/github.rs`)
 
