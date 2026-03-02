@@ -1,0 +1,16 @@
+[package]
+name = "pipeline"
+description = "CogWorks orchestration domain: types, business logic, and port trait definitions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# No I/O crates permitted here (see docs/spec/constraints.md §Module Boundaries).
+[dependencies]
+thiserror = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }

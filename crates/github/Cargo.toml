@@ -1,0 +1,17 @@
+[package]
+name = "github"
+description = "CogWorks GitHub infrastructure adapter (implements pipeline's GitHub traits via github-bot-sdk)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pipeline = { workspace = true }
+github-bot-sdk = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

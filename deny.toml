@@ -8,7 +8,22 @@
 db-urls = ["https://github.com/rustsec/advisory-db"]
 
 # Ignore specific advisories (use with caution and document why)
-ignore = []
+# All three are transitive through first-party git deps (github-bot-sdk, queue-runtime).
+# No upstream fix is available for any of them as of 2026-03-02.
+ignore = [
+    # RUSTSEC-2023-0071: Marvin Attack timing side-channel in rsa 0.9.x
+    # Source: rsa <- github-bot-sdk (webhook signature verification only;
+    #         no decryption oracle exposed to attackers).
+    { id = "RUSTSEC-2023-0071" },
+    # RUSTSEC-2024-0384: `instant` crate unmaintained
+    # Source: instant <- fastrand <- futures-lite <- http-types <- azure_core <- queue-runtime
+    # Risk: maintenance gap only; no security vulnerability identified.
+    { id = "RUSTSEC-2024-0384" },
+    # RUSTSEC-2024-0436: `paste` crate unmaintained
+    # Source: paste <- azure_core <- queue-runtime
+    # Risk: maintenance gap only; no security vulnerability identified.
+    { id = "RUSTSEC-2024-0436" },
+]
 
 [licenses]
 # Licenses we allow
@@ -66,5 +81,8 @@ unknown-git = "deny"
 
 # Allowed registries
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Allow git sources from these organizations for extracted dependencies
-allow-git = []
+# Allow git sources for first-party libraries not yet published to crates.io
+allow-git = [
+    "https://github.com/pvandervelde/github-bot-sdk",
+    "https://github.com/pvandervelde/queue-runtime",
+]

@@ -1,0 +1,70 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pipeline",
+    "crates/nodes",
+    "crates/github",
+    "crates/llm",
+    "crates/extension-api",
+    "crates/listener",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+repository = "https://github.com/pvandervelde/cog_works"
+
+# ---------------------------------------------------------------------------
+# Workspace-level dependencies — pin versions here so all crates stay in sync.
+# ---------------------------------------------------------------------------
+[workspace.dependencies]
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Identifiers
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Observability — structured spans/events + OpenTelemetry exporter
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["tonic"] }
+tracing-opentelemetry = "0.28"
+
+# HTTP client (used by llm and extension-api over HTTP transport)
+reqwest = { version = "0.12", features = [
+    "json",
+    "rustls-tls",
+], default-features = false }
+
+# GitHub SDK (pvandervelde/github-bot-sdk)
+# rev is the commit reviewed in PR 11; update intentionally when upgrading.
+github-bot-sdk = { git = "https://github.com/pvandervelde/github-bot-sdk", rev = "ba1e456cb25ea038e69b78432c2bb8f2050ef65d" }
+
+# Cloud queue SDK (pvandervelde/queue-runtime)
+# rev is the commit reviewed in PR 11; update intentionally when upgrading.
+queue-runtime = { git = "https://github.com/pvandervelde/queue-runtime", rev = "ac848ffa72608db4e531297cae7ce0f5ba8fcaa2" }
+
+# Internal workspace crates
+pipeline = { path = "crates/pipeline" }
+nodes = { path = "crates/nodes" }
+github = { path = "crates/github" }
+llm = { path = "crates/llm" }
+extension-api = { path = "crates/extension-api" }
+listener = { path = "crates/listener" }
