@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CostBudget, EdgeId, NodeId, PipelineName, PipelineRunId, ProfileName, Timestamp, WorkItemId,
+    CostBudget, EdgeId, NodeId, PipelineName, PipelineRunId, ProfileName, Timestamp, TokenCost,
+    WorkItemId,
 };
 
 // ─── Auxiliary scalar types ────────────────────────────────────────────────
@@ -55,7 +56,7 @@ impl Expression {
 ///
 /// The LLM decides `true`/`false` by reasoning against this description
 /// applied to the node's output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NaturalLanguageCondition(String);
 
 impl NaturalLanguageCondition {
@@ -222,6 +223,10 @@ pub enum OverflowBehaviour {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReworkEdge {
     /// Maximum number of times this edge may be traversed in a single run.
+    ///
+    /// Must be ≥ 1. [`validate_pipeline_graph`] will return
+    /// [`GraphValidationError::InvalidMaxTraversals`] for any rework edge
+    /// with `max_traversals == 0`.
     pub max_traversals: u32,
     /// Output artifact keys from the source node preserved and forwarded to
     /// the target node on every traversal.
@@ -265,7 +270,14 @@ pub struct PipelineSettings {
 ///
 /// Produced by [`validate_pipeline_graph`]. This is the runtime representation
 /// loaded from a configuration file after validation succeeds.
+///
+/// ## Loading Sequence
+///
+/// Always deserialise → validate → use. A deserialised `PipelineGraph` is
+/// **not** guaranteed valid. Call [`validate_pipeline_graph`] before passing
+/// this value to any execution logic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PipelineGraph {
     /// Ordered list of node definitions.
     pub nodes: Vec<NodeDefinition>,
@@ -275,8 +287,20 @@ pub struct PipelineGraph {
     ///
     /// Nodes absent from this map use [`EvaluationMode::FirstMatching`].
     pub evaluation_modes: HashMap<NodeId, EvaluationMode>,
+    /// Per-node explicit edge lists, used when [`EvaluationMode::Explicit`] is active.
+    ///
+    /// Only consulted when `evaluation_modes[node_id] == EvaluationMode::Explicit`.
+    /// Nodes absent from this map that have `Explicit` mode produce a
+    /// [`GraphValidationError`] at validation time.
+    pub explicit_edge_lists: HashMap<NodeId, Vec<EdgeId>>,
     /// Pipeline-level execution settings.
     pub settings: PipelineSettings,
+    /// Tool-profile overrides scoped to this pipeline.
+    ///
+    /// Stored here (not on [`PipelineConfiguration`]) so that two pipelines
+    /// in the same configuration file with identically named nodes do not
+    /// share override entries.
+    pub tool_profiles: PipelineToolProfileConfig,
 }
 
 /// Tool-profile overrides declared in a pipeline configuration file.
@@ -292,12 +316,19 @@ pub struct PipelineToolProfileConfig {
 ///
 /// A single file may declare multiple named pipelines; `cli` selects the
 /// active pipeline by [`PipelineName`] at startup.
+///
+/// ## Loading Sequence
+///
+/// Always deserialise → validate each [`PipelineGraph`] → use. Call
+/// [`validate_pipeline_graph`] on every graph in `pipelines` before starting
+/// a run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PipelineConfiguration {
     /// All named pipeline graphs declared in the configuration.
+    ///
+    /// Each [`PipelineGraph`] carries its own tool-profile overrides.
     pub pipelines: HashMap<PipelineName, PipelineGraph>,
-    /// Tool-profile overrides for nodes across all pipelines.
-    pub tool_profiles: PipelineToolProfileConfig,
 }
 
 // ─── Runtime state ──────────────────────────────────────────────────────────
@@ -351,7 +382,10 @@ pub struct PipelineState {
     /// execution is in progress.
     pub active_parallel_branches: Vec<Vec<NodeId>>,
     /// Total token cost accumulated so far in this run (USD).
-    pub cost_accumulator: CostBudget,
+    ///
+    /// Starts at [`TokenCost::zero()`] when a run begins. Compare against
+    /// the configured [`CostBudget`] using [`CostBudget::is_exceeded_by`].
+    pub cost_accumulator: TokenCost,
 }
 
 /// Which component performed a given edge-condition evaluation.
@@ -378,14 +412,64 @@ pub struct EdgeEvaluationRecord {
     pub edge_id: EdgeId,
     /// The condition definition that was applied.
     pub condition: EdgeConditionKind,
-    /// JSON-serialised snapshot of the [`PipelineState`] used as evaluation input.
-    pub input_snapshot: String,
+    /// Snapshot of the [`PipelineState`] used as evaluation input.
+    ///
+    /// Stored as [`serde_json::Value`] rather than a pre-serialised string to
+    /// avoid double-escaping when this record is embedded in
+    /// [`PipelineStateComment`] (also JSON). Keeps the persisted comment
+    /// human-readable and directly queryable.
+    pub input_snapshot: serde_json::Value,
     /// Whether the condition evaluated to `true`.
     pub result: bool,
     /// The component that performed the evaluation.
     pub evaluator: EvaluatorKind,
     /// Wall-clock time at which the evaluation was performed.
     pub timestamp: Timestamp,
+}
+
+/// Schema version token for [`PipelineStateComment`].
+///
+/// Deserialisation via `serde` automatically rejects any version string that
+/// is not a known value (currently only `"1"`). This is enforced at the serde
+/// boundary via `#[serde(try_from = "String")]`, so no additional runtime
+/// validation is required by callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct SchemaVersion(String);
+
+impl SchemaVersion {
+    /// The current (and only known) schema version.
+    pub const CURRENT: &'static str = "1";
+
+    /// Returns the current schema version.
+    pub fn current() -> Self {
+        Self(Self::CURRENT.to_string())
+    }
+
+    /// Returns the version string.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SchemaVersion {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "1" => Ok(Self(value)),
+            other => Err(format!(
+                "Unknown PipelineStateComment schema version {other:?}; expected \"1\""
+            )),
+        }
+    }
+}
+
+impl From<SchemaVersion> for String {
+    fn from(v: SchemaVersion) -> Self {
+        v.0
+    }
 }
 
 /// Serialisable snapshot written to a GitHub issue comment at every node boundary.
@@ -401,10 +485,11 @@ pub struct EdgeEvaluationRecord {
 /// `PipelineStateComment` from GitHub and reconstructs [`PipelineState`] from it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineStateComment {
-    /// Monotonically incrementing schema version for forward-compatibility.
+    /// Schema version for forward-compatibility.
     ///
-    /// Current version: `"1"`. Deserialisation must fail on unknown versions.
-    pub schema_version: String,
+    /// Deserialisation fails automatically for any version string that is
+    /// not `"1"` (enforced by [`SchemaVersion`]'s `TryFrom` impl).
+    pub schema_version: SchemaVersion,
     /// Identifies the pipeline run this comment belongs to.
     pub pipeline_run_id: PipelineRunId,
     /// The GitHub Issue number this pipeline run is processing.
@@ -422,8 +507,15 @@ pub struct PipelineStateComment {
 
 // ─── Error types ────────────────────────────────────────────────────────────
 
-/// Returned by [`topological_sort`] when the graph contains a cycle that has
-/// no rework-edge termination condition.
+/// Returned by [`topological_sort`] when the graph contains a directed cycle
+/// among the non-rework (forward) edges.
+///
+/// This is distinct from [`GraphValidationError::UnterminatedCycle`]: a
+/// `CycleError` indicates the forward-edge subgraph is not a DAG (a hard
+/// configuration error). `UnterminatedCycle` indicates a loop exists but has
+/// no rework edge with a finite `max_traversals` (also a configuration error,
+/// but detected by [`validate_pipeline_graph`] which translates any
+/// `CycleError` result appropriately).
 ///
 /// A cycle is only valid if every path around it passes through at least one
 /// edge with `rework_edge: Some(_)` specifying a finite `max_traversals`.
@@ -442,10 +534,24 @@ pub enum GraphValidationError {
     EmptyGraph,
 
     /// A cycle exists without any rework edge providing a termination condition.
+    ///
+    /// Produced when [`topological_sort`] detects a forward-edge cycle that
+    /// [`validate_pipeline_graph`] determines is missing a terminating rework
+    /// edge. See also [`CycleError`] for the lower-level sort error.
     #[error("Cycle through {nodes:?} has no rework edge — infinite execution is possible")]
     UnterminatedCycle {
         /// Node IDs forming the unterminated cycle.
         nodes: Vec<NodeId>,
+    },
+
+    /// A rework edge declares `max_traversals == 0`, which would make the
+    /// loop immediately enter overflow on the first traversal.
+    ///
+    /// `max_traversals` must be ≥ 1.
+    #[error("Rework edge '{edge}' has max_traversals = 0; must be ≥ 1")]
+    InvalidMaxTraversals {
+        /// The rework edge with the invalid traversal count.
+        edge: EdgeId,
     },
 
     /// A node has no incoming or outgoing edges (unreachable or dead-end).

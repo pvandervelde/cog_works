@@ -36,8 +36,8 @@ pub use graph::{
     EdgeEvaluationRecord, EvaluationMode, EvaluatorKind, Expression, GraphValidationError,
     NaturalLanguageCondition, NodeDefinition, NodeGate, NodeState, NodeStatus, NodeType,
     OverflowBehaviour, PipelineConfiguration, PipelineGraph, PipelineSettings, PipelineState,
-    PipelineStateComment, PipelineToolProfileConfig, ReworkEdge, ReworkSemantics, TimeoutSeconds,
-    ValidationKind,
+    PipelineStateComment, PipelineToolProfileConfig, ReworkEdge, ReworkSemantics, SchemaVersion,
+    TimeoutSeconds, ValidationKind,
 };
 pub use identifiers::{
     ArtifactPath, BranchName, CommitSha, ContextPackId, DomainServiceName, EdgeId, InterfaceId,
