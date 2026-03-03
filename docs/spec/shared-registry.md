@@ -143,11 +143,87 @@ Spec: `docs/spec/interfaces/pipeline-graph.md`.
 | `validate_pipeline_graph` | `(&PipelineGraph) → Result<(), Vec<GraphValidationError>>` |
 | `compute_eligible_nodes` | `(&PipelineState, &PipelineGraph) → Vec<NodeId>` |
 
-### GitHub & Events (`pipeline/src/github.rs`)
+### GitHub & Events (`pipeline/src/github.rs`, `pipeline/src/templates.rs`, `pipeline/src/audit.rs`)
+
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/github-traits.md`.
+
+**Event trigger types** (`github.rs`)
 
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | `GitHubEvent`, `EventSource` trait, `WebhookConfig`, `QueueEventConfig`, `IssueTracker` trait, etc. |
+| `GitHubEvent` | `LabelApplied` / `CommentPosted` / `SubIssueStateChanged` / `PullRequestReviewed` |
+| `EventSourceError` | `Timeout` / `ConnectionLost` / `ParseError` / `AuthError` / `QueueError` |
+| `WebhookConfig` | Bind address, path prefix, HMAC secret |
+| `QueueEventConfig` | Provider config (opaque JSON), queue name, session ordering, retry attempts |
+
+**Issue types** (`github.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `IssueState` | `Open` / `Closed` |
+| `Label` | Name + optional CSS hex colour |
+| `Milestone` | Numeric ID, title, optional due date |
+| `TypedLinkKind` | `Blocks` / `IsBlockedBy` |
+| `TypedLink` | Source ID, target ID, kind |
+| `Issue` | Full issue view (ID, repo, title, body, state, labels, milestone, timestamps) |
+| `SubIssue` | Sub-task view (ID, parent ID, title, state, created_at) |
+
+**Pull request types** (`github.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `ReviewDecision` | `Approved` / `ChangesRequested` / `Commented` / `Dismissed` |
+| `ReviewStatus` | Approval count, `changes_requested` flag, `approved` flag |
+| `PullRequest` | Full PR view (ID, repo, title, body, branches, SHA, open/merged, review status, created_at) |
+| `PullRequestFilter` | Optional base/head branch and open-only filter |
+
+**Repository types** (`github.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `FileContent` | Path, raw bytes, SHA, content type; `as_text() -> Option<&str>` |
+| `DirectoryEntryKind` | `File` / `Directory` / `Symlink` / `Submodule` |
+| `DirectoryEntry` | Name, path, kind, SHA |
+
+**Error type** (`github.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `GitHubOperationError` | `NotFound` / `PermissionDenied` / `RateLimitExhausted` / `Transient` / `ParseFailure` / `SdkCapabilityMissing` |
+
+**Port traits** (`github.rs`)
+
+| Trait | Implemented by | Purpose |
+|-------|---------------|---------|
+| `EventSource` | `GitHubWebhookEventSource`, `QueueEventSource`, CLI one-shot | Trigger source abstraction |
+| `IssueTracker` | `GithubClient` | Issue / sub-issue / label / comment / milestone operations |
+| `PullRequestManager` | `GithubClient` | PR lifecycle and review operations |
+| `CodeRepository` | `GithubClient` | Read-only file and tree access |
+| `ProjectBoard` | `GithubClient` | Projects V2 status/field sync (non-blocking) |
+
+**Template types** (`templates.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `TemplateError` | `NotFound` / `MissingVariables` / `SyntaxError` / `ConstraintViolation` |
+| `TemplateEngine` *(trait)* | `render(name, context) -> String`, `list_required_variables(name) -> Vec<String>` |
+
+**Audit types** (`audit.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `LlmCallRecord` | Model ID, token counts, cost, latency, schema_validated, timestamp |
+| `ValidationRecord` | Node ID, kind, passed, diagnostics, timestamp |
+| `StateTransitionRecord` | Node ID, from/to status, reason, timestamp |
+| `CostSnapshot` | Node ID, accumulated, budget, budget_exceeded, timestamp |
+| `InjectionDetectionRecord` | Node ID, source label, offending text, pattern name, timestamp |
+| `ScopeViolationRecord` | Node ID, artifact path, description, violation kind, timestamp |
+| `AuditEvent` | Union of all above + `EdgeEvaluation(EdgeEvaluationRecord)` |
+| `PipelineOutcome` | `Completed` / `Failed` / `HumanGated` / `Escalated` |
+| `PipelineSummary` | Run ID, work item, outcome, cost, duration, node counts, rework count, terminal message |
+| `AuditStoreError` | `Unavailable` / `SerialisationError` — non-fatal |
+| `AuditStore` *(trait)* | `record_event(...)`, `write_summary(...)` |
 
 ### Domain Services (`pipeline/src/domain_services.rs`)
 

@@ -53,6 +53,9 @@ reqwest = { version = "0.12", features = [
     "rustls-tls",
 ], default-features = false }
 
+# Async trait support (required for dyn-compatible async traits)
+async-trait = "0.1"
+
 # GitHub SDK (pvandervelde/github-bot-sdk)
 # rev is the commit reviewed in PR 11; update intentionally when upgrading.
 github-bot-sdk = { git = "https://github.com/pvandervelde/github-bot-sdk", rev = "ba1e456cb25ea038e69b78432c2bb8f2050ef65d" }
