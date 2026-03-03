@@ -231,11 +231,20 @@ The complete pipeline graph as loaded and validated from configuration.
 |-------|------|-------------|
 | `nodes` | `Vec<NodeDefinition>` | All node declarations |
 | `edges` | `Vec<EdgeDefinition>` | All edge declarations |
-| `evaluation_modes` | `HashMap<NodeId, EvaluationMode>` | Per-node overrides |
+| `evaluation_modes` | `HashMap<NodeId, EvaluationMode>` | Per-node overrides; absent nodes use `FirstMatching` |
+| `explicit_edge_lists` | `HashMap<NodeId, Vec<EdgeId>>` | Explicit edge lists for nodes using `EvaluationMode::Explicit`; absent from map when not needed |
 | `settings` | `PipelineSettings` | Pipeline-level defaults |
+| `tool_profiles` | `PipelineToolProfileConfig` | Tool-profile overrides scoped to this pipeline |
 
 **Invariant**: Only produced by `validate_pipeline_graph`. Never construct
 directly in production code; always validate first.
+
+**Note**: `tool_profiles` lives on `PipelineGraph` (not on `PipelineConfiguration`) so
+that two pipelines within the same configuration file that happen to share a
+node name do not collide on override entries.
+
+**Deserialisation boundary**: `#[serde(deny_unknown_fields)]` is applied.
+Always deserialise → validate → use; a deserialised value is not validated.
 
 ---
 
@@ -245,8 +254,10 @@ The complete contents of `.cogworks/pipeline.toml`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `pipelines` | `HashMap<PipelineName, PipelineGraph>` | All named graphs |
-| `tool_profiles` | `PipelineToolProfileConfig` | Tool-profile overrides |
+| `pipelines` | `HashMap<PipelineName, PipelineGraph>` | All named graphs; each carries its own `tool_profiles` |
+
+**Loading sequence**: deserialise → call `validate_pipeline_graph` on every
+graph → use. `#[serde(deny_unknown_fields)]` is applied.
 
 ---
 
@@ -255,7 +266,7 @@ The complete contents of `.cogworks/pipeline.toml`.
 | Field | Type | Description |
 |-------|------|-------------|
 | `default_profile` | `ProfileName` | Applied to all nodes without an override |
-| `node_overrides` | `HashMap<NodeId, ProfileName>` | Per-node tool profile |
+| `node_overrides` | `HashMap<NodeId, ProfileName>` | Per-node tool profile (scoped to the owning pipeline) |
 
 ---
 
@@ -296,10 +307,11 @@ The complete mutable state of a pipeline run.
 | `run_id` | `PipelineRunId` | Identifies the run |
 | `node_states` | `HashMap<NodeId, NodeState>` | State per node |
 | `active_parallel_branches` | `Vec<Vec<NodeId>>` | Currently executing parallel branches |
-| `cost_accumulator` | `CostBudget` | Total cost so far (USD) |
+| `cost_accumulator` | `TokenCost` | Total cost accumulated so far (USD); starts at `TokenCost::zero()` |
 
 **Invariant**: Mutations are atomic at node boundaries; partial updates
-must not be persisted.
+must not be persisted. Compare `cost_accumulator` against the configured
+`CostBudget` using `CostBudget::is_exceeded_by`.
 
 ---
 
@@ -322,10 +334,26 @@ Audit record for one edge-condition evaluation. Every evaluation is recorded
 |-------|------|-------------|
 | `edge_id` | `EdgeId` | The edge evaluated |
 | `condition` | `EdgeConditionKind` | The condition definition |
-| `input_snapshot` | `String` | JSON-serialised `PipelineState` snapshot used as input |
+| `input_snapshot` | `serde_json::Value` | `PipelineState` snapshot as a JSON value (not a string) to avoid double-escaping |
 | `result` | `bool` | Evaluation outcome |
 | `evaluator` | `EvaluatorKind` | What evaluated it |
 | `timestamp` | `Timestamp` | Wall-clock time of evaluation |
+
+---
+
+### `SchemaVersion`
+
+Version token for `PipelineStateComment` forward-compatibility.
+
+Deserialisation enforced at the serde boundary via `#[serde(try_from = "String")]`:
+any value other than `"1"` causes deserialization to fail immediately. No
+caller-side validation is required.
+
+| Member | Description |
+|--------|-------------|
+| `CURRENT: &'static str` | `"1"` — the current version string |
+| `current() -> SchemaVersion` | Returns the current version |
+| `as_str() -> &str` | Returns the version string |
 
 ---
 
@@ -339,7 +367,7 @@ from GitHub`).
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `schema_version` | `String` | Current: `"1"`. Fail on unknown versions. |
+| `schema_version` | `SchemaVersion` | Serde-enforced version; deserialization fails for unknown values |
 | `pipeline_run_id` | `PipelineRunId` | Run identifier |
 | `work_item_id` | `WorkItemId` | GitHub issue being processed |
 | `state` | `PipelineState` | Full runtime state |
@@ -368,11 +396,12 @@ Single violation found by `validate_pipeline_graph`. Returned as a `Vec`.
 | Variant | Fields | When |
 |---------|--------|------|
 | `EmptyGraph` | — | Graph has no nodes |
-| `UnterminatedCycle` | `nodes: Vec<NodeId>` | Cycle with no rework-edge termination |
+| `UnterminatedCycle` | `nodes: Vec<NodeId>` | Cycle with no rework-edge termination (see `CycleError`) |
 | `OrphanNode` | `node: NodeId` | Node with no connected edges |
 | `DuplicateNodeId` | `id: NodeId` | Two nodes share an ID |
 | `DuplicateEdgeId` | `id: EdgeId` | Two edges share an ID |
 | `UnknownNode` | `edge: EdgeId`, `node: NodeId` | Edge references undeclared node |
+| `InvalidMaxTraversals` | `edge: EdgeId` | Rework edge has `max_traversals == 0` (must be ≥ 1) |
 
 ---
 
@@ -428,7 +457,8 @@ Validates a `PipelineGraph` for structural correctness.
 3. All edge IDs are unique (`DuplicateEdgeId`).
 4. All edge source/target references resolve to declared nodes (`UnknownNode`).
 5. No orphan nodes (`OrphanNode`).
-6. No unterminated cycles — every cycle path must pass through ≥1 rework edge (`UnterminatedCycle`).
+6. All rework edges have `max_traversals >= 1` (`InvalidMaxTraversals`).
+7. No unterminated cycles — every cycle path must pass through ≥1 rework edge (`UnterminatedCycle`).
 
 Returns `Ok(())` only when all checks pass. Returns `Err(vec)` containing
 every violation found (all checks run; not short-circuited).
@@ -485,7 +515,7 @@ let fires = evaluate_deterministic_condition(&expr, &current_state);
 
 // Persist state to GitHub
 let comment = PipelineStateComment {
-    schema_version: "1".to_string(),
+    schema_version: SchemaVersion::current(),
     pipeline_run_id: run_id,
     work_item_id,
     state: current_state.clone(),
@@ -501,14 +531,13 @@ let json = serde_json::to_string(&comment)?;
 ## Implementation Notes
 
 - **Serialisation**: All types use `#[derive(Serialize, Deserialize)]`.
-  Deserialisation of `PipelineStateComment` must check `schema_version == "1"`
-  and return an error for unknown versions to enable future migrations.
+  Unknown schema versions are rejected automatically at deserialisation time
+  by `SchemaVersion`'s `TryFrom<String>` impl — no additional runtime check
+  is needed by callers.
 
-- **`CostBudget` as accumulator**: `PipelineState::cost_accumulator` uses
-  `CostBudget` (a cap value) as an accumulator field purely for type
-  consistency. The execution engine compares it against the configured limit
-  using `CostBudget::is_exceeded_by`. This dual-use is intentional and noted
-  in `docs/spec/shared-registry.md`.
+- **Cost accumulation**: `PipelineState::cost_accumulator` is `TokenCost`
+  (the accumulation type), initialised to `TokenCost::zero()`. The configured
+  limit is a separate `CostBudget`. Compare them with `CostBudget::is_exceeded_by`.
 
 - **Parallel budget safety**: When nodes execute concurrently, budget
   acquisition must be atomic. The execution engine (PR 7) holds a mutex across
@@ -519,3 +548,8 @@ let json = serde_json::to_string(&comment)?;
   (they form the pipeline's feedback loops); only the forward-edge subgraph
   must be a DAG. Implementations must identify rework edges by checking
   `EdgeDefinition::rework_edge.is_some()`.
+
+- **`EvaluationMode::Explicit` data**: The explicit edge lists are stored in
+  `PipelineGraph::explicit_edge_lists`. If a node has `Explicit` mode but is
+  absent from that map, `validate_pipeline_graph` must produce a validation
+  error (this check will be added when the validator is implemented).

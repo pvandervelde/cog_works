@@ -84,6 +84,7 @@ Spec: `docs/spec/interfaces/pipeline-graph.md`.
 | `Expression` | Newtype — deterministic boolean predicate string |
 | `NaturalLanguageCondition` | Newtype — LLM-evaluated condition description string |
 | `TimeoutSeconds` | Newtype — serialisable timeout (wraps `u64` seconds) |
+| `SchemaVersion` | Newtype — serde-enforced version token for `PipelineStateComment`; rejects unknown values at deserialisation |
 
 **Graph structure enums**
 
@@ -103,12 +104,12 @@ Spec: `docs/spec/interfaces/pipeline-graph.md`.
 | Type | Purpose |
 |------|---------|
 | `NodeDefinition` | Static node declaration (id, type, inputs, outputs, timeout, gate, …) |
-| `ReworkEdge` | Back-edge metadata (max traversals, semantics, overflow behaviour) |
+| `ReworkEdge` | Back-edge metadata (max traversals ≥ 1, semantics, overflow behaviour) |
 | `EdgeDefinition` | Static edge declaration (source, target, condition, rework metadata) |
 | `PipelineSettings` | Pipeline-level execution defaults |
-| `PipelineGraph` | Validated graph (nodes + edges + eval modes + settings) |
-| `PipelineToolProfileConfig` | Tool-profile overrides per node |
-| `PipelineConfiguration` | Full `.cogworks/pipeline.toml` contents |
+| `PipelineGraph` | Validated graph (nodes + edges + eval modes + explicit-edge lists + settings + tool_profiles) |
+| `PipelineToolProfileConfig` | Tool-profile overrides per node (scoped to one pipeline) |
+| `PipelineConfiguration` | Full `.cogworks/pipeline.toml` contents; each pipeline carries its own tool_profiles |
 
 **Runtime state enums**
 
@@ -122,9 +123,9 @@ Spec: `docs/spec/interfaces/pipeline-graph.md`.
 | Type | Purpose |
 |------|---------|
 | `NodeState` | Per-node mutable state (status, attempts, rework counts, error) |
-| `PipelineState` | Full run state (node states, parallel branches, cost accumulator) |
-| `EdgeEvaluationRecord` | Audit record for one edge-condition evaluation |
-| `PipelineStateComment` | Self-contained GitHub comment payload for state persistence |
+| `PipelineState` | Full run state (node states, parallel branches, `cost_accumulator: TokenCost`) |
+| `EdgeEvaluationRecord` | Audit record for one edge-condition evaluation; `input_snapshot` is `serde_json::Value` |
+| `PipelineStateComment` | Self-contained GitHub comment payload; `schema_version: SchemaVersion` enforced at serde |
 
 **Error types**
 
