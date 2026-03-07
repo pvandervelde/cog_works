@@ -38,7 +38,8 @@ use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::{
-    BranchName, CommitSha, MilestoneId, PullRequestId, RepositoryId, SubWorkItemId, WorkItemId,
+    BlobSha, BranchName, CommitSha, MilestoneId, PullRequestId, RepositoryId, SubWorkItemId,
+    WorkItemId,
 };
 
 // ─── Event trigger abstraction ─────────────────────────────────────────────
@@ -111,7 +112,8 @@ pub enum GitHubEvent {
 /// ## Specification
 ///
 /// See `docs/spec/interfaces/github-traits.md` §EventSourceError.
-#[derive(Debug, Error, Serialize, Deserialize)]
+#[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum EventSourceError {
     /// The poll window elapsed with no event arriving. This is *not* an error
     /// condition: callers should loop and call `next_event` again.
@@ -159,7 +161,7 @@ pub enum EventSourceError {
 /// ## Specification
 ///
 /// See `docs/spec/interfaces/github-traits.md` §WebhookConfig.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookConfig {
     /// The local address on which the HTTP server should bind
     /// (e.g. `"0.0.0.0:3000"`).
@@ -171,8 +173,23 @@ pub struct WebhookConfig {
 
     /// HMAC-SHA256 secret used to verify the `X-Hub-Signature-256` header on
     /// every incoming webhook. Must match the secret configured in the GitHub
-    /// webhook settings. Never logged or serialised to GitHub.
+    /// webhook settings.
+    ///
+    /// ## Security
+    ///
+    /// This field is intentionally excluded from the `Debug` impl to prevent
+    /// accidental exposure in logs or tracing spans.
     pub secret: String,
+}
+
+impl std::fmt::Debug for WebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookConfig")
+            .field("bind_address", &self.bind_address)
+            .field("path_prefix", &self.path_prefix)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Configuration for a cloud-queue-based [`EventSource`] implementation.
@@ -357,6 +374,7 @@ pub struct SubIssue {
 ///
 /// See `docs/spec/interfaces/github-traits.md` §GitHubOperationError.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum GitHubOperationError {
     /// The requested resource was not found.
     #[error("GitHub resource not found: {resource}")]
@@ -603,13 +621,25 @@ pub enum ReviewDecision {
 ///
 /// Aggregated over all submitted reviews: once any reviewer requests changes,
 /// the status is `ChangesRequested` regardless of other approvals.
+///
+/// ## Invariant
+///
+/// `approved` reflects the **platform-level merge-readiness check** as
+/// determined by GitHub's branch protection rules (required reviewers met,
+/// no outstanding change requests). It is *not* simply `approvals > 0`.
+/// An implementation must derive `approved` from the GitHub API's merge-ready
+/// state, not by recomputing it from `approvals` and `changes_requested`.
+/// Concretely: `approved == true` implies `changes_requested == false`,
+/// but the converse is not guaranteed (e.g. a required reviewer has not yet
+/// reviewed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewStatus {
     /// Number of approvals received.
     pub approvals: u32,
     /// Whether any reviewer has requested changes (blocks merge).
     pub changes_requested: bool,
-    /// Whether the PR is approved for merge (platform-level merge readiness).
+    /// Whether GitHub considers the PR ready to merge (branch-protection rules
+    /// satisfied). See the invariant on [`ReviewStatus`] for details.
     pub approved: bool,
 }
 
@@ -640,6 +670,17 @@ pub struct PullRequest {
     pub created_at: DateTime<Utc>,
 }
 
+/// State selector for [`PullRequestFilter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PullRequestStateFilter {
+    /// Include only open pull requests.
+    Open,
+    /// Include only closed or merged pull requests.
+    Closed,
+    /// Include pull requests in all states.
+    All,
+}
+
 /// Parameters for [`PullRequestManager::find_pull_requests`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PullRequestFilter {
@@ -647,9 +688,8 @@ pub struct PullRequestFilter {
     pub base_branch: Option<BranchName>,
     /// Restrict to PRs sourced from this head branch.
     pub head_branch: Option<BranchName>,
-    /// If `true`, include only open PRs. If `false`, include only closed/merged.
-    /// `None` returns all states.
-    pub open_only: Option<bool>,
+    /// Lifecycle state filter. `None` is equivalent to [`PullRequestStateFilter::All`].
+    pub state: Option<PullRequestStateFilter>,
 }
 
 /// GitHub Pull Request API — operations the pipeline domain needs for PR
@@ -764,7 +804,11 @@ pub struct FileContent {
     /// Raw byte content of the file.
     pub content: Vec<u8>,
     /// Git blob SHA of this file at the time of reading.
-    pub sha: CommitSha,
+    ///
+    /// This is a **blob SHA**, not a commit SHA. It identifies the Git blob
+    /// object for this file's content and must not be passed to APIs that
+    /// expect a commit ref.
+    pub sha: BlobSha,
     /// MIME type as reported by the GitHub API (e.g. `"text/plain"`).
     /// `None` if the API did not return a content type.
     pub content_type: Option<String>,
@@ -802,8 +846,10 @@ pub struct DirectoryEntry {
     pub path: String,
     /// The kind of entry.
     pub kind: DirectoryEntryKind,
-    /// Git SHA of the blob (for files) or tree (for directories).
-    pub sha: CommitSha,
+    /// Git blob SHA (for [`DirectoryEntryKind::File`]) or tree SHA (for
+    /// [`DirectoryEntryKind::Directory`]) as returned by the GitHub Contents
+    /// API. Not a commit SHA; must not be used as a commit ref.
+    pub sha: BlobSha,
 }
 
 /// Read-only access to a GitHub repository's file contents and directory tree.

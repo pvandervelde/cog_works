@@ -114,7 +114,7 @@ Configuration for `GitHubWebhookEventSource`.
 |-------|------|-------------|
 | `bind_address` | `std::net::SocketAddr` | Local address to bind the HTTP server |
 | `path_prefix` | `String` | URL path prefix (e.g. `"/hooks"`) |
-| `secret` | `String` | HMAC-SHA256 secret matching GitHub webhook settings. **Never logged.** |
+| `secret` | `String` | HMAC-SHA256 secret matching GitHub webhook settings. Excluded from `Debug` (prints `"[REDACTED]"`). **Never logged.** |
 
 ---
 
@@ -269,6 +269,10 @@ pub trait IssueTracker: Send + Sync {
 ```rust
 pub enum ReviewDecision { Approved, ChangesRequested, Commented, Dismissed }
 
+/// `approved` reflects GitHub's platform-level merge-readiness check
+/// (branch protection rules satisfied), NOT a recomputation of `approvals > 0`.
+/// Invariant: `approved == true` implies `changes_requested == false`.
+/// The converse does not hold (e.g. required reviewer has not yet reviewed).
 pub struct ReviewStatus {
     pub approvals: u32,
     pub changes_requested: bool,
@@ -289,10 +293,13 @@ pub struct PullRequest {
     pub created_at: DateTime<Utc>,
 }
 
+pub enum PullRequestStateFilter { Open, Closed, All }
+
 pub struct PullRequestFilter {
     pub base_branch: Option<BranchName>,
     pub head_branch: Option<BranchName>,
-    pub open_only: Option<bool>,
+    /// `None` is equivalent to `PullRequestStateFilter::All`.
+    pub state: Option<PullRequestStateFilter>,
 }
 ```
 
@@ -319,7 +326,8 @@ pub trait PullRequestManager: Send + Sync {
 pub struct FileContent {
     pub path: String,
     pub content: Vec<u8>,
-    pub sha: CommitSha,
+    /// Git **blob** SHA — not a commit SHA. Do not pass to commit-fetching APIs.
+    pub sha: BlobSha,
     pub content_type: Option<String>,
 }
 impl FileContent {
@@ -332,7 +340,8 @@ pub struct DirectoryEntry {
     pub name: String,
     pub path: String,
     pub kind: DirectoryEntryKind,
-    pub sha: CommitSha,
+    /// Blob SHA for files, tree SHA for directories. Not a commit SHA.
+    pub sha: BlobSha,
 }
 ```
 
@@ -388,10 +397,10 @@ pub enum TemplateError {
 ### TemplateEngine
 
 ```rust
-#[async_trait]
+// Synchronous — templates are pre-loaded in memory at startup; no I/O needed.
 pub trait TemplateEngine: Send + Sync {
-    async fn render(&self, name: &str, context: HashMap<String, String>) -> Result<String, TemplateError>;
-    async fn list_required_variables(&self, name: &str) -> Result<Vec<String>, TemplateError>;
+    fn render(&self, name: &str, context: HashMap<String, String>) -> Result<String, TemplateError>;
+    fn list_required_variables(&self, name: &str) -> Result<Vec<String>, TemplateError>;
 }
 ```
 

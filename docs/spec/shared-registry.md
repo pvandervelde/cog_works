@@ -25,6 +25,7 @@ Spec: `docs/spec/interfaces/shared-types.md` §Identifiers.
 | `PipelineName` | `String` | Named pipeline configuration |
 | `BranchName` | `String` | Git branch name |
 | `CommitSha` | `String` | 40-char hex git commit SHA |
+| `BlobSha` | `String` | Git blob (or tree) SHA as returned by the GitHub Contents API. Not a commit SHA. |
 | `RepositoryId` | `String` | `"owner/repo"` format |
 | `DomainServiceName` | `String` | Key in `.cogworks/services.toml` |
 | `ArtifactPath` | `String` | Repo-relative file path |

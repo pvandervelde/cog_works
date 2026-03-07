@@ -73,12 +73,11 @@ pub struct GitHubWebhookEventSource {
 impl GitHubWebhookEventSource {
     /// Construct and start the webhook HTTP server.
     ///
-    /// Binds on `config.bind_address` immediately. Returns an error (PR 10 will
-    /// define the error type) if the address is already in use.
-    ///
     /// # Panics
     ///
-    /// Panics (via `todo!()`) until PR 10 provides the implementation.
+    /// Panics (via `todo!()`) until a later change provides the implementation.
+    /// Binding to `config.bind_address` and server lifecycle management are
+    /// implemented at that point.
     pub fn new(config: WebhookConfig) -> Self {
         Self { config }
     }

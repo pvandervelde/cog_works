@@ -247,6 +247,7 @@ pub struct PipelineSummary {
 
 /// Errors returned by [`AuditStore`] operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AuditStoreError {
     /// The audit backend (e.g. GitHub API) is temporarily unavailable.
     ///

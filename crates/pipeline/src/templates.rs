@@ -17,13 +17,13 @@
 
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 use thiserror::Error;
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
 /// Errors returned by [`TemplateEngine`] operations.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TemplateError {
     /// The requested template name is not registered with this engine.
     #[error("template not found: {name}")]
@@ -78,9 +78,12 @@ pub enum TemplateError {
 /// ## Specification
 ///
 /// See `docs/spec/interfaces/github-traits.md` §TemplateEngine.
-#[async_trait]
 pub trait TemplateEngine: Send + Sync {
     /// Render a named template with the provided variable context.
+    ///
+    /// Template rendering is synchronous in-memory work: templates are
+    /// pre-loaded at startup and rendering is pure string interpolation with
+    /// no I/O.
     ///
     /// # Arguments
     ///
@@ -102,11 +105,8 @@ pub trait TemplateEngine: Send + Sync {
     ///   error (should not occur in production if templates pass CI validation).
     /// - [`TemplateError::ConstraintViolation`] — rendered output violated a
     ///   post-render constraint.
-    async fn render(
-        &self,
-        name: &str,
-        context: HashMap<String, String>,
-    ) -> Result<String, TemplateError>;
+    fn render(&self, name: &str, context: HashMap<String, String>)
+        -> Result<String, TemplateError>;
 
     /// Return the list of variable names that the named template requires.
     ///
@@ -116,5 +116,5 @@ pub trait TemplateEngine: Send + Sync {
     /// # Errors
     ///
     /// - [`TemplateError::NotFound`] — unknown `name`.
-    async fn list_required_variables(&self, name: &str) -> Result<Vec<String>, TemplateError>;
+    fn list_required_variables(&self, name: &str) -> Result<Vec<String>, TemplateError>;
 }
