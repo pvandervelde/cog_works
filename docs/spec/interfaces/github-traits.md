@@ -326,8 +326,8 @@ pub trait PullRequestManager: Send + Sync {
 pub struct FileContent {
     pub path: String,
     pub content: Vec<u8>,
-    /// Git **blob** SHA — not a commit SHA. Do not pass to commit-fetching APIs.
-    pub sha: BlobSha,
+    /// Git blob SHA of the file object. Not a commit SHA.
+    pub sha: GitObjectSha,
     pub content_type: Option<String>,
 }
 impl FileContent {
@@ -340,8 +340,8 @@ pub struct DirectoryEntry {
     pub name: String,
     pub path: String,
     pub kind: DirectoryEntryKind,
-    /// Blob SHA for files, tree SHA for directories. Not a commit SHA.
-    pub sha: BlobSha,
+    /// Git object SHA (blob for files, tree for directories). Not a commit SHA.
+    pub sha: GitObjectSha,
 }
 ```
 

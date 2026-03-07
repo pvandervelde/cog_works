@@ -58,7 +58,7 @@ pub use graph::{
     TimeoutSeconds, ValidationKind,
 };
 pub use identifiers::{
-    ArtifactPath, BlobSha, BranchName, CommitSha, ContextPackId, DomainServiceName, EdgeId,
+    ArtifactPath, BranchName, CommitSha, ContextPackId, DomainServiceName, EdgeId, GitObjectSha,
     InterfaceId, MilestoneId, NodeId, PipelineName, PipelineRunId, ProfileName, PullRequestId,
     RepositoryId, SkillName, SubWorkItemId, ToolName, WorkItemId,
 };

@@ -38,7 +38,7 @@ use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::{
-    BlobSha, BranchName, CommitSha, MilestoneId, PullRequestId, RepositoryId, SubWorkItemId,
+    BranchName, CommitSha, GitObjectSha, MilestoneId, PullRequestId, RepositoryId, SubWorkItemId,
     WorkItemId,
 };
 
@@ -805,10 +805,9 @@ pub struct FileContent {
     pub content: Vec<u8>,
     /// Git blob SHA of this file at the time of reading.
     ///
-    /// This is a **blob SHA**, not a commit SHA. It identifies the Git blob
-    /// object for this file's content and must not be passed to APIs that
-    /// expect a commit ref.
-    pub sha: BlobSha,
+    /// This is the SHA-1 hash of the blob Git object for this file's content.
+    /// Must not be passed to APIs that expect a commit ref.
+    pub sha: GitObjectSha,
     /// MIME type as reported by the GitHub API (e.g. `"text/plain"`).
     /// `None` if the API did not return a content type.
     pub content_type: Option<String>,
@@ -846,10 +845,11 @@ pub struct DirectoryEntry {
     pub path: String,
     /// The kind of entry.
     pub kind: DirectoryEntryKind,
-    /// Git blob SHA (for [`DirectoryEntryKind::File`]) or tree SHA (for
-    /// [`DirectoryEntryKind::Directory`]) as returned by the GitHub Contents
-    /// API. Not a commit SHA; must not be used as a commit ref.
-    pub sha: BlobSha,
+    /// Git object SHA as returned by the GitHub Contents API: a blob SHA for
+    /// [`DirectoryEntryKind::File`] entries, a tree SHA for
+    /// [`DirectoryEntryKind::Directory`] entries. Not a commit SHA;
+    /// must not be used as a commit ref.
+    pub sha: GitObjectSha,
 }
 
 /// Read-only access to a GitHub repository's file contents and directory tree.

@@ -235,10 +235,10 @@ string_id! {
 }
 
 string_id! {
-    /// The SHA-1 hash of a Git blob object.
+    /// The SHA-1 hash of a Git object as returned by the GitHub Contents API.
     ///
-    /// Returned by the GitHub Contents API for individual file reads and
-    /// directory listings. Distinct from [`CommitSha`] (a commit object) and
-    /// from tree SHAs (a directory tree object). Not interchangeable.
-    BlobSha
+    /// Used for both blob SHAs (files) and tree SHAs (directories) when reading
+    /// repository contents. Distinct from [`CommitSha`] (a commit object) and
+    /// must not be passed to APIs that expect a commit ref.
+    GitObjectSha
 }

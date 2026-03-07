@@ -85,13 +85,18 @@ pub struct GithubClient {
     _private: (),
 }
 
+/// Placeholder type for the SDK client until the real type is wired in.
+///
+/// Replaced with `github_bot_sdk::GitHubClient` when method bodies are
+/// implemented. The `Arc<dyn Any>` keeps the skeleton compilable without
+/// pulling the full SDK type into the stub constructor signature.
+type SdkClientPlaceholder = Arc<dyn std::any::Any + Send + Sync>;
+
 impl GithubClient {
     /// Construct a new [`GithubClient`].
     ///
-    /// The `_sdk_client` parameter will be replaced with the concrete
-    /// `github_bot_sdk::GitHubClient` type in PR 10. The `Arc<dyn Any>` here
-    /// keeps the skeleton compilable without fully wiring the SDK.
-    pub fn new(_sdk_client: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+    /// `_sdk_client` is a placeholder — see [`SdkClientPlaceholder`].
+    pub fn new(_sdk_client: SdkClientPlaceholder) -> Self {
         Self { _private: () }
     }
 }
