@@ -233,3 +233,12 @@ string_id! {
     /// Identifies a tool profile that controls which tools are available to a node.
     ProfileName
 }
+
+string_id! {
+    /// The SHA-1 hash of a Git object as returned by the GitHub Contents API.
+    ///
+    /// Used for both blob SHAs (files) and tree SHAs (directories) when reading
+    /// repository contents. Distinct from [`CommitSha`] (a commit object) and
+    /// must not be passed to APIs that expect a commit ref.
+    GitObjectSha
+}
