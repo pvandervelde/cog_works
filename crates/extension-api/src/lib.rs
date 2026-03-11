@@ -33,8 +33,9 @@ use serde::{Deserialize, Serialize};
 
 use pipeline::{
     ArtifactPath, DependencyGraph, DependencyResult, Diagnostics, DomainServiceClient,
-    DomainServiceError, DomainServiceName, HandshakeResult, HealthStatus, InterfaceMap,
-    NormaliseResult, Scenario, SimulationResults, TwinSpec, ValidationResult,
+    DomainServiceError, DomainServiceName, FailureProfile, HandshakeResult, HealthStatus,
+    InterfaceMap, NormaliseResult, Scenario, SimulationResults, TwinError, TwinHandle,
+    TwinProvisioner, TwinSpec, ValidationResult,
 };
 
 // ─── Transport configuration ─────────────────────────────────────────────────
@@ -194,5 +195,28 @@ impl DomainServiceClient for ExtensionApiClient {
 
     async fn health_check(&self) -> Result<HealthStatus, DomainServiceError> {
         todo!("PR 10: implement Extension API health_check")
+    }
+}
+
+#[async_trait]
+impl TwinProvisioner for ExtensionApiClient {
+    async fn start_twin(&self, _spec: &TwinSpec) -> Result<TwinHandle, TwinError> {
+        todo!("implement Extension API start_twin")
+    }
+
+    async fn stop_twin(&self, _handle: &TwinHandle) -> Result<(), TwinError> {
+        todo!("implement Extension API stop_twin")
+    }
+
+    async fn configure_failure_injection(
+        &self,
+        _handle: &TwinHandle,
+        _profile: &FailureProfile,
+    ) -> Result<(), TwinError> {
+        todo!("implement Extension API configure_failure_injection")
+    }
+
+    async fn reset_twin_state(&self, _handle: &TwinHandle) -> Result<(), TwinError> {
+        todo!("implement Extension API reset_twin_state")
     }
 }

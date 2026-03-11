@@ -115,15 +115,15 @@ impl AnthropicProvider {
     /// # Arguments
     /// - `config` — Anthropic API configuration.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the internal `reqwest::Client` cannot be built (this should
-    /// not happen in practice with the default configuration).
-    pub fn new(config: AnthropicConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .build()
-            .expect("failed to build reqwest client for AnthropicProvider");
-        Self { config, client }
+    /// Returns an error if the internal `reqwest::Client` cannot be built.
+    /// This is rare but can occur in environments with unusual TLS
+    /// configurations. Callers that cannot handle the error may `unwrap()`,
+    /// but propagating the error is preferred.
+    pub fn new(config: AnthropicConfig) -> Result<Self, reqwest::Error> {
+        let client = reqwest::Client::builder().build()?;
+        Ok(Self { config, client })
     }
 }
 

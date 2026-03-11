@@ -255,11 +255,12 @@ impl ValidationResult {
     ///
     /// # Panics
     ///
-    /// Panics in debug builds if `diagnostics` is empty — a failing result
-    /// must carry at least one diagnostic explaining why validation failed.
+    /// Panics if `diagnostics` is empty — a failing result must carry at least
+    /// one diagnostic explaining why validation failed. This invariant is
+    /// enforced in both debug and release builds.
     #[must_use]
     pub fn failed(diagnostics: Diagnostics) -> Self {
-        debug_assert!(
+        assert!(
             !diagnostics.is_empty(),
             "ValidationResult::failed requires at least one diagnostic"
         );
@@ -380,8 +381,12 @@ pub enum SatisfactionDetermination {
 /// the handle without calling `stop_twin` is a resource leak — implementations
 /// should log a warning if this occurs.
 ///
-/// The fields are intentionally private: callers must not forge handles. Only
-/// [`TwinProvisioner::start_twin`] implementations should call [`TwinHandle::new`].
+/// The fields are private to prevent accidental construction. However,
+/// `TwinHandle::new` is `pub` so that the `extension-api` crate (a separate
+/// crate) can create handles from provisioner responses. The restriction is
+/// therefore caller convention rather than a type-system guarantee: only
+/// [`TwinProvisioner::start_twin`] implementations should call
+/// [`TwinHandle::new`]. Do not construct handles with fabricated values.
 ///
 /// See `docs/spec/interfaces/domain-traits.md` §TwinHandle.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

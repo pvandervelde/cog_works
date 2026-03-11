@@ -87,27 +87,48 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     /// Creates a system-role message.
-    pub fn system(content: impl Into<String>) -> Self {
-        Self {
-            role: ChatRole::System,
-            content: content.into(),
+    ///
+    /// Returns `None` if `content` is empty.
+    #[must_use]
+    pub fn system(content: impl Into<String>) -> Option<Self> {
+        let content = content.into();
+        if content.is_empty() {
+            return None;
         }
+        Some(Self {
+            role: ChatRole::System,
+            content,
+        })
     }
 
     /// Creates a user-role message.
-    pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: ChatRole::User,
-            content: content.into(),
+    ///
+    /// Returns `None` if `content` is empty.
+    #[must_use]
+    pub fn user(content: impl Into<String>) -> Option<Self> {
+        let content = content.into();
+        if content.is_empty() {
+            return None;
         }
+        Some(Self {
+            role: ChatRole::User,
+            content,
+        })
     }
 
     /// Creates an assistant-role message (for few-shot examples).
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: ChatRole::Assistant,
-            content: content.into(),
+    ///
+    /// Returns `None` if `content` is empty.
+    #[must_use]
+    pub fn assistant(content: impl Into<String>) -> Option<Self> {
+        let content = content.into();
+        if content.is_empty() {
+            return None;
         }
+        Some(Self {
+            role: ChatRole::Assistant,
+            content,
+        })
     }
 
     /// Returns the role of this message.
@@ -188,14 +209,9 @@ pub struct ModelConfig {
 /// The validated completion returned by [`LlmProvider::complete`].
 ///
 /// The `content` field has been checked against the [`OutputSchema`] before
-/// the response is returned to the caller. The `schema_validated` flag is
-/// always `true`; if validation failed, [`LlmError::SchemaValidationFailed`]
-/// is returned instead.
-///
-/// ## Invariant
-///
-/// `schema_validated` is always `true`. Use [`StructuredResponse::new`] —
-/// never construct directly — to enforce this invariant.
+/// the response is returned to the caller. If schema validation failed,
+/// [`LlmError::SchemaValidationFailed`] is returned instead — this struct
+/// is only constructed on success.
 ///
 /// See `docs/spec/interfaces/domain-traits.md` §StructuredResponse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,14 +224,12 @@ pub struct StructuredResponse {
     output_tokens: TokenCount,
     /// Wall-clock latency of the API call in milliseconds.
     latency_ms: u64,
-    /// Always `true` — a response is only returned when schema validation
-    /// succeeds. Retained for audit-log compatibility.
-    schema_validated: bool,
 }
 
 impl StructuredResponse {
-    /// Creates a new validated response. `schema_validated` is always set to
-    /// `true`; [`LlmProvider`] implementations should return
+    /// Creates a new validated response.
+    ///
+    /// [`LlmProvider`] implementations should return
     /// [`LlmError::SchemaValidationFailed`] instead of constructing a response
     /// when validation fails.
     #[must_use]
@@ -230,7 +244,6 @@ impl StructuredResponse {
             input_tokens,
             output_tokens,
             latency_ms,
-            schema_validated: true,
         }
     }
 
@@ -252,11 +265,6 @@ impl StructuredResponse {
     /// Returns the wall-clock latency of the API call in milliseconds.
     pub fn latency_ms(&self) -> u64 {
         self.latency_ms
-    }
-
-    /// Always returns `true`. Retained for audit-log compatibility.
-    pub fn schema_validated(&self) -> bool {
-        self.schema_validated
     }
 }
 
@@ -334,6 +342,9 @@ impl LlmError {
                 RetryPolicy::Retryable { after: None }
             }
             Self::NetworkError { .. } => RetryPolicy::Retryable { after: None },
+            // HTTP 408 (Request Timeout) falls through to ApiError and is
+            // treated as NonRetryable here. The LlmGateway in `nodes` applies
+            // its own retry budget; revisit if 408s prove common in practice.
             Self::ApiError { .. }
             | Self::SchemaValidationFailed { .. }
             | Self::ContextWindowExceeded { .. } => RetryPolicy::NonRetryable,

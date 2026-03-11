@@ -121,7 +121,7 @@ pub enum CacheError {
 
 // ─── Summary cache trait ────────────────────────────────────────────────────
 
-/// Cache of pyramid-summar artifacts for context assembly.
+/// Cache of pyramid-summary artifacts for context assembly.
 ///
 /// Implementations provide read-through caching of artifact summaries so
 /// the context assembler does not need to regenerate them on every pipeline
@@ -290,8 +290,8 @@ pub trait PipelineConfigurationLoader: Send + Sync {
 pub struct ScopeParameters {
     /// Maximum number of files a single code generation run may modify.
     ///
-    /// `0` means unlimited (not recommended for production).
-    pub max_file_changes: u32,
+    /// `None` means unlimited (not recommended for production).
+    pub max_file_changes: Option<u32>,
 
     /// Glob patterns of artifact paths the node is allowed to create or
     /// modify. An empty list means no write access is allowed.
