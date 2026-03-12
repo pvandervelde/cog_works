@@ -201,11 +201,11 @@ impl DomainServiceClient for ExtensionApiClient {
 #[async_trait]
 impl TwinProvisioner for ExtensionApiClient {
     async fn start_twin(&self, _spec: &TwinSpec) -> Result<TwinHandle, TwinError> {
-        todo!("implement Extension API start_twin")
+        todo!("PR 10: implement Extension API start_twin")
     }
 
     async fn stop_twin(&self, _handle: &TwinHandle) -> Result<(), TwinError> {
-        todo!("implement Extension API stop_twin")
+        todo!("PR 10: implement Extension API stop_twin")
     }
 
     async fn configure_failure_injection(
@@ -213,10 +213,10 @@ impl TwinProvisioner for ExtensionApiClient {
         _handle: &TwinHandle,
         _profile: &FailureProfile,
     ) -> Result<(), TwinError> {
-        todo!("implement Extension API configure_failure_injection")
+        todo!("PR 10: implement Extension API configure_failure_injection")
     }
 
     async fn reset_twin_state(&self, _handle: &TwinHandle) -> Result<(), TwinError> {
-        todo!("implement Extension API reset_twin_state")
+        todo!("PR 10: implement Extension API reset_twin_state")
     }
 }

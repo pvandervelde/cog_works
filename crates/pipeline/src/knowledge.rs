@@ -47,6 +47,12 @@ use crate::{
 /// (lowest priority). The context assembler selects the finest level that
 /// fits within the remaining token budget.
 ///
+/// The numeric discriminants mirror the pyramid order and are used by the
+/// context assembler to index into per-artifact summary arrays:
+/// `summaries[SummaryLevel::Paragraph as usize]` retrieves the paragraph
+/// summary. `Ord` (derived by declaration order) and serde (by variant name)
+/// are unaffected by the explicit values.
+///
 /// See `docs/spec/interfaces/domain-traits.md` §SummaryLevel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SummaryLevel {
