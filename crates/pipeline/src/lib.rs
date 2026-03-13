@@ -20,19 +20,26 @@
 //! | [`github`] | GitHub traits: `EventSource`, `IssueTracker`, `PullRequestManager`, `CodeRepository`, `ProjectBoard` and their data types |
 //! | [`templates`] | `TemplateEngine` trait |
 //! | [`audit`] | `AuditStore` trait, `AuditEvent` enum, `PipelineSummary` |
+//! | [`domain_services`] | `DomainServiceClient`, `InterfaceRegistryLoader`, `ScenarioExecutor`, `TwinProvisioner` and their data types |
+//! | [`knowledge`] | `SummaryCache`, `PipelineConfigurationLoader`, `ToolProfileStore`, `AdapterSpecLoader` and their data types |
+//! | [`tools`] | `LlmProvider`, `StructuredResponse`, `ModelConfig`, `ChatMessage`, `OutputSchema`, `LlmError` |
 //!
 //! ## Specification
 //!
 //! See [`docs/spec/interfaces/shared-types.md`] for shared types.
 //! See [`docs/spec/interfaces/pipeline-graph.md`] for graph model types.
 //! See [`docs/spec/interfaces/github-traits.md`] for GitHub trait contracts.
+//! See [`docs/spec/interfaces/domain-traits.md`] for domain service, knowledge, and LLM provider contracts.
 
 pub mod audit;
+pub mod domain_services;
 pub mod errors;
 pub mod github;
 pub mod graph;
 pub mod identifiers;
+pub mod knowledge;
 pub mod templates;
+pub mod tools;
 pub mod types;
 
 // Re-export everything at the crate root for ergonomic usage by downstream crates.
@@ -66,4 +73,25 @@ pub use templates::{TemplateEngine, TemplateError};
 pub use types::{
     AlignmentScore, ApiVersion, CostBudget, Diagnostic, DiagnosticCategory, DiagnosticSeverity,
     SatisfactionScore, Timestamp, TokenCost, TokenCount,
+};
+
+// Re-exports from domain_services
+pub use domain_services::{
+    AcceptanceCriteria, DependencyGraph, DependencyResult, Diagnostics, DomainServiceClient,
+    DomainServiceError, FailureInjection, FailureProfile, HandshakeResult, HealthStatus,
+    InterfaceDefinition, InterfaceMap, InterfaceRegistryLoader, NormaliseResult, RegistryError,
+    SatisfactionDetermination, Scenario, ScenarioError, ScenarioExecutor, SimulationResults,
+    TrajectoryResult, TwinError, TwinHandle, TwinProvisioner, TwinSpec, ValidationResult,
+};
+
+// Re-exports from knowledge
+pub use knowledge::{
+    AdapterSpecLoader, ApiSpec, CacheError, ConfigError, OperationSpec,
+    PipelineConfigurationLoader, ProfileError, PyramidSummary, ScopeParameters, SpecError,
+    SpecInfo, SummaryCache, SummaryLevel, ToolOverrides, ToolProfile, ToolProfileStore,
+};
+
+// Re-exports from tools
+pub use tools::{
+    ChatMessage, ChatRole, LlmError, LlmProvider, ModelConfig, OutputSchema, StructuredResponse,
 };

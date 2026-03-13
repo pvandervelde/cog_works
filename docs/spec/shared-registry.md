@@ -228,9 +228,112 @@ Spec: `docs/spec/interfaces/github-traits.md`.
 
 ### Domain Services (`pipeline/src/domain_services.rs`)
 
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/domain-traits.md` §Domain Service Traits.
+
+**Data types**
+
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | `DomainServiceClient` trait, `HandshakeResult`, `StructuredResponse`, etc. |
+| `Diagnostics` | Collection of `Diagnostic` items; has `has_blocking() -> bool` helper |
+| `NormaliseResult` | Files modified + diagnostics from a normalisation pass |
+| `SimulationResults` | Scenario execution counts + diagnostics + opaque detail payload |
+| `DependencyResult` | Dependency satisfaction flag + missing dep list + diagnostics |
+| `InterfaceMap` | List of `InterfaceDefinition` entries extracted from artifacts |
+| `DependencyGraph` | Directed graph: `nodes: Vec<String>`, `edges: Vec<(String, String)>` |
+| `HealthStatus` | `Healthy` / `Degraded { message }` / `Unhealthy { message }` |
+| `InterfaceDefinition` | Interface contract: id, domain, JSON schema, artifact types, version |
+| `ValidationResult` | Schema validation outcome: `valid: bool` + `diagnostics: Diagnostics` |
+| `Scenario` | Acceptance scenario: id, description, input/holdout artifacts, criteria |
+| `TrajectoryResult` | Single scenario execution outcome: passed, score, diagnostics |
+| `AcceptanceCriteria` | Min score threshold + required/prohibited behaviour lists |
+| `SatisfactionDetermination` | `Satisfied { score }` / `NotSatisfied { score, failing_criteria }` |
+| `TwinHandle` | Opaque handle to a running digital twin: `id: String`, `service: DomainServiceName` |
+| `TwinSpec` | Twin launch specification: `service`, opaque `config: serde_json::Value` |
+| `FailureProfile` | List of `FailureInjection` directives |
+| `FailureInjection` | Single fault injection: operation, `failure_rate: f32`, error message |
+| `HandshakeResult` | Extension API handshake response: domain, api_version, capabilities, artifact/interface types |
+
+**Error types**
+
+| Type | Variants |
+|------|---------|
+| `DomainServiceError` | `ConnectionFailed` / `RequestFailed` / `ProtocolError` / `HandshakeFailed` / `ServiceUnavailable` |
+| `RegistryError` | `LoadFailed` / `SchemaInvalid` / `NotFound` |
+| `ScenarioError` | `LoadFailed` / `ExecutionFailed` |
+| `TwinError` | `StartFailed` / `StopFailed` / `ConfigurationFailed` / `NotRunning` |
+
+**Port traits**
+
+| Trait | Implemented by | Purpose |
+|-------|---------------|---------|
+| `DomainServiceClient` | `ExtensionApiClient` | All domain service operations via Extension API |
+| `InterfaceRegistryLoader` | Config adapter (wired in `cli`) | Human-authored interface registry |
+| `ScenarioExecutor` | Wired in `cli` | Scenario load + trajectory execution + acceptance evaluation |
+| `TwinProvisioner` | `ExtensionApiClient` | Digital twin lifecycle management |
+
+### Knowledge & Configuration (`pipeline/src/knowledge.rs`)
+
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/domain-traits.md` §Knowledge & Configuration Traits.
+
+**Data types**
+
+| Type | Purpose |
+|------|---------|
+| `SummaryLevel` | `OneLine(0)` / `Paragraph(1)` / `FullInterface(2)` / `Source(3)` — pyramid granularity |
+| `PyramidSummary` | Cached artifact summary: path, level, content, commit SHA, token count |
+| `ScopeParameters` | Artifact scope constraints: max file/new-file counts, allowed/prohibited glob patterns |
+| `ToolProfile` | Per-node tool & skill availability: name, node_id, allowed tools/skills, scope |
+| `ToolOverrides` | Node-specific overlay: additional/removed tools, optional scope overrides |
+| `SpecInfo` | Adapter spec metadata: title, version, description, service name |
+| `OperationSpec` | Single Extension API operation: name, description, input/output JSON schemas |
+| `ApiSpec` | Full adapter spec: service name, `SpecInfo`, list of `OperationSpec` |
+
+**Error types**
+
+| Type | Variants |
+|------|---------|
+| `CacheError` | `Unavailable` / `SerialisationError` |
+| `ConfigError` | `NotFound` / `ParseError` / `InvalidConfiguration` |
+| `ProfileError` | `LoadFailed` / `NotFound` |
+| `SpecError` | `LoadFailed` / `NotFound` |
+
+**Port traits**
+
+| Trait | Implemented by | Purpose |
+|-------|---------------|---------|
+| `SummaryCache` | GitHub comment cache (wired in `cli`) | Read/stale-check/invalidate artifact summaries |
+| `PipelineConfigurationLoader` | TOML reader (wired in `cli`) | Load + access `.cogworks/pipeline.toml` |
+| `ToolProfileStore` | TOML reader (wired in `cli`) | Per-node tool/skill profile resolution |
+| `AdapterSpecLoader` | JSON file reader (wired in `cli`) | Extension API adapter spec access |
+
+### LLM Provider (`pipeline/src/tools.rs`)
+
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/domain-traits.md` §LLM Provider Trait.
+
+**Data types**
+
+| Type | Purpose |
+|------|---------|
+| `ChatRole` | `System` / `User` / `Assistant` |
+| `ChatMessage` | Chat turn: `role: ChatRole`, `content: String`; constructor helpers `system()`, `user()`, `assistant()` |
+| `OutputSchema` | JSON Schema wrapper (newtype over `serde_json::Value`); validated at construction |
+| `ModelConfig` | LLM model selection: model ID, context window, max tokens, cost per input/output token |
+| `StructuredResponse` | Validated completion: `content`, `input_tokens`, `output_tokens`, `latency_ms`, `schema_validated` |
+
+**Error type**
+
+| Type | Variants |
+|------|---------|
+| `LlmError` | `RateLimited` / `ApiError` / `SchemaValidationFailed` / `NetworkError` / `ContextWindowExceeded` |
+
+**Port trait**
+
+| Trait | Implemented by | Purpose |
+|-------|---------------|---------|
+| `LlmProvider` | `AnthropicProvider` (llm crate) | Raw LLM completion API |
 
 ### Security (`pipeline/src/security.rs`)
 
@@ -264,15 +367,20 @@ Spec: `docs/spec/interfaces/github-traits.md`.
 
 ---
 
-## Infrastructure Types (added in PR 10)
+## Infrastructure Types
 
-| Crate | Type | Implements |
-|-------|------|-----------|
-| `github` | `GithubClient` | `IssueTracker`, `PullRequestManager`, `CodeRepository`, `ProjectBoard`, `AuditStore` |
-| `llm` | `AnthropicProvider` | `LlmProvider` |
-| `extension-api` | `ExtensionApiClient` | `DomainServiceClient` |
-| `listener` | `GitHubWebhookEventSource` | `EventSource` |
-| `listener` | `QueueEventSource` | `EventSource` |
+Stubs introduced in PRs 3–4; full method bodies added in PR 10.
+
+| Crate | Type | Implements | Added in |
+|-------|------|-----------|----------|
+| `github` | `GithubClient` | `IssueTracker`, `PullRequestManager`, `CodeRepository`, `ProjectBoard`, `AuditStore` | PR 3 |
+| `listener` | `GitHubWebhookEventSource` | `EventSource` | PR 3 |
+| `listener` | `QueueEventSource` | `EventSource` | PR 3 |
+| `extension-api` | `ExtensionApiClient` | `DomainServiceClient` | PR 4 |
+| `extension-api` | `ServiceTransportConfig` | — | PR 4 |
+| `extension-api` | `TransportKind` | — | PR 4 |
+| `llm` | `AnthropicProvider` | `LlmProvider` | PR 4 |
+| `llm` | `AnthropicConfig` | — | PR 4 |
 
 ---
 
