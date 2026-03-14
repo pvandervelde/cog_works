@@ -337,9 +337,52 @@ Spec: `docs/spec/interfaces/domain-traits.md` §LLM Provider Trait.
 
 ### Security (`pipeline/src/security.rs`)
 
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/security.md`.
+
+**Constitutional layer**
+
 | Type | Purpose |
-|------|---------|
-| *(to be added)* | `ConstitutionalRules`, `ValidatedPrompt`, `InjectionDetectionResult`, etc. |
+|------|------|
+| `RequiredRule` | Enum of 5 required behavioural guardrails that must appear in every constitutional document |
+| `ConstitutionalRules` | Loaded rules doc: `content`, `source_hash` (SHA-256 hex), `source_branch` |
+| `ConstitutionalValidationResult` | Two-bool intermediate record: `all_required_rules_present`, `privileged_position_confirmed` |
+| `PromptAssembly` | Raw materials before constitutional wrapping: `system_prompt`, `user_content` |
+| `ValidatedPrompt` | Opaque wrapper; only constructor is `validate_constitutional_prompt` |
+| `ConstitutionalError` | `MissingRules { missing }` / `InvalidSourceBranch { branch }` / `HashMismatch { expected, computed }` |
+
+**Injection detection**
+
+| Type | Purpose |
+|------|------|
+| `InjectionPattern` | `InstructionInjection` / `PersonaOverride` / `BehavioralModification` / `SystemPromptExtractionAttempt` |
+| `InjectionDetectionResult` | `Clean` / `InjectionDetected { source, offending_text, pattern }` |
+
+**Scope enforcement**
+
+| Type | Purpose |
+|------|------|
+| `ScopeViolationKind` | `ScopeUnderspecified` / `ScopeAmbiguous` / `ProtectedPathViolation` / `UnauthorizedCapability` |
+| `ScopeViolation` | Single scope violation: `kind`, `artifact_path: Option<ArtifactPath>`, `description` |
+| `ApprovedScope` | Approved artifact patterns + max file/new-file counts for one operation; `from_scope_parameters()` ctor |
+| `ProtectedPath` | Glob pattern + reason; matched by `is_protected` |
+
+**Tool parameter scope**
+
+| Type | Purpose |
+|------|------|
+| `ToolParams` | `HashMap<String, serde_json::Value>` parameter map; `empty()` ctor |
+| `ToolScopeViolation` | Tool name + parameter name + violated constraint description |
+
+**Pure functions**
+
+| Function | Signature summary |
+|----------|---------|
+| `validate_constitutional_prompt` | `(&ConstitutionalRules, PromptAssembly) → Result<ValidatedPrompt, ConstitutionalError>` |
+| `detect_injection` | `(&str, &str) → InjectionDetectionResult` — infallible |
+| `validate_scope` | `(&[ArtifactPath], &ApprovedScope, &[ProtectedPath]) → Result<(), Vec<ScopeViolation>>` |
+| `is_protected` | `(&ArtifactPath, &[ProtectedPath]) → bool` — infallible |
+| `validate_tool_scope` | `(&ToolName, &ToolParams, &ScopeParameters) → Result<(), ToolScopeViolation>` |
 
 ### Context Assembly (`pipeline/src/context.rs`, `pipeline/src/labels.rs`)
 

@@ -23,6 +23,7 @@
 //! | [`domain_services`] | `DomainServiceClient`, `InterfaceRegistryLoader`, `ScenarioExecutor`, `TwinProvisioner` and their data types |
 //! | [`knowledge`] | `SummaryCache`, `PipelineConfigurationLoader`, `ToolProfileStore`, `AdapterSpecLoader` and their data types |
 //! | [`tools`] | `LlmProvider`, `StructuredResponse`, `ModelConfig`, `ChatMessage`, `OutputSchema`, `LlmError` |
+//! | [`security`] | Constitutional layer, injection detection, scope enforcement, tool parameter scope |
 //!
 //! ## Specification
 //!
@@ -30,6 +31,7 @@
 //! See [`docs/spec/interfaces/pipeline-graph.md`] for graph model types.
 //! See [`docs/spec/interfaces/github-traits.md`] for GitHub trait contracts.
 //! See [`docs/spec/interfaces/domain-traits.md`] for domain service, knowledge, and LLM provider contracts.
+//! See [`docs/spec/interfaces/security.md`] for security and constitutional layer contracts.
 
 pub mod audit;
 pub mod domain_services;
@@ -38,6 +40,7 @@ pub mod github;
 pub mod graph;
 pub mod identifiers;
 pub mod knowledge;
+pub mod security;
 pub mod templates;
 pub mod tools;
 pub mod types;
@@ -94,4 +97,13 @@ pub use knowledge::{
 // Re-exports from tools
 pub use tools::{
     ChatMessage, ChatRole, LlmError, LlmProvider, ModelConfig, OutputSchema, StructuredResponse,
+};
+
+// Re-exports from security
+pub use security::{
+    detect_injection, is_protected, validate_constitutional_prompt, validate_scope,
+    validate_tool_scope, ApprovedScope, ConstitutionalError, ConstitutionalRules,
+    ConstitutionalValidationResult, InjectionDetectionResult, InjectionPattern, PromptAssembly,
+    ProtectedPath, RequiredRule, ScopeViolation, ScopeViolationKind, ToolParams,
+    ToolScopeViolation, ValidatedPrompt,
 };
