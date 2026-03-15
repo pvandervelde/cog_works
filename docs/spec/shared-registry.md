@@ -384,17 +384,67 @@ Spec: `docs/spec/interfaces/security.md`.
 | `is_protected` | `(&ArtifactPath, &[ProtectedPath]) → bool` — infallible |
 | `validate_tool_scope` | `(&ToolName, &ToolParams, &ScopeParameters) → Result<(), ToolScopeViolation>` |
 
-### Context Assembly (`pipeline/src/context.rs`, `pipeline/src/labels.rs`)
+### Context Assembly & Labels (`pipeline/src/context.rs`, `pipeline/src/labels.rs`)
+
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/context.md`.
+
+**Classification result** (`context.rs`)
 
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | `ContextPackage`, `ContextPack`, `PipelineLabel`, etc. |
+| `TaskType` | `Feature` / `BugFix` / `Documentation` / `Refactoring` / `Configuration` / `Testing` / `Security` / `Unknown` |
+| `ClassificationResult` | Intake node output: `task_type`, `safety_affecting: bool`, `estimated_scope: u32`, `affected_modules` |
+
+**Context item and package** (`context.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `ContextPriority` | `CurrentInterfaceDefinition(0)` → `TransitiveDependency(5)`; `Ord` by declaration order |
+| `ContextItem` | One knowledge unit: content, summary_level, priority, token_count, source_path |
+| `ContextPackage` | Assembled context: ordered items, total_token_count, truncation_applied |
+
+**Context pack types** (`context.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `ContextPackTrigger` | Label patterns + component tag patterns + `requires_safety_critical` flag |
+| `ContextPack` | Domain knowledge bundle: id, trigger, knowledge text, safe/anti patterns, required artifacts, threshold override |
+| `MergedGuidance` | Union-merged safe patterns, anti-patterns, required artifacts from all matched packs |
+| `LoadedContextPacks` | Matched packs + `merged_guidance` + `strictest_threshold` |
+
+**Context assembly request** (`context.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `ContextAssemblyRequest` | Assembly inputs: `node_type`, `sub_work_item_description`, `affected_modules`, `scenario_holdout_dirs`, `pipeline_working_dir` |
+
+**Context assembly pure/async functions** (`context.rs`)
+
+| Function | Signature summary |
+|----------|---------|
+| `select_context_packs` | `(&ClassificationResult, &[ContextPack]) → Vec<ContextPackId>` — infallible |
+| `merge_pack_guidance` | `(&[ContextPack]) → MergedGuidance` — infallible |
+| `assemble_context` | `async (&ContextAssemblyRequest, &dyn SummaryCache, &LoadedContextPacks, &[InterfaceDefinition], TokenCount) → ContextPackage` |
+| `apply_priority_truncation` | `(Vec<ContextItem>, TokenCount) → ContextPackage` — infallible |
+| `enforce_scenario_holdout` | `(Vec<ContextItem>, &[PathBuf]) → Vec<ContextItem>` — infallible, hard holdout constraint |
+
+**Pipeline labels** (`labels.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `PipelineLabel` | 12-variant enum covering trigger, status, gate, lock, security, and safety labels |
+
+| Function | Signature summary |
+|----------|---------|
+| `parse_label` | `(&str) → Option<PipelineLabel>` — returns `None` for non-CogWorks labels |
+| `generate_label` | `(&PipelineLabel) → String` — round-trip guaranteed with `parse_label` |
 
 ### Execution (`pipeline/src/execution.rs` et al.)
 
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | `NextAction`, `BudgetAcquisition`, `ClassificationResult`, `AggregateReviewDecision`, etc. |
+| *(to be added)* | `NextAction`, `BudgetAcquisition`, `AggregateReviewDecision`, etc. |
 
 ### Advanced Features
 

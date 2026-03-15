@@ -24,6 +24,8 @@
 //! | [`knowledge`] | `SummaryCache`, `PipelineConfigurationLoader`, `ToolProfileStore`, `AdapterSpecLoader` and their data types |
 //! | [`tools`] | `LlmProvider`, `StructuredResponse`, `ModelConfig`, `ChatMessage`, `OutputSchema`, `LlmError` |
 //! | [`security`] | Constitutional layer, injection detection, scope enforcement, tool parameter scope |
+//! | [`context`] | Context assembly, context packs, `ClassificationResult`, `ContextPackage` |
+//! | [`labels`] | `PipelineLabel` enum, `parse_label`, `generate_label` |
 //!
 //! ## Specification
 //!
@@ -32,14 +34,17 @@
 //! See [`docs/spec/interfaces/github-traits.md`] for GitHub trait contracts.
 //! See [`docs/spec/interfaces/domain-traits.md`] for domain service, knowledge, and LLM provider contracts.
 //! See [`docs/spec/interfaces/security.md`] for security and constitutional layer contracts.
+//! See [`docs/spec/interfaces/context.md`] for context assembly and label contracts.
 
 pub mod audit;
+pub mod context;
 pub mod domain_services;
 pub mod errors;
 pub mod github;
 pub mod graph;
 pub mod identifiers;
 pub mod knowledge;
+pub mod labels;
 pub mod security;
 pub mod templates;
 pub mod tools;
@@ -107,3 +112,14 @@ pub use security::{
     ProtectedPath, RequiredRule, ScopeViolation, ScopeViolationKind, ToolParams,
     ToolScopeViolation, ValidatedPrompt,
 };
+
+// Re-exports from context
+pub use context::{
+    apply_priority_truncation, assemble_context, enforce_scenario_holdout, merge_pack_guidance,
+    select_context_packs, ClassificationResult, ContextAssemblyRequest, ContextItem, ContextPack,
+    ContextPackTrigger, ContextPackage, ContextPriority, LoadedContextPacks, MergedGuidance,
+    TaskType,
+};
+
+// Re-exports from labels
+pub use labels::{generate_label, parse_label, PipelineLabel};
