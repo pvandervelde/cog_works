@@ -105,17 +105,14 @@ An intermediate record (internal to `validate_constitutional_prompt`) confirming
 the two structural invariants that must hold before the prompt is assembled.
 
 ```rust
-pub struct ConstitutionalValidationResult {
-    pub all_required_rules_present: bool,
-    pub privileged_position_confirmed: bool,
+pub(crate) struct ConstitutionalValidationResult {
+    pub(crate) all_required_rules_present: bool,
+    pub(crate) privileged_position_confirmed: bool,
 }
 ```
 
-- `all_required_rules_present` — `true` iff every `RequiredRule` variant is
-  textually present in the `ConstitutionalRules.content`.
-- `privileged_position_confirmed` — `true` iff the rules are placed at the
-  system-prompt level, before any user content, ensuring they cannot be
-  overridden by later user-level injections.
+This type is `pub(crate)` — it is not part of the public API. Callers never
+construct or inspect it directly.
 
 ### PromptAssembly
 
@@ -143,6 +140,9 @@ material. The only constructor is `validate_constitutional_prompt`.
 pub struct ValidatedPrompt { /* private fields */ }
 ```
 
+All fields are private. The only way to read the assembled content is through
+the public accessor methods.
+
 Public accessors:
 
 | Method | Return | Description |
@@ -151,11 +151,11 @@ Public accessors:
 | `user_content(&self) -> &str` | `&str` | User-level content, verbatim |
 | `rules(&self) -> &ConstitutionalRules` | `&ConstitutionalRules` | The rules document used during validation |
 
-**Security guarantee**: Fields are `pub(crate)`, enabling `nodes::LlmGateway`
-to read them while preventing external construction. Because there is no public
-constructor, it is a **compile-time error** for any code path to call
-`LlmProvider::complete` without first passing through
-`validate_constitutional_prompt`.
+**Security guarantee**: Because all fields are private and there is no public
+constructor, it is a **compile-time error** anywhere — including inside `pipeline`
+itself — to produce a `ValidatedPrompt` without calling
+`validate_constitutional_prompt`. The accessor methods expose all data
+`nodes::LlmGateway` needs.
 
 ### ConstitutionalError
 
@@ -304,12 +304,12 @@ pub enum ScopeViolationKind {
 }
 ```
 
-| Variant | When produced |
-|---------|--------------|
-| `ScopeUnderspecified` | `ApprovedScope.artifact_patterns` is empty |
-| `ScopeAmbiguous` | Two scope declarations conflict (allow and prohibit same path) |
-| `ProtectedPathViolation` | Artifact matches a `ProtectedPath`; overrides all allow rules |
-| `UnauthorizedCapability` | Artifact does not match any `artifact_patterns` entry |
+| Variant | When produced | Produced by |
+|---------|---------------|--------------|
+| `ScopeUnderspecified` | `ApprovedScope.artifact_patterns` is empty | `validate_scope` |
+| `ScopeAmbiguous` | A path matches both an allow-pattern and a prohibit-pattern | `validate_tool_scope` (reserved in `validate_scope` for future `prohibited_artifact_patterns` on `ApprovedScope`) |
+| `ProtectedPathViolation` | Artifact matches a `ProtectedPath`; overrides all allow rules | `validate_scope` |
+| `UnauthorizedCapability` | Artifact does not match any approved pattern | `validate_scope`, `validate_tool_scope` |
 
 ### ScopeViolation
 
@@ -407,7 +407,9 @@ pub fn is_protected(path: &ArtifactPath, protected_paths: &[ProtectedPath]) -> b
 ```
 
 Returns `true` if `path.as_str()` matches any `ProtectedPath.pattern` using
-glob semantics. Invalid patterns are silently treated as non-matching.
+glob semantics. Invalid patterns emit a `tracing::warn!` event and are treated
+as non-matching (fail-open). Pattern validity must be enforced at configuration
+load time.
 
 **Infallible. Pure.**
 
@@ -535,6 +537,7 @@ validate_scope(&proposed_paths, &scope, &config.protected_paths)?;
   `"main"`. A configurable list will be introduced when configuration loading is
   implemented in PR 6.
 - `format_missing_rules` is a private helper; it is not part of the public API.
-- `ValidatedPrompt` fields are `pub(crate)` to allow `nodes::LlmGateway` (in the
-  same workspace, different crate) to destructure the prompt without requiring a
-  public constructor.
+- `ValidatedPrompt` fields are all private. The public accessor methods
+  supply everything `nodes::LlmGateway` needs. The private fields make it
+  a compile-time error to construct `ValidatedPrompt` anywhere except inside
+  `validate_constitutional_prompt`, inside `pipeline` or elsewhere.

@@ -108,9 +108,8 @@ pub use tools::{
 pub use security::{
     detect_injection, is_protected, validate_constitutional_prompt, validate_scope,
     validate_tool_scope, ApprovedScope, ConstitutionalError, ConstitutionalRules,
-    ConstitutionalValidationResult, InjectionDetectionResult, InjectionPattern, PromptAssembly,
-    ProtectedPath, RequiredRule, ScopeViolation, ScopeViolationKind, ToolParams,
-    ToolScopeViolation, ValidatedPrompt,
+    InjectionDetectionResult, InjectionPattern, PromptAssembly, ProtectedPath, RequiredRule,
+    ScopeViolation, ScopeViolationKind, ToolParams, ToolScopeViolation, ValidatedPrompt,
 };
 
 // Re-exports from context

@@ -123,18 +123,18 @@ pub fn parse_label(s: &str) -> Option<PipelineLabel> {
 
 /// Returns the canonical GitHub label string for a [`PipelineLabel`].
 ///
-/// The returned string is the exact value that must be created on the GitHub
-/// repository (case-sensitive). CogWorks assumes these labels exist; it does
-/// not create them automatically.
+/// The returned `&'static str` requires no allocation. CogWorks assumes these
+/// labels exist on the GitHub repository (case-sensitive); it does not create
+/// them automatically.
 ///
 /// # Round-trip guarantee
 ///
-/// `parse_label(&generate_label(label))` always returns `Some(label)`.
+/// `parse_label(generate_label(label))` always returns `Some(label)`.
 ///
 /// **Infallible. Pure.**
 ///
 /// See `docs/spec/interfaces/context.md` §generate_label.
-pub fn generate_label(label: &PipelineLabel) -> String {
+pub fn generate_label(label: &PipelineLabel) -> &'static str {
     match label {
         PipelineLabel::Run => "cogworks:run",
         PipelineLabel::Restart => "cogworks:restart",
@@ -149,7 +149,6 @@ pub fn generate_label(label: &PipelineLabel) -> String {
         PipelineLabel::SecurityHold => "cogworks:security-hold",
         PipelineLabel::SafetyCritical => "cogworks:safety-critical",
     }
-    .to_string()
 }
 #[cfg(test)]
 #[path = "labels_tests.rs"]

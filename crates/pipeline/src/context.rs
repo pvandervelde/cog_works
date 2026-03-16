@@ -184,8 +184,22 @@ pub struct ContextPackage {
     pub total_token_count: TokenCount,
 
     /// `true` if one or more items were dropped to fit within the token budget,
-    /// or if a `SummaryCache` lookup failed during assembly.
+    /// or if a single required artifact's item exceeds the budget on its own
+    /// (budget overflow).
+    ///
+    /// Does **not** indicate cache fetch errors; see [`assembly_errors`] for
+    /// that. Splitting the two signals allows callers to distinguish expected
+    /// budget pressure from unexpected upstream failures.
     pub truncation_applied: bool,
+
+    /// Descriptions of artifacts that were skipped because [`crate::SummaryCache`]
+    /// returned an error during assembly.
+    ///
+    /// An empty vec means the context is complete (no fetch failures). A
+    /// non-empty vec means the context may be missing information; callers
+    /// should log or surface these errors for observability but may still
+    /// proceed with the assembled context.
+    pub assembly_errors: Vec<String>,
 }
 
 // ─── Context pack types ───────────────────────────────────────────────────────
@@ -200,8 +214,10 @@ pub struct ContextPackage {
 pub struct ContextPackTrigger {
     /// Glob patterns matched against GitHub label strings on the work item.
     ///
-    /// The pack fires if any pattern matches any label. Evaluated before
-    /// `component_tag_patterns` and `requires_safety_critical`.
+    /// The pack fires if any pattern matches any label. This field is evaluated
+    /// by [`select_context_packs`] when the caller passes `active_labels`.
+    /// Unlike `component_tag_patterns`, label information is not available in
+    /// [`ClassificationResult`] and must be passed separately.
     pub label_patterns: Vec<String>,
 
     /// Glob patterns matched against each path in
@@ -342,25 +358,33 @@ pub struct ContextAssemblyRequest {
 
 // ─── Context assembly functions ───────────────────────────────────────────────
 
-/// Returns the IDs of all Context Packs whose triggers match `classification`.
+/// Returns the IDs of all Context Packs whose triggers match `classification`
+/// and `active_labels`.
 ///
 /// A pack is selected if any of the following is true:
+/// - Any `trigger.label_patterns` glob matches any string in `active_labels`.
 /// - Any `trigger.component_tag_patterns` glob matches any path in
 ///   `classification.affected_modules`.
 /// - `trigger.requires_safety_critical` is `true` and
 ///   `classification.safety_affecting` is `true`.
 ///
-/// Label patterns are not evaluated here (no label context available at
-/// classification time). Callers with label context can apply a second filter.
-///
 /// Returns an empty `Vec` if no packs match. This is valid; the node proceeds
 /// with no pack guidance.
+///
+/// # Arguments
+///
+/// - `classification` — classification result from the Intake node.
+/// - `active_labels` — the current GitHub label strings on the work item;
+///   matched against `trigger.label_patterns`. Pass an empty slice if label
+///   context is not available.
+/// - `available` — all Context Packs loaded from the configuration.
 ///
 /// **Infallible. Pure.**
 ///
 /// See `docs/spec/interfaces/context.md` §select_context_packs.
 pub fn select_context_packs(
     _classification: &ClassificationResult,
+    _active_labels: &[String],
     _available: &[ContextPack],
 ) -> Vec<ContextPackId> {
     todo!("See docs/spec/interfaces/context.md §select_context_packs")

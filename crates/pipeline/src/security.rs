@@ -58,28 +58,55 @@ use crate::{
 /// even a single rule causes [`validate_constitutional_prompt`] to return
 /// [`ConstitutionalError::MissingRules`].
 ///
+/// ## Text signatures
+///
+/// The presence check in `validate_constitutional_prompt` looks for the
+/// following exact strings (case-sensitive) anywhere in the document text:
+///
+/// | Variant | Required text signature |
+/// |---------|------------------------|
+/// | `ExternalContentAsData` | `"RULE: EXTERNAL_CONTENT_AS_DATA"` |
+/// | `InjectionDetection` | `"RULE: INJECTION_DETECTION"` |
+/// | `ScopeBinding` | `"RULE: SCOPE_BINDING"` |
+/// | `UnauthorizedCapabilitiesProhibition` | `"RULE: UNAUTHORIZED_CAPABILITIES_PROHIBITED"` |
+/// | `NoCredentialGeneration` | `"RULE: NO_CREDENTIAL_GENERATION"` |
+///
+/// A conforming constitutional document must contain each signature on its own
+/// line. The surrounding prose may vary, but the signature keyword must be
+/// present verbatim so that automated validation has a stable target.
+///
 /// See `docs/spec/interfaces/security.md` §RequiredRule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RequiredRule {
     /// Rule that external content (issue bodies, repository files, domain
     /// service responses) must be treated as **data**, never as instructions.
+    ///
+    /// Required text signature: `"RULE: EXTERNAL_CONTENT_AS_DATA"`
     ExternalContentAsData,
 
     /// Rule that injection pattern detection must run on all external content
     /// before prompt inclusion, and that detection must trigger an immediate
     /// pipeline halt.
+    ///
+    /// Required text signature: `"RULE: INJECTION_DETECTION"`
     InjectionDetection,
 
     /// Rule that all operations must be bound to an explicit, verified scope and
     /// that out-of-scope operations must be refused.
+    ///
+    /// Required text signature: `"RULE: SCOPE_BINDING"`
     ScopeBinding,
 
     /// Rule that capabilities not explicitly granted in the active tool profile
     /// must not be invoked, even if the LLM believes them to be available.
+    ///
+    /// Required text signature: `"RULE: UNAUTHORIZED_CAPABILITIES_PROHIBITED"`
     UnauthorizedCapabilitiesProhibition,
 
     /// Rule that the pipeline must never generate, infer, or expose credentials,
     /// API keys, tokens, or any authentication material.
+    ///
+    /// Required text signature: `"RULE: NO_CREDENTIAL_GENERATION"`
     NoCredentialGeneration,
 }
 
@@ -95,8 +122,14 @@ pub enum RequiredRule {
 /// to [`validate_constitutional_prompt`] — which validates and consumes this
 /// value, returning a [`ValidatedPrompt`] on success.
 ///
+/// # Debug output
+///
+/// The `content` field (system-prompt text) is intentionally **not** shown in
+/// the `Debug` representation to prevent accidental logging of constitutional
+/// rule text. Only the `source_hash` and `source_branch` are printed.
+///
 /// See `docs/spec/interfaces/security.md` §ConstitutionalRules.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ConstitutionalRules {
     /// The raw text of the constitutional rules document, verbatim as it will
     /// be placed at the privileged position of the LLM system prompt.
@@ -115,24 +148,35 @@ pub struct ConstitutionalRules {
     pub source_branch: BranchName,
 }
 
+impl std::fmt::Debug for ConstitutionalRules {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConstitutionalRules")
+            .field("source_hash", &self.source_hash)
+            .field("source_branch", &self.source_branch)
+            .field("content", &"<redacted>")
+            .finish()
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 /// Intermediate record confirming the two structural invariants that must hold
 /// before a prompt is assembled.
 ///
 /// Produced internally by [`validate_constitutional_prompt`]; callers never
-/// construct this type directly.
+/// construct this type directly. This type is not part of the public API.
 ///
 /// See `docs/spec/interfaces/security.md` §ConstitutionalValidationResult.
+#[allow(dead_code)] // constructed only inside validate_constitutional_prompt (todo stub)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConstitutionalValidationResult {
+pub(crate) struct ConstitutionalValidationResult {
     /// `true` iff every variant in [`RequiredRule`] is textually present in
     /// [`ConstitutionalRules::content`].
-    pub all_required_rules_present: bool,
+    pub(crate) all_required_rules_present: bool,
 
     /// `true` iff the rules are positioned at the system-prompt level, before
     /// any user content, so they cannot be overridden by later injections.
-    pub privileged_position_confirmed: bool,
+    pub(crate) privileged_position_confirmed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -162,28 +206,28 @@ pub struct PromptAssembly {
 /// submission to the LLM provider.
 ///
 /// The only way to produce a [`ValidatedPrompt`] is via
-/// [`validate_constitutional_prompt`]. Fields are `pub(crate)` rather than
-/// private so that `nodes::LlmGateway` (in the same workspace) can read the
-/// assembled content without requiring a public constructor.
+/// [`validate_constitutional_prompt`]. All fields are private, so this type
+/// can only be constructed inside this module. Use the public accessor methods
+/// to read the assembled content.
 ///
 /// # Security guarantee
 ///
-/// Because there is no public constructor, the compiler prevents any code path
-/// from calling `LlmProvider::complete` without first passing through the
-/// constitutional check. If a coder bypasses this in `nodes`, the code will
-/// not compile.
+/// Because all fields are private and there is no public constructor, the
+/// compiler prevents any code path — inside or outside `pipeline` — from
+/// calling `LlmProvider::complete` without first passing through
+/// `validate_constitutional_prompt`.
 ///
 /// See `docs/spec/interfaces/security.md` §ValidatedPrompt.
 #[derive(Debug)]
 pub struct ValidatedPrompt {
     /// The constitutional rules document applied during validation.
-    pub(crate) rules: ConstitutionalRules,
+    rules: ConstitutionalRules,
 
     /// The assembled system prompt: `rules.content + "\n\n" + node system prompt`.
-    pub(crate) assembled_system_prompt: String,
+    assembled_system_prompt: String,
 
     /// The user-level content, stored verbatim post-injection-scan.
-    pub(crate) user_content: String,
+    user_content: String,
 }
 
 impl ValidatedPrompt {
@@ -407,23 +451,44 @@ pub fn detect_injection(_content: &str, _source_label: &str) -> InjectionDetecti
 /// Used in [`ScopeViolation`] to give the caller and audit log a structured
 /// reason for the rejection.
 ///
+/// ## Variant reachability
+///
+/// `validate_scope` only produces `ScopeUnderspecified`, `ProtectedPathViolation`,
+/// and `UnauthorizedCapability`. `ScopeAmbiguous` is reserved for future use when
+/// `ScopeParameters.prohibited_artifact_patterns` is plumbed through
+/// [`ApprovedScope`] — at that point a path matching both an allow-pattern and a
+/// prohibit-pattern constitutes an ambiguous configuration. Until then, this
+/// variant is only produced by [`validate_tool_scope`] (via `ScopeParameters`
+/// which already carries both allowed and prohibited patterns).
+///
 /// See `docs/spec/interfaces/security.md` §ScopeViolationKind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScopeViolationKind {
     /// The approved scope declaration is missing or contains no artifact
     /// patterns, making it impossible to validate anything meaningfully.
+    ///
+    /// Produced by: [`validate_scope`].
     ScopeUnderspecified,
 
-    /// Two or more scope declarations conflict, making it unclear whether
-    /// the artifact is in scope or out of scope.
+    /// A path matches both an allow-pattern and a prohibit-pattern, making
+    /// it impossible to determine whether the operation is in or out of scope.
+    ///
+    /// Produced by: [`validate_tool_scope`] (uses `ScopeParameters` which
+    /// carries both allowed and prohibited artifact patterns). Reserved in
+    /// [`validate_scope`] for when `prohibited_artifact_patterns` is added
+    /// to [`ApprovedScope`].
     ScopeAmbiguous,
 
     /// The artifact path matches a [`ProtectedPath`] pattern, regardless of
     /// whether it would otherwise be within the approved scope.
+    ///
+    /// Produced by: [`validate_scope`].
     ProtectedPathViolation,
 
-    /// The operation requested a change (file path, tool capability) that is
-    /// not listed in the approved scope.
+    /// The operation requested a change to an artifact (file path or tool
+    /// capability) that is not listed in the approved scope.
+    ///
+    /// Produced by: [`validate_scope`], [`validate_tool_scope`].
     UnauthorizedCapability,
 }
 
@@ -472,6 +537,11 @@ pub struct ApprovedScope {
 
     /// Maximum number of new files the operation may create. `0` means no new
     /// files may be created.
+    ///
+    /// **This field is NOT checked by [`validate_scope`].** It is the caller's
+    /// responsibility to separate new files from modified files and enforce this
+    /// limit before calling `validate_scope`. See the function documentation for
+    /// the expected pre-call workflow.
     pub max_new_files: u32,
 }
 
@@ -567,9 +637,16 @@ pub fn validate_scope(
 /// match anywhere in the tree; patterns with a leading `/` are anchored to the
 /// repository root.
 ///
-/// Invalid patterns are silently treated as non-matching (never protected) to
-/// avoid security-by-denial-of-service. Pattern validity must be enforced at
-/// configuration load time.
+/// # Invalid patterns
+///
+/// Invalid glob patterns are treated as non-matching (fail-open) to prevent a
+/// misconfigured pattern from making the function panic or error. This is a
+/// deliberate choice to avoid denial-of-service from bad configuration.
+///
+/// **Pattern validity MUST be enforced at configuration load time.** This
+/// function emits a `tracing::warn!` event for each invalid pattern at runtime
+/// so that misconfiguration is detectable during development and testing, even
+/// though it does not produce an error.
 ///
 /// **Infallible. Pure.**
 ///

@@ -6,7 +6,7 @@ mod round_trip_tests {
     use super::*;
 
     #[test]
-    fn round_trip_all_variants() {
+    fn test_generate_label_round_trips_through_parse() {
         let all = [
             PipelineLabel::Run,
             PipelineLabel::Restart,
@@ -24,7 +24,7 @@ mod round_trip_tests {
         for label in all {
             let s = generate_label(&label);
             assert_eq!(
-                parse_label(&s),
+                parse_label(s),
                 Some(label),
                 "round-trip failed for {label:?}: generated '{s}' but parse returned None"
             );
@@ -36,7 +36,7 @@ mod parse_tests {
     use super::*;
 
     #[test]
-    fn unknown_label_returns_none() {
+    fn test_parse_label_returns_none_for_unknown_strings() {
         assert_eq!(parse_label("bug"), None);
         assert_eq!(parse_label("cogworks:unknown"), None);
         assert_eq!(parse_label(""), None);

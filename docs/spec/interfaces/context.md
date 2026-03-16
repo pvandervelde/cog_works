@@ -147,6 +147,7 @@ pub struct ContextPackage {
     pub items: Vec<ContextItem>,
     pub total_token_count: TokenCount,
     pub truncation_applied: bool,
+    pub assembly_errors: Vec<String>,
 }
 ```
 
@@ -154,8 +155,13 @@ pub struct ContextPackage {
   level are ordered by `source_path` (alphabetical) for reproducibility.
 - `total_token_count` — sum of `item.token_count` for all items in the package.
   Must be ≤ the budget passed to `assemble_context`.
-- `truncation_applied` — `true` if one or more items were dropped to fit the budget.
-  Logged as an observability event so operators can detect budget pressure.
+- `truncation_applied` — `true` if one or more items were dropped to fit the budget,
+  or if a single required artifact exceeds the budget (budget overflow). Does **not**
+  indicate cache fetch errors — see `assembly_errors`.
+- `assembly_errors` — descriptions of artifacts skipped because `SummaryCache` returned
+  an error. An empty vec means the context is complete. A non-empty vec signals
+  incomplete data; callers should surface these errors for observability but may
+  still proceed.
 
 ---
 
@@ -178,7 +184,9 @@ pub struct ContextPackTrigger {
 ```
 
 - `label_patterns` — glob patterns matched against the work item's label strings.
-  A pack is considered triggered if any pattern matches any label.
+  Evaluated by `select_context_packs` when the caller passes `active_labels`.
+  Unlike `component_tag_patterns`, label information is not present in
+  `ClassificationResult` and must be supplied separately by the caller.
 - `component_tag_patterns` — glob patterns matched against module path strings in
   `ClassificationResult.affected_modules`. A pack is triggered if any pattern
   matches any affected module path.
@@ -294,12 +302,13 @@ pub struct ContextAssemblyRequest {
 ```rust
 pub fn select_context_packs(
     classification: &ClassificationResult,
+    active_labels: &[String],
     available: &[ContextPack],
 ) -> Vec<ContextPackId>
 ```
 
-Evaluates every available pack's trigger against `classification` and returns the IDs
-of all packs that match.
+Evaluates every available pack's trigger against `classification` and
+`active_labels` and returns the IDs of all packs that match.
 
 **Returns** an empty `Vec` if no packs match (valid; node proceeds with no pack guidance).
 
@@ -307,8 +316,8 @@ of all packs that match.
 
 Matching rules:
 
-- `trigger.label_patterns`: always empty at this call point (labels are GitHub labels, not
-  classification labels) — this field is evaluated by the caller if label context is needed.
+- `trigger.label_patterns`: compared against each string in `active_labels`.
+  Pass an empty slice when label context is not available.
 - `trigger.component_tag_patterns`: compared against each path in
   `classification.affected_modules`.
 - `trigger.requires_safety_critical`: pack excluded if `!classification.safety_affecting`.
@@ -463,10 +472,11 @@ non-CogWorks labels are silently ignored).
 ### fn generate_label
 
 ```rust
-pub fn generate_label(label: &PipelineLabel) -> String
+pub fn generate_label(label: &PipelineLabel) -> &'static str
 ```
 
-Returns the canonical GitHub label string for a pipeline label.
+Returns the canonical GitHub label string for a pipeline label as a `&'static str`
+(no allocation).
 
 `parse_label(generate_label(label))` must always equal `Some(label.clone())`.
 
