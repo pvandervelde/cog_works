@@ -337,21 +337,114 @@ Spec: `docs/spec/interfaces/domain-traits.md` §LLM Provider Trait.
 
 ### Security (`pipeline/src/security.rs`)
 
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/security.md`.
+
+**Constitutional layer**
+
+| Type | Purpose |
+|------|------|
+| `RequiredRule` | Enum of 5 required behavioural guardrails that must appear in every constitutional document |
+| `ConstitutionalRules` | Loaded rules doc: `content`, `source_hash` (SHA-256 hex), `source_branch` |
+| `ConstitutionalValidationResult` | Two-bool intermediate record: `all_required_rules_present`, `privileged_position_confirmed` |
+| `PromptAssembly` | Raw materials before constitutional wrapping: `system_prompt`, `user_content` |
+| `ValidatedPrompt` | Opaque wrapper; only constructor is `validate_constitutional_prompt` |
+| `ConstitutionalError` | `MissingRules { missing }` / `InvalidSourceBranch { branch }` / `HashMismatch { expected, computed }` |
+
+**Injection detection**
+
+| Type | Purpose |
+|------|------|
+| `InjectionPattern` | `InstructionInjection` / `PersonaOverride` / `BehavioralModification` / `SystemPromptExtractionAttempt` |
+| `InjectionDetectionResult` | `Clean` / `InjectionDetected { source, offending_text, pattern }` |
+
+**Scope enforcement**
+
+| Type | Purpose |
+|------|------|
+| `ScopeViolationKind` | `ScopeUnderspecified` / `ScopeAmbiguous` / `ProtectedPathViolation` / `UnauthorizedCapability` |
+| `ScopeViolation` | Single scope violation: `kind`, `artifact_path: Option<ArtifactPath>`, `description` |
+| `ApprovedScope` | Approved artifact patterns + max file/new-file counts for one operation; `from_scope_parameters()` ctor |
+| `ProtectedPath` | Glob pattern + reason; matched by `is_protected` |
+
+**Tool parameter scope**
+
+| Type | Purpose |
+|------|------|
+| `ToolParams` | `HashMap<String, serde_json::Value>` parameter map; `empty()` ctor |
+| `ToolScopeViolation` | Tool name + parameter name + violated constraint description |
+
+**Pure functions**
+
+| Function | Signature summary |
+|----------|---------|
+| `validate_constitutional_prompt` | `(&ConstitutionalRules, PromptAssembly) → Result<ValidatedPrompt, ConstitutionalError>` |
+| `detect_injection` | `(&str, &str) → InjectionDetectionResult` — infallible |
+| `validate_scope` | `(&[ArtifactPath], &ApprovedScope, &[ProtectedPath]) → Result<(), Vec<ScopeViolation>>` |
+| `is_protected` | `(&ArtifactPath, &[ProtectedPath]) → bool` — infallible |
+| `validate_tool_scope` | `(&ToolName, &ToolParams, &ScopeParameters) → Result<(), ToolScopeViolation>` |
+
+### Context Assembly & Labels (`pipeline/src/context.rs`, `pipeline/src/labels.rs`)
+
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/context.md`.
+
+**Classification result** (`context.rs`)
+
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | `ConstitutionalRules`, `ValidatedPrompt`, `InjectionDetectionResult`, etc. |
+| `TaskType` | `Feature` / `BugFix` / `Documentation` / `Refactoring` / `Configuration` / `Testing` / `Security` / `Unknown` |
+| `ClassificationResult` | Intake node output: `task_type`, `safety_affecting: bool`, `estimated_scope: u32`, `affected_modules` |
 
-### Context Assembly (`pipeline/src/context.rs`, `pipeline/src/labels.rs`)
+**Context item and package** (`context.rs`)
 
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | `ContextPackage`, `ContextPack`, `PipelineLabel`, etc. |
+| `ContextPriority` | `CurrentInterfaceDefinition(0)` → `TransitiveDependency(5)`; `Ord` by declaration order |
+| `ContextItem` | One knowledge unit: content, summary_level, priority, token_count, source_path |
+| `ContextPackage` | Assembled context: ordered items, total_token_count, truncation_applied |
+
+**Context pack types** (`context.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `ContextPackTrigger` | Label patterns + component tag patterns + `requires_safety_critical` flag |
+| `ContextPack` | Domain knowledge bundle: id, trigger, knowledge text, safe/anti patterns, required artifacts, threshold override |
+| `MergedGuidance` | Union-merged safe patterns, anti-patterns, required artifacts from all matched packs |
+| `LoadedContextPacks` | Matched packs + `merged_guidance` + `strictest_threshold` |
+
+**Context assembly request** (`context.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `ContextAssemblyRequest` | Assembly inputs: `node_type`, `sub_work_item_description`, `affected_modules`, `scenario_holdout_dirs`, `pipeline_working_dir` |
+
+**Context assembly pure/async functions** (`context.rs`)
+
+| Function | Signature summary |
+|----------|---------|
+| `select_context_packs` | `(&ClassificationResult, &[ContextPack]) → Vec<ContextPackId>` — infallible |
+| `merge_pack_guidance` | `(&[ContextPack]) → MergedGuidance` — infallible |
+| `assemble_context` | `async (&ContextAssemblyRequest, &dyn SummaryCache, &LoadedContextPacks, &[InterfaceDefinition], TokenCount) → ContextPackage` |
+| `apply_priority_truncation` | `(Vec<ContextItem>, TokenCount) → ContextPackage` — infallible |
+| `enforce_scenario_holdout` | `(Vec<ContextItem>, &[PathBuf]) → Vec<ContextItem>` — infallible, hard holdout constraint |
+
+**Pipeline labels** (`labels.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `PipelineLabel` | 12-variant enum covering trigger, status, gate, lock, security, and safety labels |
+
+| Function | Signature summary |
+|----------|---------|
+| `parse_label` | `(&str) → Option<PipelineLabel>` — returns `None` for non-CogWorks labels |
+| `generate_label` | `(&PipelineLabel) → String` — round-trip guaranteed with `parse_label` |
 
 ### Execution (`pipeline/src/execution.rs` et al.)
 
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | `NextAction`, `BudgetAcquisition`, `ClassificationResult`, `AggregateReviewDecision`, etc. |
+| *(to be added)* | `NextAction`, `BudgetAcquisition`, `AggregateReviewDecision`, etc. |
 
 ### Advanced Features
 
