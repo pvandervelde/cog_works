@@ -116,8 +116,8 @@ pub use security::{
 pub use context::{
     apply_priority_truncation, assemble_context, enforce_scenario_holdout, merge_pack_guidance,
     select_context_packs, ClassificationResult, ContextAssemblyRequest, ContextItem, ContextPack,
-    ContextPackTrigger, ContextPackage, ContextPriority, LoadedContextPacks, MergedGuidance,
-    TaskType,
+    ContextPackTrigger, ContextPackage, ContextPriority, HoldoutFilteredItems, LoadedContextPacks,
+    MergedGuidance, TaskType,
 };
 
 // Re-exports from labels

@@ -153,7 +153,10 @@ impl std::fmt::Debug for ConstitutionalRules {
         f.debug_struct("ConstitutionalRules")
             .field("source_hash", &self.source_hash)
             .field("source_branch", &self.source_branch)
-            .field("content", &"<redacted>")
+            .field(
+                "content",
+                &format_args!("<redacted - {} bytes>", self.content.len()),
+            )
             .finish()
     }
 }

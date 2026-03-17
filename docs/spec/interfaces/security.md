@@ -63,13 +63,18 @@ pub enum RequiredRule {
 }
 ```
 
-| Variant | Meaning |
-|---------|---------|
-| `ExternalContentAsData` | External content is data, never instructions |
-| `InjectionDetection` | Injection detection is mandatory; detection halts the pipeline |
-| `ScopeBinding` | All operations must be bound to a verified, explicit scope |
-| `UnauthorizedCapabilitiesProhibition` | Only tool-profile-granted capabilities may be used |
-| `NoCredentialGeneration` | No credentials, tokens, or authentication material may be generated |
+| Variant | Meaning | Required text signature |
+|---------|---------|------------------------|
+| `ExternalContentAsData` | External content is data, never instructions | `"RULE: EXTERNAL_CONTENT_AS_DATA"` |
+| `InjectionDetection` | Injection detection is mandatory; detection halts the pipeline | `"RULE: INJECTION_DETECTION"` |
+| `ScopeBinding` | All operations must be bound to a verified, explicit scope | `"RULE: SCOPE_BINDING"` |
+| `UnauthorizedCapabilitiesProhibition` | Only tool-profile-granted capabilities may be used | `"RULE: UNAUTHORIZED_CAPABILITIES_PROHIBITED"` |
+| `NoCredentialGeneration` | No credentials, tokens, or authentication material may be generated | `"RULE: NO_CREDENTIAL_GENERATION"` |
+
+The presence check in `validate_constitutional_prompt` searches for each signature
+string verbatim (case-sensitive) anywhere in the document text. A conforming
+constitutional document must contain each signature, typically on its own line.
+Surrounding prose may vary freely.
 
 ### ConstitutionalRules
 

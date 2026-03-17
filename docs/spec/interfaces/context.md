@@ -375,10 +375,14 @@ will have `truncation_applied = true` to signal that some data was unavailable.
 
 ```rust
 pub fn apply_priority_truncation(
-    items: Vec<ContextItem>,
+    items: HoldoutFilteredItems,
     budget: TokenCount,
 ) -> ContextPackage
 ```
+
+Accepts a [`HoldoutFilteredItems`] value produced by `enforce_scenario_holdout`.
+The distinct type makes the call order a compile-time constraint: passing a raw
+`Vec<ContextItem>` is a type error.
 
 Sorts items by `ContextPriority` (highest first, then alphabetical by `source_path`
 for stability), then greedily fills the budget.
@@ -398,7 +402,7 @@ never silently dropped.
 pub fn enforce_scenario_holdout(
     items: Vec<ContextItem>,
     holdout_dirs: &[PathBuf],
-) -> Vec<ContextItem>
+) -> HoldoutFilteredItems
 ```
 
 Removes any `ContextItem` whose `source_path` is rooted under one of the holdout
@@ -408,7 +412,32 @@ context.
 
 Items with `source_path == None` are never removed.
 
+Returns a [`HoldoutFilteredItems`] wrapper. Pass it directly to
+`apply_priority_truncation`. Call `into_inner()` only when working outside the
+normal `assemble_context` flow.
+
 **Infallible. Pure.**
+
+---
+
+### HoldoutFilteredItems
+
+```rust
+pub struct HoldoutFilteredItems(Vec<ContextItem>);
+
+impl HoldoutFilteredItems {
+    pub fn into_inner(self) -> Vec<ContextItem>;
+}
+```
+
+A newtype wrapper over `Vec<ContextItem>` that witnesses that
+`enforce_scenario_holdout` has been applied. `apply_priority_truncation` requires
+this type rather than a raw `Vec<ContextItem>`, so swapping the call order is
+caught at compile time.
+
+`into_inner` is provided for callers that need the raw items outside the
+standard flow (e.g., tests). Normal production code passes the value directly
+to `apply_priority_truncation` without unwrapping.
 
 ---
 

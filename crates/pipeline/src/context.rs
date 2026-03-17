@@ -202,7 +202,33 @@ pub struct ContextPackage {
     pub assembly_errors: Vec<String>,
 }
 
-// ─── Context pack types ───────────────────────────────────────────────────────
+// ─── Holdout-filtered items newtype ──────────────────────────────────────────
+
+/// A [`Vec<ContextItem>`] that has passed through [`enforce_scenario_holdout`].
+///
+/// This newtype exists solely to make the scenario holdout a **compile-time
+/// constraint**: [`apply_priority_truncation`] accepts only
+/// `HoldoutFilteredItems`, so it is impossible to call `apply_priority_truncation`
+/// without first calling `enforce_scenario_holdout`. The compiler rejects the
+/// wrong call order.
+///
+/// `assemble_context` handles this automatically. Direct callers that bypass
+/// `assemble_context` must call `enforce_scenario_holdout` first and unwrap
+/// the result via [`HoldoutFilteredItems::into_inner`].
+///
+/// See `docs/spec/interfaces/context.md` §HoldoutFilteredItems.
+#[derive(Debug, Clone)]
+pub struct HoldoutFilteredItems(Vec<ContextItem>);
+
+impl HoldoutFilteredItems {
+    /// Returns the inner `Vec<ContextItem>`.
+    #[must_use]
+    pub fn into_inner(self) -> Vec<ContextItem> {
+        self.0
+    }
+}
+
+// ─── Context pack types ──────────────────────────────────────────────────────
 
 /// The conditions under which a Context Pack is selected for a pipeline run.
 ///
@@ -456,6 +482,11 @@ pub async fn assemble_context(
 /// Sorts context items by priority (highest first) and greedily fills the
 /// token budget, returning a [`ContextPackage`].
 ///
+/// Accepts a [`HoldoutFilteredItems`] (produced by [`enforce_scenario_holdout`])
+/// rather than a raw `Vec<ContextItem>`. This makes the scenario holdout a
+/// compile-time requirement: calling this function without first calling
+/// `enforce_scenario_holdout` is a type error.
+///
 /// Items at the same priority tier are ordered alphabetically by `source_path`
 /// for reproducibility.
 ///
@@ -467,17 +498,23 @@ pub async fn assemble_context(
 /// **Infallible. Pure.**
 ///
 /// See `docs/spec/interfaces/context.md` §apply_priority_truncation.
-pub fn apply_priority_truncation(_items: Vec<ContextItem>, _budget: TokenCount) -> ContextPackage {
+pub fn apply_priority_truncation(
+    _items: HoldoutFilteredItems,
+    _budget: TokenCount,
+) -> ContextPackage {
     todo!("See docs/spec/interfaces/context.md §apply_priority_truncation")
 }
 
 // ---------------------------------------------------------------------------
 
 /// Removes any context item whose `source_path` is rooted under one of the
-/// holdout directories.
+/// holdout directories, returning a [`HoldoutFilteredItems`] that can be
+/// passed directly to [`apply_priority_truncation`].
 ///
 /// This is a **hard constraint**: scenario specifications must never be present
 /// in code generation context (see `docs/spec/constraints.md` §Module Boundaries).
+/// The [`HoldoutFilteredItems`] return type makes it a compile-time error to
+/// call [`apply_priority_truncation`] without first calling this function.
 ///
 /// Items with `source_path == None` are never removed.
 ///
@@ -487,6 +524,6 @@ pub fn apply_priority_truncation(_items: Vec<ContextItem>, _budget: TokenCount) 
 pub fn enforce_scenario_holdout(
     _items: Vec<ContextItem>,
     _holdout_dirs: &[PathBuf],
-) -> Vec<ContextItem> {
+) -> HoldoutFilteredItems {
     todo!("See docs/spec/interfaces/context.md §enforce_scenario_holdout")
 }
