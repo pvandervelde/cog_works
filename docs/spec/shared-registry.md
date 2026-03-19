@@ -440,11 +440,83 @@ Spec: `docs/spec/interfaces/context.md`.
 | `parse_label` | `(&str) → Option<PipelineLabel>` — returns `None` for non-CogWorks labels |
 | `generate_label` | `(&PipelineLabel) → String` — round-trip guaranteed with `parse_label` |
 
-### Execution (`pipeline/src/execution.rs` et al.)
+### Execution Core (`pipeline/src/execution.rs`, `budget.rs`, `classification.rs`, `review.rs`, `interfaces.rs`)
+
+All types re-exported from `pipeline`.
+Spec: `docs/spec/interfaces/pipeline-execution.md`.
+
+**Execution — node output and state machine** (`execution.rs`)
 
 | Type | Purpose |
 |------|---------|
-| *(to be added)* | `NextAction`, `BudgetAcquisition`, `AggregateReviewDecision`, etc. |
+| `NodeStateUpdate` | Requested runtime status change for a node: `node_id`, `new_status`, `error` |
+| `NodeOutput` | Node execution result: `artifacts`, `cost_delta`, `state_updates` |
+| `GateStatus` | `AwaitingApproval` / `Approved { approved_by }` / `Rejected { rejected_by, reason }` |
+| `GateConfig` | All gate states for an active run: `gated_nodes: HashMap<NodeId, GateStatus>` |
+| `PipelineError` | `NodeFailed` / `BudgetExceeded` / `GraphInvalid` / `ConstitutionalRulesLoadFailed` |
+| `EscalationReason` | Human-readable escalation context: node, attempts, rework count, cost, description |
+| `NextAction` | `ExecuteNode` / `ExecuteParallel` / `Wait` / `Escalate` / `HaltWithError` |
+| `TerminationConditionReached` | Rework traversal limit exceeded: `edge_id`, `current_traversals`, `max_traversals` |
+| `SubWorkItem` | Planning sub-task: `id: SubWorkItemId`, `description`, `depends_on: Vec<SubWorkItemId>` |
+| `DependencyError` | `CyclicDependency { cycle }` / `UnknownDependency { item_id, unknown_dep }` |
+
+**Execution — pure functions** (`execution.rs`)
+
+| Function | Signature summary |
+|----------|---------|
+| `determine_next_actions` | `(&PipelineState, &PipelineGraph, &GateConfig) → Vec<NextAction>` |
+| `evaluate_edge_condition` | `(&EdgeId, &EdgeConditionKind, &PipelineState, &NodeOutput, Timestamp) → (bool, EdgeEvaluationRecord)` |
+| `check_fan_in_ready` | `(&NodeId, &PipelineState, &PipelineGraph) → bool` |
+| `increment_rework_counter` | `(&EdgeId, &mut PipelineState, &PipelineGraph) → Result<u32, TerminationConditionReached>` |
+| `topological_sort_sub_work_items` | `(&[SubWorkItem]) → Result<Vec<SubWorkItemId>, DependencyError>` |
+
+**Budget enforcement** (`budget.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `NodeCostEntry` | Per-node cost breakdown entry: `node_id`, `total_cost` |
+| `SubWorkItemCostEntry` | Per-sub-work-item cost entry: `sub_work_item_id`, `total_cost` |
+| `CostReport` | Full cost breakdown: `per_node`, `per_sub_work_item`, `total`, `budget_limit` |
+| `BudgetAcquisition` | `Approved { remaining: CostBudget }` / `Denied(CostReport)` |
+
+| Function | Signature summary |
+|----------|---------|
+| `acquire_budget` | `(&TokenCost, &TokenCost, &CostBudget, CostReport) → BudgetAcquisition` — ⚠️ caller must hold mutex for parallel nodes |
+
+**Classification** (`classification.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `SafetyCriticalRegistry` | Glob patterns identifying safety-critical module paths |
+| `EscalationResult` | `estimated_scope: u32`, `threshold: u32`; `description() → String` |
+
+| Function | Signature summary |
+|----------|---------|
+| `apply_safety_override` | `(ClassificationResult, &SafetyCriticalRegistry) → ClassificationResult` |
+| `check_scope_threshold` | `(ClassificationResult, u32) → Result<ClassificationResult, EscalationResult>` |
+
+**Review aggregation** (`review.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `ReviewPass` | `Quality` / `Architecture` / `Security` |
+| `ReviewFinding` | Single finding: `pass`, `severity: DiagnosticSeverity`, `description`, `location: Option<ArtifactPath>` |
+| `ReviewResult` | Pass result: `pass`, `findings`; helpers `has_blocking()`, `blocking_findings()` |
+| `AggregateReviewDecision` | `Proceed` / `Remediate(Vec<ReviewFinding>)` / `Escalate(EscalationReason)` |
+
+| Function | Signature summary |
+|----------|---------|
+| `aggregate_review_results` | `(ReviewResult, ReviewResult, ReviewResult, u32, u32) → AggregateReviewDecision` |
+
+**Cross-domain constraint validation** (`interfaces.rs`)
+
+| Type | Purpose |
+|------|---------|
+| `ConstraintFinding` | Interface mismatch: `interface_id`, `parameter_name`, `expected_value`, `actual_value`, `owning_domain`, `violating_domain`, `severity` |
+
+| Function | Signature summary |
+|----------|---------|
+| `validate_cross_domain_constraints` | `(&[InterfaceDefinition], &InterfaceMap) → Vec<ConstraintFinding>` |
 
 ### Advanced Features
 
