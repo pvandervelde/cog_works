@@ -117,6 +117,7 @@ pub struct ConstraintFinding {
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §validate_cross_domain_constraints`
+#[must_use]
 pub fn validate_cross_domain_constraints(
     _contracts: &[InterfaceDefinition],
     _extracted: &InterfaceMap,

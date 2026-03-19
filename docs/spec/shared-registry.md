@@ -481,7 +481,7 @@ Spec: `docs/spec/interfaces/pipeline-execution.md`.
 
 | Function | Signature summary |
 |----------|---------|
-| `acquire_budget` | `(&TokenCost, &TokenCost, &CostBudget, CostReport) → BudgetAcquisition` — ⚠️ caller must hold mutex for parallel nodes |
+| `acquire_budget` | `(&TokenCost, &TokenCost, &CostBudget, impl FnOnce() -> CostReport) → BudgetAcquisition` — ⚠️ caller must hold mutex for parallel nodes; report closure only called on `Denied` |
 
 **Classification** (`classification.rs`)
 

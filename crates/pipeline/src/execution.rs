@@ -112,11 +112,23 @@ pub enum GateStatus {
     /// A human reviewer approved this node's output; the pipeline may continue.
     Approved {
         /// The GitHub username of the approver.
+        ///
+        /// Raw `String` — no `GitHubUsername` newtype exists in the identifiers
+        /// module. Values originate from the GitHub API `login` field and are
+        /// expected to be non-empty strings conforming to GitHub's username
+        /// constraints (alphanumeric + hyphens, 1–39 chars). No validation is
+        /// performed here; the GitHub API is the authoritative source.
         approved_by: String,
     },
     /// A human reviewer rejected this node's output; the pipeline must not continue.
     Rejected {
         /// The GitHub username of the reviewer.
+        ///
+        /// Raw `String` — no `GitHubUsername` newtype exists in the identifiers
+        /// module. Values originate from the GitHub API `login` field and are
+        /// expected to be non-empty strings conforming to GitHub's username
+        /// constraints (alphanumeric + hyphens, 1–39 chars). No validation is
+        /// performed here; the GitHub API is the authoritative source.
         rejected_by: String,
         /// Human-readable explanation of the rejection.
         reason: String,
@@ -153,6 +165,17 @@ pub struct GateConfig {
 /// conditions from the domain logic layer); `PipelineError` is produced by
 /// the execution engine when it encounters a structural or infrastructure
 /// failure during the step loop.
+///
+/// ## Combined Lifecycle Enum — Design Rationale
+///
+/// This enum deliberately mixes load-time failures (`GraphInvalid`,
+/// `ConstitutionalRulesLoadFailed`) with runtime failures (`NodeFailed`,
+/// `BudgetExceeded`). The rationale is that the `run_step` entry point in
+/// `PipelineExecutor` (PR 9) uses a single error channel for the full step
+/// lifecycle — from pre-flight checks through to node completion — so callers
+/// need to handle only one error type. Load-time variants can never occur
+/// after the pre-flight phase, but including them prevents the entry-point
+/// signature from needing two separate error types or a nested enum.
 ///
 /// See `docs/spec/interfaces/pipeline-execution.md` §PipelineError.
 #[derive(Debug, Clone, Error, Serialize, Deserialize)]
@@ -336,6 +359,11 @@ pub struct SubWorkItem {
     /// The GitHub sub-issue number for this sub-task.
     pub id: SubWorkItemId,
     /// Human-readable description of what this sub-task implements.
+    ///
+    /// GitHub sub-issue bodies have a maximum of 65,536 characters. If the
+    /// Planning node produces a description longer than this limit, the
+    /// subsequent `IssueTracker::create_sub_issue` call will fail. The
+    /// Planning node is responsible for keeping descriptions within that bound.
     pub description: String,
     /// Sub-work-item IDs that must be completed before this one may begin.
     ///
@@ -365,6 +393,26 @@ pub struct SubWorkItem {
 /// 4. Fan-in nodes are only included if [`check_fan_in_ready`] returns `true`.
 /// 5. Multiple eligible nodes → `ExecuteParallel`; single → `ExecuteNode`.
 /// 6. No eligible nodes and none active → all nodes completed → return empty vec.
+///
+/// ## Vec Contents Contract
+///
+/// The returned `Vec` contains exactly one logical outcome per call:
+///
+/// | Scenario | Vec contents |
+/// |----------|-------------|
+/// | One or more auto-proceed eligible nodes (no fan-in blocking) | `[ExecuteNode(id)]` or `[ExecuteParallel(ids)]` |
+/// | Mix of auto-proceed eligible and gated-waiting nodes | Only `[ExecuteNode(id)]` or `[ExecuteParallel(ids)]` for the eligible nodes; `Wait` is **not** co-returned |
+/// | All eligible nodes are awaiting gate approval | `[Wait]` |
+/// | A gated node was rejected | `[Escalate(reason)]` |
+/// | A node timeout was exceeded | `[HaltWithError(error)]` |
+/// | No eligible nodes and no active nodes | `[]` (run complete) |
+///
+/// Rationale for "mix" row: the orchestrator should start available work while
+/// waiting for gate decisions on other nodes. Mixing `Wait` with execute actions
+/// would force the orchestrator to implement its own action-splitting logic.
+/// Instead, the unblocked nodes are returned for immediate execution; the
+/// orchestrator discovers the gated nodes are still waiting on the *next* call
+/// after those nodes complete.
 ///
 /// ## Return Value
 ///
@@ -413,6 +461,7 @@ pub fn determine_next_actions(
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition`
+#[must_use]
 pub fn evaluate_edge_condition(
     _edge_id: &EdgeId,
     _cond: &EdgeConditionKind,

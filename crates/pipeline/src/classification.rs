@@ -21,6 +21,7 @@
 //! full contract, safety-override algorithm, and scope threshold rules.
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::context::ClassificationResult;
 
@@ -81,7 +82,11 @@ impl SafetyCriticalRegistry {
 /// pieces before requeueing with the `cogworks:run` label.
 ///
 /// See `docs/spec/interfaces/pipeline-execution.md` §EscalationResult.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+#[error(
+    "Work item scope ({estimated_scope}) exceeds the configured threshold ({threshold}); \
+     split into smaller work items before re-running."
+)]
 pub struct EscalationResult {
     /// The estimated scope magnitude of the work item (1 = trivial, 10 = very large).
     pub estimated_scope: u32,

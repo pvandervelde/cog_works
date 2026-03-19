@@ -208,6 +208,7 @@ pub enum AggregateReviewDecision {
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §aggregate_review_results`
+#[must_use]
 pub fn aggregate_review_results(
     _quality: ReviewResult,
     _architecture: ReviewResult,

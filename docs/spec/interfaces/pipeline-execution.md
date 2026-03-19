@@ -62,7 +62,7 @@ No circular dependencies. All modules depend only on types from PRs 1–4.
 
 ### RDD Responsibilities
 
-**Knows**: Which nodes are eligble to run, the rules for fan-in synchronisation,
+**Knows**: Which nodes are eligible to run, the rules for fan-in synchronisation,
 how rework counters map to termination conditions, the topological ordering of
 sub-work-items.
 
@@ -164,6 +164,22 @@ HaltWithError(PipelineError)
 `determine_next_actions` returns a `Vec<NextAction>`. An empty vec signals that the
 pipeline run is complete (all non-gated nodes have status `Completed`).
 
+**Vec contents contract**:
+
+| Scenario | Vec contents |
+|----------|--------------|
+| One or more auto-proceed eligible nodes (no fan-in blocking) | `[ExecuteNode(id)]` or `[ExecuteParallel(ids)]` |
+| Mix of auto-proceed eligible and gated-waiting nodes | Only execute actions for the eligible nodes; `Wait` is **not** co-returned |
+| All eligible nodes are awaiting gate approval | `[Wait]` |
+| A gated node was rejected | `[Escalate(reason)]` |
+| A node timeout was exceeded | `[HaltWithError(error)]` |
+| No eligible nodes and no active nodes | `[]` (run complete) |
+
+Rationale for the "mix" row: the orchestrator starts available work while waiting for gate
+decisions. Mixing `Wait` with execute actions would force the orchestrator to split action
+types itself. Instead the unblocked nodes are returned immediately; the gate-waiting nodes
+are discovered on the next call after the current nodes complete.
+
 ---
 
 ### Type: `TerminationConditionReached`
@@ -218,17 +234,17 @@ should do next for an active pipeline run.
 
 1. Check all `Active` nodes for elapsed timeouts → `HaltWithError` if any timed out.
 2. Call `compute_eligible_nodes(state, graph)` to find nodes ready to start.
-3. For each eligible node:
-   - If `gate == HumanGated`:
-     - Not in `gate_config.gated_nodes` → `Wait`
-     - `GateStatus::Approved` → include in execute set
-     - `GateStatus::Rejected` → `Escalate`
-   - If `gate == AutoProceed` → include in execute set
+3. For each eligible node, check its gate configuration:
+   - `HumanGated`: consult `gate_config.gated_nodes` for this node.
+     Not present → mark as waiting. `Approved` → include in execute set. `Rejected` → `Escalate`.
+   - `AutoProceed`: include in execute set directly.
 4. Fan-in nodes: include only if `check_fan_in_ready(node, state, graph)` is true.
-5. Multiple eligible → `ExecuteParallel`; single → `ExecuteNode`.
-6. No eligible and no active → return empty vec (run complete).
+5. If execute set is non-empty: multiple → `ExecuteParallel`; single → `ExecuteNode`.
+   (`Wait` is **not** co-returned when there are also nodes to execute.)
+6. If execute set is empty and all eligible were waiting on gates: `[Wait]`.
+7. No eligible and no active → return `[]` (run complete).
 
-**Return**: Empty `Vec` when the run is complete; otherwise one or more `NextAction` values.
+**Return**: See Vec contents contract table in the `NextAction` type section above.
 
 ---
 
@@ -355,11 +371,23 @@ pub fn acquire_budget(
     accumulated: &TokenCost,
     estimated: &TokenCost,
     limit: &CostBudget,
-    report: CostReport,
+    report: impl FnOnce() -> CostReport,
 ) -> BudgetAcquisition
 ```
 
 **Purpose**: Returns `Approved` if `accumulated + estimated < limit`, else `Denied`.
+
+**Strict inequality**: The check uses `<` (not `<=`). A node whose estimated cost exactly
+equals the remaining headroom is denied. This preserves a minimum headroom guard against
+f64 accumulation error (see below).
+
+**Floating-point note**: `TokenCost` and `CostBudget` wrap `f64`. Repeated addition of
+small costs accumulates rounding error. Callers should pad budget limits by a small epsilon
+if sub-cent precision is required. The strict `<` check provides a minimum guard.
+
+**Lazy report**: `report` is a `FnOnce() -> CostReport` closure; it is only called if the
+check is `Denied`. This avoids two `Vec` allocations on the hot-path (the vast majority of
+checks are `Approved`).
 
 ### ⚠️ Atomicity Contract
 
@@ -567,6 +595,12 @@ review gate.
 | Error type | Module | Produced by |
 |-----------|--------|------------|
 | `PipelineError` | `execution` | `determine_next_actions` (in `HaltWithError`) |
+
+`PipelineError` combines load-time failures (`GraphInvalid`, `ConstitutionalRulesLoadFailed`)
+with runtime failures (`NodeFailed`, `BudgetExceeded`) so that the `run_step` entry point
+in `PipelineExecutor` uses a single error channel for the full step lifecycle. Load-time
+variants cannot occur after the pre-flight phase, but having one error type simplifies
+the entry-point signature and caller error handling.
 | `TerminationConditionReached` | `execution` | `increment_rework_counter` |
 | `DependencyError` | `execution` | `topological_sort_sub_work_items` |
 | `EscalationResult` | `classification` | `check_scope_threshold` |

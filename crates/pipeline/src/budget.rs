@@ -135,6 +135,24 @@ pub enum BudgetAcquisition {
 /// Returns [`BudgetAcquisition::Approved`] if `accumulated + estimated < limit`,
 /// or [`BudgetAcquisition::Denied`] with a full cost report otherwise.
 ///
+/// ## Strict Inequality
+///
+/// The approval condition is **strict** (`<`, not `<=`). A node whose estimated
+/// cost exactly equals the remaining headroom is denied. This is intentional:
+/// it preserves a minimum of one budget unit of headroom against f64 rounding
+/// accumulation. If you need to allow exact-budget use, document it explicitly
+/// and use a per-project budget with a small safety margin instead.
+///
+/// ## Floating-Point Rounding
+///
+/// Both [`TokenCost`] and [`CostBudget`] wrap `f64`. Repeated addition of
+/// small values accumulates rounding error: 100 additions of `0.001` may yield
+/// `0.10000000000000001` rather than `0.1`. At the margins this can cause
+/// borderline `Approved`/`Denied` decisions to flip. Callers should pad budget
+/// limits by a small epsilon (e.g. round up to the nearest micro-dollar unit)
+/// if sub-cent precision is required. The strict `<` check (see above) provides
+/// a minimum guard against exact-boundary accumulation errors.
+///
 /// ## ⚠️ Atomicity Contract — CRITICAL
 ///
 /// This function is **not thread-safe** by itself. When nodes execute in
@@ -147,24 +165,33 @@ pub enum BudgetAcquisition {
 /// for exactly this purpose. Every call site that drives parallel nodes must
 /// use that shared mutex.
 ///
+/// ## Lazy Report Construction
+///
+/// The `report` parameter is a `FnOnce() -> CostReport` closure rather than
+/// an eagerly constructed [`CostReport`]. This avoids two `Vec` allocations on
+/// every call (which is the hot path — the vast majority of checks are
+/// `Approved`). The closure is only invoked when the check is `Denied` (~1 %
+/// of calls in a healthy run). Callers should build the breakdown inside the
+/// closure, not outside it.
+///
 /// ## Parameters
 ///
 /// - `accumulated` — Current total cost recorded in
 ///   [`crate::PipelineState::cost_accumulator`] at the moment of the check.
 /// - `estimated` — Expected cost for the node about to be started.
 /// - `limit` — Budget ceiling from the node or pipeline configuration.
-/// - `report` — Pre-built cost report to attach if the check fails (allows
-///   the caller to build the breakdown once and pass it in, keeping this
-///   function pure and independent of the accumulation logic).
+/// - `report` — Lazy closure producing the full cost breakdown if the check
+///   fails. Only called on `Denied`; not called on `Approved`.
 ///
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §acquire_budget`
+#[must_use]
 pub fn acquire_budget(
     _accumulated: &TokenCost,
     _estimated: &TokenCost,
     _limit: &CostBudget,
-    _report: CostReport,
+    _report: impl FnOnce() -> CostReport,
 ) -> BudgetAcquisition {
     todo!("See docs/spec/interfaces/pipeline-execution.md §acquire_budget")
 }
