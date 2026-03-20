@@ -1,0 +1,556 @@
+//! Graph execution decision logic and sub-work-item ordering.
+//!
+//! This module provides the pure functions and types that drive the pipeline
+//! state machine: determining which nodes to execute next, evaluating edge
+//! conditions, tracking rework cycle limits, and ordering sub-work-items by
+//! their declared dependencies.
+//!
+//! ## Pure Business Logic
+//!
+//! No I/O lives here. Every function takes its inputs as arguments and returns
+//! typed results. The `nodes` crate and `cli` crate call these functions to
+//! drive the execution loop.
+//!
+//! ## Thread Safety Note — Budget and Parallel Nodes
+//!
+//! When multiple nodes execute in parallel, the caller **must** hold a
+//! synchronisation primitive (e.g. `Mutex`) around calls to
+//! [`crate::acquire_budget`] to prevent concurrent over-spend. This module
+//! provides the decision logic; enforcement of the synchronisation contract is
+//! the responsibility of the caller. See [`crate::budget`] for details.
+//!
+//! ## Specification
+//!
+//! See `docs/spec/interfaces/pipeline-execution.md` for the full contract,
+//! state machine description, and decision table.
+
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::{
+    errors::RetryPolicy,
+    graph::{EdgeConditionKind, EdgeEvaluationRecord, NodeStatus, PipelineGraph, PipelineState},
+    identifiers::{EdgeId, NodeId, SubWorkItemId},
+    types::{CostBudget, Timestamp, TokenCost},
+};
+
+// ─── Node output types ───────────────────────────────────────────────────────
+
+/// A requested update to a specific node's runtime state, returned as part of
+/// [`NodeOutput`] so the orchestrator can apply the change to [`PipelineState`].
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §NodeStateUpdate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeStateUpdate {
+    /// The node whose status should be updated.
+    pub node_id: NodeId,
+    /// The new status to apply.
+    pub new_status: NodeStatus,
+    /// Error description when `new_status` is [`NodeStatus::Failed`].
+    pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+
+/// The structured output produced by a successfully executed node.
+///
+/// Contains the artifacts the node produced, a cost delta to be accumulated
+/// into [`PipelineState::cost_accumulator`], and any state updates that the
+/// orchestrator must apply (e.g. marking spawned nodes as `Active`).
+///
+/// ## Usage
+///
+/// `NodeOutput` is the success payload returned by every node `execute` function
+/// in the `nodes` crate. The execution engine applies `cost_delta` and
+/// `state_updates` to the current [`PipelineState`], then proceeds with edge
+/// condition evaluation.
+///
+/// The `artifacts` map carries the named output slots declared in
+/// [`crate::NodeDefinition::declared_outputs`]. Keys are slot names; values are
+/// domain-specific JSON values (schemas are defined per-node in the `nodes` crate).
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §NodeOutput.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeOutput {
+    /// Named output artifacts produced by this node's execution step.
+    ///
+    /// Keys are the slot names declared in [`crate::NodeDefinition::declared_outputs`].
+    /// Values are domain-specific JSON payloads whose schemas are defined per-node.
+    pub artifacts: HashMap<String, serde_json::Value>,
+
+    /// Additional token cost accumulated during this node's work.
+    ///
+    /// Added to [`PipelineState::cost_accumulator`] by the orchestrator after
+    /// a successful execution step.
+    pub cost_delta: TokenCost,
+
+    /// Node state changes to apply after this execution step.
+    ///
+    /// Because `NodeOutput` is a value type (no shared state), nodes signal
+    /// required state transitions here. The orchestrator applies them
+    /// atomically before evaluating outgoing edges.
+    ///
+    /// Typically empty for ordinary LLM or deterministic nodes. The Spawning
+    /// node uses this to mark newly created child sub-work-item nodes as
+    /// `Active`.
+    pub state_updates: Vec<NodeStateUpdate>,
+}
+
+// ─── Execution decision types ────────────────────────────────────────────────
+
+/// Human-gate status for a specific node within an active pipeline run.
+///
+/// Tracks whether a human has approved or rejected a gated node's output.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §GateStatus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GateStatus {
+    /// The node completed successfully and is waiting for human review.
+    AwaitingApproval,
+    /// A human reviewer approved this node's output; the pipeline may continue.
+    Approved {
+        /// The GitHub username of the approver.
+        ///
+        /// Raw `String` — no `GitHubUsername` newtype exists in the identifiers
+        /// module. Values originate from the GitHub API `login` field and are
+        /// expected to be non-empty strings conforming to GitHub's username
+        /// constraints (alphanumeric + hyphens, 1–39 chars). No validation is
+        /// performed here; the GitHub API is the authoritative source.
+        approved_by: String,
+    },
+    /// A human reviewer rejected this node's output; the pipeline must not continue.
+    Rejected {
+        /// The GitHub username of the reviewer.
+        ///
+        /// Raw `String` — no `GitHubUsername` newtype exists in the identifiers
+        /// module. Values originate from the GitHub API `login` field and are
+        /// expected to be non-empty strings conforming to GitHub's username
+        /// constraints (alphanumeric + hyphens, 1–39 chars). No validation is
+        /// performed here; the GitHub API is the authoritative source.
+        rejected_by: String,
+        /// Human-readable explanation of the rejection.
+        reason: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+
+/// Runtime gate state for all nodes in an active pipeline run.
+///
+/// Passed to [`determine_next_actions`] so it can check whether a
+/// [`NodeGate::HumanGated`] node has been approved before emitting an
+/// [`NextAction::ExecuteNode`] for the next step.
+///
+/// Gates are persisted via [`crate::PipelineStateComment`] and reconstructed
+/// on resume from GitHub.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §GateConfig.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GateConfig {
+    /// Per-node gate status, keyed by the node that completed and was gated.
+    ///
+    /// Nodes absent from this map have never been gated (or were
+    /// `AutoProceed` nodes).
+    pub gated_nodes: HashMap<NodeId, GateStatus>,
+}
+
+// ---------------------------------------------------------------------------
+
+/// Execution-level pipeline error, produced when the state machine cannot
+/// continue and the pipeline must either halt or escalate.
+///
+/// Distinct from [`crate::CogWorksError`] (which covers pipeline-halt
+/// conditions from the domain logic layer); `PipelineError` is produced by
+/// the execution engine when it encounters a structural or infrastructure
+/// failure during the step loop.
+///
+/// ## Combined Lifecycle Enum — Design Rationale
+///
+/// This enum deliberately mixes load-time failures (`GraphInvalid`,
+/// `ConstitutionalRulesLoadFailed`) with runtime failures (`NodeFailed`,
+/// `BudgetExceeded`). The rationale is that the `run_step` entry point in
+/// `PipelineExecutor` (PR 9) uses a single error channel for the full step
+/// lifecycle — from pre-flight checks through to node completion — so callers
+/// need to handle only one error type. Load-time variants can never occur
+/// after the pre-flight phase, but including them prevents the entry-point
+/// signature from needing two separate error types or a nested enum.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §PipelineError.
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+pub enum PipelineError {
+    /// A node failed and exhausted its retry budget.
+    ///
+    /// The orchestrator has already applied all retries declared in
+    /// [`crate::PipelineSettings::max_node_retries`]; no further retries are
+    /// possible without human intervention.
+    #[error("Node '{node_id}' failed: {error}")]
+    NodeFailed {
+        /// The node that failed.
+        node_id: NodeId,
+        /// Human-readable description of the failure.
+        error: String,
+        /// Retry policy from the node's last failure (should be `NonRetryable`).
+        retry_policy: RetryPolicy,
+    },
+
+    /// Token cost exceeded the configured budget before all nodes completed.
+    ///
+    /// Produced by the execution engine when [`crate::acquire_budget`] returns
+    /// [`crate::BudgetAcquisition::Denied`] and no more budget is available.
+    #[error("Budget exceeded: accumulated {accumulated}, limit {limit}")]
+    BudgetExceeded {
+        /// Total cost accumulated at the point of failure.
+        accumulated: TokenCost,
+        /// The configured budget that was exceeded.
+        limit: CostBudget,
+    },
+
+    /// The pipeline configuration is structurally invalid.
+    ///
+    /// Produced when the graph fails validation on load (see
+    /// [`crate::validate_pipeline_graph`]). The pipeline never starts with an
+    /// invalid graph.
+    #[error("Graph invalid: {message}")]
+    GraphInvalid {
+        /// Human-readable description of the validation failure.
+        message: String,
+    },
+
+    /// The constitutional rules file could not be loaded or validated at the
+    /// start of a pipeline step.
+    ///
+    /// This is an unconditional halt — the pipeline never executes without
+    /// validated constitutional rules.
+    #[error("Constitutional rules could not be loaded or validated: {message}")]
+    ConstitutionalRulesLoadFailed {
+        /// Human-readable description of the load or validation failure.
+        message: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+
+/// Structured report attached to an escalation, providing the context a human
+/// reviewer needs to understand why the pipeline escalated.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §EscalationReason.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EscalationReason {
+    /// Human-readable description of what went wrong.
+    pub description: String,
+    /// The node that triggered the escalation.
+    pub node_id: NodeId,
+    /// Total execution attempts made for `node_id` in this run.
+    pub attempt_count: u32,
+    /// Total rework iterations applied to `node_id` in this run.
+    pub rework_count: u32,
+    /// Token cost accumulated across all attempts and rework iterations for
+    /// this node.
+    pub cost_spent: TokenCost,
+}
+
+// ---------------------------------------------------------------------------
+
+/// The action the execution engine should take next for a pipeline run.
+///
+/// Returned by [`determine_next_actions`]. The engine processes each action
+/// in the returned `Vec`; parallel execution is signalled by multiple
+/// `ExecuteNode` entries or a single `ExecuteParallel`.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §NextAction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NextAction {
+    /// Execute a single node immediately.
+    ExecuteNode(NodeId),
+    /// Execute all listed nodes concurrently in a new parallel branch.
+    ///
+    /// The orchestrator is responsible for creating the parallel branch in
+    /// [`crate::PipelineState::active_parallel_branches`] before starting the
+    /// nodes.
+    ExecuteParallel(Vec<NodeId>),
+    /// No nodes are immediately executable; the pipeline is waiting for a
+    /// human gate decision or an external event.
+    Wait,
+    /// The pipeline cannot continue and requires human intervention.
+    ///
+    /// The attached [`EscalationReason`] is written to the audit trail and as
+    /// a GitHub issue comment.
+    Escalate(EscalationReason),
+    /// The pipeline has encountered an unrecoverable error and must halt.
+    ///
+    /// The attached [`PipelineError`] is written to the audit trail and
+    /// included in the GitHub state comment.
+    HaltWithError(PipelineError),
+}
+
+// ─── Rework and dependency error types ───────────────────────────────────────
+
+/// Error returned by [`increment_rework_counter`] when a rework edge has
+/// been traversed the maximum permitted number of times.
+///
+/// The execution engine inspects the attached [`crate::ReworkEdge::overflow_behaviour`]
+/// to decide whether to halt, escalate, or take a forward bypass edge.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §TerminationConditionReached.
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+#[error("Rework edge '{edge_id}' reached traversal limit: {current_traversals}/{max_traversals}")]
+pub struct TerminationConditionReached {
+    /// The rework edge that exceeded its limit.
+    pub edge_id: EdgeId,
+    /// The traversal count at the point the limit was exceeded.
+    pub current_traversals: u32,
+    /// The configured maximum number of traversals permitted.
+    pub max_traversals: u32,
+}
+
+// ---------------------------------------------------------------------------
+
+/// Error returned by [`topological_sort_sub_work_items`] when the sub-work-item
+/// dependency graph is invalid.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §DependencyError.
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+pub enum DependencyError {
+    /// A cyclic dependency was detected among sub-work-items.
+    ///
+    /// The `cycle` field lists the IDs forming the cycle, in traversal order.
+    /// For example, if item A depends on B and B depends on A, the cycle is
+    /// `[A, B]`.
+    #[error(
+        "Cyclic dependency detected in sub-work-items: {}",
+        cycle.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(" → ")
+    )]
+    CyclicDependency {
+        /// Ordered list of sub-work-item IDs forming the cycle.
+        cycle: Vec<SubWorkItemId>,
+    },
+
+    /// A sub-work-item declares a dependency on an ID that does not exist in
+    /// the provided list.
+    #[error("Sub-work-item '{item_id}' depends on unknown item '{unknown_dep}'")]
+    UnknownDependency {
+        /// The sub-work-item that has the bad reference.
+        item_id: SubWorkItemId,
+        /// The referenced ID that could not be found.
+        unknown_dep: SubWorkItemId,
+    },
+}
+
+// ─── Sub-work-item type ──────────────────────────────────────────────────────
+
+/// A single planned implementation sub-task within a larger work item.
+///
+/// Sub-work-items are created by the Planning node (see `nodes` crate) and
+/// stored as GitHub sub-issues. The Planning node declares explicit
+/// dependencies between them so they can be executed in a valid order.
+///
+/// ## Dependency Rules
+///
+/// - `depends_on` is a list of `SubWorkItemId`s that must complete before
+///   this item may begin.
+/// - Circular dependencies are rejected by [`topological_sort_sub_work_items`].
+/// - References to IDs not present in the same batch are also rejected.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §SubWorkItem.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubWorkItem {
+    /// The GitHub sub-issue number for this sub-task.
+    pub id: SubWorkItemId,
+    /// Human-readable description of what this sub-task implements.
+    ///
+    /// GitHub sub-issue bodies have a maximum of 65,536 characters. If the
+    /// Planning node produces a description longer than this limit, the
+    /// subsequent `IssueTracker::create_sub_issue` call will fail. The
+    /// Planning node is responsible for keeping descriptions within that bound.
+    pub description: String,
+    /// Sub-work-item IDs that must be completed before this one may begin.
+    ///
+    /// An empty vec means this item has no dependencies and may start
+    /// immediately.
+    pub depends_on: Vec<SubWorkItemId>,
+}
+
+// ─── Pure business logic functions ───────────────────────────────────────────
+
+/// Determines which actions the execution engine should take next given the
+/// current pipeline runtime state.
+///
+/// This is the central dispatch function of the CogWorks state machine. It
+/// inspects the current [`PipelineState`], the graph topology
+/// ([`PipelineGraph`]), and the current gate configuration ([`GateConfig`]) to
+/// decide what to do next.
+///
+/// ## Decision Algorithm
+///
+/// 1. If any node is `Active` but its timeout has elapsed → `HaltWithError`.
+/// 2. Call [`crate::compute_eligible_nodes`] to find all nodes ready to start.
+/// 3. For each eligible node, check its gate configuration:
+///    - [`NodeGate::HumanGated`]: consult `gate_config.gated_nodes` for this node.
+///      Not present → `Wait`. `Approved` → include in execute set. `Rejected` → `Escalate`.
+///    - [`NodeGate::AutoProceed`]: include in execute set directly.
+/// 4. Fan-in nodes are only included if [`check_fan_in_ready`] returns `true`.
+/// 5. Multiple eligible nodes → `ExecuteParallel`; single → `ExecuteNode`.
+/// 6. No eligible nodes and none active → all nodes completed → return empty vec.
+///
+/// ## Vec Contents Contract
+///
+/// The returned `Vec` contains exactly one logical outcome per call:
+///
+/// | Scenario | Vec contents |
+/// |----------|-------------|
+/// | One or more auto-proceed eligible nodes (no fan-in blocking) | `[ExecuteNode(id)]` or `[ExecuteParallel(ids)]` |
+/// | Mix of auto-proceed eligible and gated-waiting nodes | Only `[ExecuteNode(id)]` or `[ExecuteParallel(ids)]` for the eligible nodes; `Wait` is **not** co-returned |
+/// | All eligible nodes are awaiting gate approval | `[Wait]` |
+/// | A gated node was rejected | `[Escalate(reason)]` |
+/// | A node timeout was exceeded | `[HaltWithError(error)]` |
+/// | No eligible nodes and no active nodes | `[]` (run complete) |
+///
+/// Rationale for "mix" row: the orchestrator should start available work while
+/// waiting for gate decisions on other nodes. Mixing `Wait` with execute actions
+/// would force the orchestrator to implement its own action-splitting logic.
+/// Instead, the unblocked nodes are returned for immediate execution; the
+/// orchestrator discovers the gated nodes are still waiting on the *next* call
+/// after those nodes complete.
+///
+/// ## Return Value
+///
+/// Returns an empty `Vec` when the pipeline run is complete (all nodes
+/// completed). The caller should detect this and write the final
+/// [`crate::PipelineStateComment`].
+///
+/// # See also
+///
+/// `docs/spec/interfaces/pipeline-execution.md §determine_next_actions`
+#[must_use]
+pub fn determine_next_actions(
+    _state: &PipelineState,
+    _graph: &PipelineGraph,
+    _gate_config: &GateConfig,
+) -> Vec<NextAction> {
+    todo!("See docs/spec/interfaces/pipeline-execution.md §determine_next_actions")
+}
+
+// ---------------------------------------------------------------------------
+
+/// Evaluates a single edge condition against the current pipeline state and
+/// the producing node's output.
+///
+/// Returns both the boolean result and a complete [`EdgeEvaluationRecord`]
+/// suitable for including in the audit trail and in the next
+/// [`crate::PipelineStateComment`].
+///
+/// ## Condition Kinds
+///
+/// - [`EdgeConditionKind::Deterministic`]: delegates to
+///   [`crate::evaluate_deterministic_condition`]. Pure; always returns the
+///   same result for the same inputs.
+/// - [`EdgeConditionKind::LlmEvaluated`]: the LLM evaluator is invoked
+///   with the natural-language description and the serialised `output`. The
+///   `edge_id` and this function signature are placeholders for the full
+///   LLM-gateway integration completed in the `nodes` crate (PR 9).
+/// - [`EdgeConditionKind::Composite`]: recursively evaluates inner conditions.
+///
+/// ## Parameters
+///
+/// - `edge_id` — Required to populate `EdgeEvaluationRecord::edge_id`.
+/// - `evaluated_at` — Wall-clock time of evaluation; passed in so the function
+///   remains pure and testable without `std::time` access.
+///
+/// # See also
+///
+/// `docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition`
+#[must_use]
+pub fn evaluate_edge_condition(
+    _edge_id: &EdgeId,
+    _cond: &EdgeConditionKind,
+    _state: &PipelineState,
+    _output: &NodeOutput,
+    _evaluated_at: Timestamp,
+) -> (bool, EdgeEvaluationRecord) {
+    todo!("See docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition")
+}
+
+// ---------------------------------------------------------------------------
+
+/// Checks whether all incoming forward edges of a fan-in node have been
+/// satisfied (i.e. all predecessor nodes have [`NodeStatus::Completed`]).
+///
+/// A fan-in node is one with two or more incoming forward edges from nodes
+/// that were part of a parallel branch. This function prevents the fan-in
+/// node from starting before all parallel branches complete.
+///
+/// Returns `true` when every incoming forward edge's source node is
+/// [`NodeStatus::Completed`] in `state`.
+///
+/// # See also
+///
+/// `docs/spec/interfaces/pipeline-execution.md §check_fan_in_ready`
+#[must_use]
+pub fn check_fan_in_ready(_node: &NodeId, _state: &PipelineState, _graph: &PipelineGraph) -> bool {
+    todo!("See docs/spec/interfaces/pipeline-execution.md §check_fan_in_ready")
+}
+
+// ---------------------------------------------------------------------------
+
+/// Increments the traversal counter for the given rework edge in the current
+/// pipeline state.
+///
+/// Returns the new traversal count on success. Returns
+/// [`TerminationConditionReached`] if the increment would cause the count to
+/// exceed the edge's `max_traversals` limit.
+///
+/// ## Caller Responsibility
+///
+/// The caller must inspect [`crate::ReworkEdge::overflow_behaviour`] whenever
+/// this function returns `Err` and act accordingly:
+/// - [`crate::OverflowBehaviour::HaltWithError`] → emit `HaltWithError`.
+/// - [`crate::OverflowBehaviour::Escalate`] → emit `Escalate`.
+/// - [`crate::OverflowBehaviour::TakeEdge`] → activate the bypass edge instead.
+///
+/// # Errors
+///
+/// Returns [`TerminationConditionReached`] if incrementing would exceed the
+/// rework edge's `max_traversals` limit.
+///
+/// # See also
+///
+/// `docs/spec/interfaces/pipeline-execution.md §increment_rework_counter`
+pub fn increment_rework_counter(
+    _edge: &EdgeId,
+    _state: &mut PipelineState,
+    _graph: &PipelineGraph,
+) -> Result<u32, TerminationConditionReached> {
+    todo!("See docs/spec/interfaces/pipeline-execution.md §increment_rework_counter")
+}
+
+// ---------------------------------------------------------------------------
+
+/// Returns a topological ordering of sub-work-items respecting their
+/// `depends_on` declarations.
+///
+/// The returned `Vec<SubWorkItemId>` lists items from least-dependent to
+/// most-dependent (sources first). Items with no dependencies appear first.
+///
+/// ## Validation
+///
+/// The function validates the input list before sorting:
+/// - Any reference in `depends_on` that does not match an `id` in `items`
+///   returns [`DependencyError::UnknownDependency`].
+/// - Any cycle in the dependency graph returns
+///   [`DependencyError::CyclicDependency`].
+///
+/// # Errors
+///
+/// Returns [`DependencyError`] if the dependency graph contains cycles or
+/// unknown references.
+///
+/// # See also
+///
+/// `docs/spec/interfaces/pipeline-execution.md §topological_sort_sub_work_items`
+pub fn topological_sort_sub_work_items(
+    _items: &[SubWorkItem],
+) -> Result<Vec<SubWorkItemId>, DependencyError> {
+    todo!("See docs/spec/interfaces/pipeline-execution.md §topological_sort_sub_work_items")
+}

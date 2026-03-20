@@ -26,6 +26,11 @@
 //! | [`security`] | Constitutional layer, injection detection, scope enforcement, tool parameter scope |
 //! | [`context`] | Context assembly, context packs, `ClassificationResult`, `ContextPackage` |
 //! | [`labels`] | `PipelineLabel` enum, `parse_label`, `generate_label` |
+//! | [`execution`] | State machine decisions: `NextAction`, `NodeOutput`, `SubWorkItem`, execution functions |
+//! | [`budget`] | Token cost budget enforcement: `acquire_budget`, `BudgetAcquisition`, `CostReport` |
+//! | [`classification`] | Safety override and scope threshold: `apply_safety_override`, `check_scope_threshold` |
+//! | [`review`] | Review aggregation: `ReviewPass`, `ReviewFinding`, `aggregate_review_results` |
+//! | [`interfaces`] | Cross-domain constraint validation: `ConstraintFinding`, `validate_cross_domain_constraints` |
 //!
 //! ## Specification
 //!
@@ -35,16 +40,22 @@
 //! See [`docs/spec/interfaces/domain-traits.md`] for domain service, knowledge, and LLM provider contracts.
 //! See [`docs/spec/interfaces/security.md`] for security and constitutional layer contracts.
 //! See [`docs/spec/interfaces/context.md`] for context assembly and label contracts.
+//! See [`docs/spec/interfaces/pipeline-execution.md`] for state machine, budget, review, and cross-domain validation contracts.
 
 pub mod audit;
+pub mod budget;
+pub mod classification;
 pub mod context;
 pub mod domain_services;
 pub mod errors;
+pub mod execution;
 pub mod github;
 pub mod graph;
 pub mod identifiers;
+pub mod interfaces;
 pub mod knowledge;
 pub mod labels;
+pub mod review;
 pub mod security;
 pub mod templates;
 pub mod tools;
@@ -122,3 +133,29 @@ pub use context::{
 
 // Re-exports from labels
 pub use labels::{generate_label, parse_label, PipelineLabel};
+
+// Re-exports from execution
+pub use execution::{
+    check_fan_in_ready, determine_next_actions, evaluate_edge_condition, increment_rework_counter,
+    topological_sort_sub_work_items, DependencyError, EscalationReason, GateConfig, GateStatus,
+    NextAction, NodeOutput, NodeStateUpdate, PipelineError, SubWorkItem,
+    TerminationConditionReached,
+};
+
+// Re-exports from budget
+pub use budget::{
+    acquire_budget, BudgetAcquisition, CostReport, NodeCostEntry, SubWorkItemCostEntry,
+};
+
+// Re-exports from classification
+pub use classification::{
+    apply_safety_override, check_scope_threshold, EscalationResult, SafetyCriticalRegistry,
+};
+
+// Re-exports from review
+pub use review::{
+    aggregate_review_results, AggregateReviewDecision, ReviewFinding, ReviewPass, ReviewResult,
+};
+
+// Re-exports from interfaces
+pub use interfaces::{validate_cross_domain_constraints, ConstraintFinding};
