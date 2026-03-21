@@ -316,15 +316,35 @@ pub struct Scenario {
 /// call. The aggregator (`compute_satisfaction`) combines multiple
 /// trajectory results into a `ScenarioSatisfactionResult`.
 ///
+/// ## Explicit-failure scenarios
+///
+/// When `expected_failure` is `true`, this trajectory is part of an
+/// explicit-failure scenario (one designed to verify graceful degradation).
+/// Satisfaction is determined differently: the trajectory "passed" when the
+/// expected failure was observed — i.e. `passed == true` here means the system
+/// correctly failed. If the system did *not* fail when it should have, that is
+/// recorded as an explicit-failure violation in
+/// `ScenarioSatisfactionResult::explicit_failure_violations`.
+///
 /// See `docs/spec/interfaces/domain-traits.md` §TrajectoryResult.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrajectoryResult {
     /// The `id` of the [`Scenario`] that produced this result.
     pub scenario_id: String,
     /// `true` if the trajectory satisfied all acceptance criteria.
+    ///
+    /// For explicit-failure trajectories (`expected_failure == true`), `true`
+    /// means the system correctly produced the expected failure.
     pub passed: bool,
     /// Numeric satisfaction score in `[0.0, 1.0]` for this trajectory.
     pub satisfaction_score: SatisfactionScore,
+    /// `true` when this trajectory belongs to an explicit-failure scenario.
+    ///
+    /// Explicit-failure scenarios verify safety properties: that the system
+    /// fails gracefully in the face of specific inputs. The aggregator treats
+    /// these differently from normal scenarios (see module docs in
+    /// `crates/pipeline/src/scenarios.rs`).
+    pub expected_failure: bool,
     /// Diagnostics produced during trajectory execution.
     pub diagnostics: Diagnostics,
 }
@@ -1011,4 +1031,210 @@ pub trait TwinProvisioner: Send + Sync {
     /// - [`TwinError::ConfigurationFailed`] — state reset failed.
     /// - [`TwinError::NotRunning`] — handle is inactive.
     async fn reset_twin_state(&self, handle: &TwinHandle) -> Result<(), TwinError>;
+}
+
+// ─── Domain service routing ───────────────────────────────────────────────────
+
+/// The cached capabilities of a registered domain service, populated after a
+/// successful handshake.
+///
+/// Derived from [`HandshakeResult`] at startup and cached in
+/// [`DomainServiceRegistration`] to avoid repeated handshakes during a
+/// pipeline run.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §ServiceCapabilities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceCapabilities {
+    /// The service's own name.
+    pub domain: DomainServiceName,
+
+    /// Artifact type identifiers the service can process
+    /// (e.g. `"rust/source"`, `"kicad/schematic"`).
+    ///
+    /// Routing uses these to match artifact paths: the type identifier
+    /// convention is `domain/extension` (e.g. `"rust/source"` matches `.rs`
+    /// files). The convention is owned by the domain service;
+    /// CogWorks treats these strings as opaque matchers.
+    pub artifact_types: Vec<String>,
+
+    /// Interface type identifiers the service can extract or validate
+    /// (e.g. `"rust/trait"`, `"openapi/path"`).
+    ///
+    /// Used by [`resolve_primary_and_secondary`] to find secondary services for
+    /// cross-domain interface validation.
+    pub interface_types: Vec<String>,
+
+    /// Capability identifiers supported by this service
+    /// (e.g. `"validate"`, `"simulate"`, `"dependency_graph"`).
+    pub supported_methods: Vec<String>,
+}
+
+impl ServiceCapabilities {
+    /// Constructs `ServiceCapabilities` from a [`HandshakeResult`].
+    #[must_use]
+    pub fn from_handshake(result: &HandshakeResult) -> Self {
+        Self {
+            domain: result.domain.clone(),
+            artifact_types: result.artifact_types.clone(),
+            interface_types: result.interface_types.clone(),
+            supported_methods: result.capabilities.clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// A single registered domain service entry.
+///
+/// Held in a [`ServiceRegistry`]. The `capabilities` field is `None` before
+/// the initial handshake completes; routing functions return
+/// [`RoutingError::HandshakePending`] if they encounter a `None` here.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §DomainServiceRegistration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainServiceRegistration {
+    /// Unique registration key for this service.
+    pub service_name: DomainServiceName,
+
+    /// Opaque transport configuration — socket path or HTTP URL.
+    ///
+    /// Parsed and consumed by the `extension-api` crate when constructing the
+    /// concrete client. CogWorks treats this as an opaque JSON blob.
+    pub transport_config: serde_json::Value,
+
+    /// Cached capabilities; `None` until the initial handshake completes.
+    pub capabilities: Option<ServiceCapabilities>,
+}
+
+// ---------------------------------------------------------------------------
+
+/// The complete set of registered domain services for one pipeline run.
+///
+/// Constructed by `cli` at startup from `.cogworks/services.toml` and
+/// populated with capabilities after the initial handshake round.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §ServiceRegistry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServiceRegistry {
+    /// All registered services.
+    pub registrations: Vec<DomainServiceRegistration>,
+}
+
+impl ServiceRegistry {
+    /// Creates an empty registry.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Errors returned by domain service routing functions.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §RoutingError.
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+pub enum RoutingError {
+    /// No registered service can handle the given artifact paths.
+    #[error("No domain service found for artifact paths: {artifact_paths:?}")]
+    NoServiceFound {
+        /// The artifact paths that could not be matched.
+        artifact_paths: Vec<ArtifactPath>,
+    },
+
+    /// Multiple services claim to handle the same artifact paths with equal
+    /// specificity, and no tie-breaking rule applies.
+    #[error(
+        "Ambiguous domain service routing for artifact paths {artifact_paths:?}: \
+         candidates are {candidates:?}"
+    )]
+    Ambiguous {
+        /// The artifact paths that matched multiple services.
+        artifact_paths: Vec<ArtifactPath>,
+        /// The services that tied for the best match score.
+        candidates: Vec<DomainServiceName>,
+    },
+
+    /// The best-matching service has not yet completed its handshake.
+    #[error("Domain service '{service}' handshake is still pending")]
+    HandshakePending {
+        /// The service that has not completed its handshake.
+        service: DomainServiceName,
+    },
+}
+
+// ---------------------------------------------------------------------------
+
+/// Selects the single domain service that should process a given set of
+/// artifact paths.
+///
+/// Considers only services whose `capabilities` are `Some` (handshake
+/// complete). Scores each candidate by the number of `artifact_types` that
+/// match the file extensions of `artifact_paths`. Returns the unique
+/// highest-scoring service.
+///
+/// # Arguments
+///
+/// * `registry` — the service registry to search.
+/// * `artifact_paths` — the artifact paths to route.
+///
+/// # Returns
+///
+/// The [`DomainServiceName`] of the unique best-matching service.
+///
+/// # Errors
+///
+/// - [`RoutingError::NoServiceFound`] — no service matched any path.
+/// - [`RoutingError::Ambiguous`] — multiple services tied at the best score.
+/// - [`RoutingError::HandshakePending`] — the best-matching service has not
+///   completed its handshake.
+///
+/// # Artifact Type Matching Convention
+///
+/// The convention for `artifact_types` is `domain/extension` (e.g.
+/// `"rust/source"` matches `.rs` files). CogWorks strips the leading `domain/`
+/// component and compares the remainder against the file extension extracted
+/// from each artifact path.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §select_service_for_artifacts.
+pub fn select_service_for_artifacts(
+    _registry: &ServiceRegistry,
+    _artifact_paths: &[ArtifactPath],
+) -> Result<DomainServiceName, RoutingError> {
+    todo!("See docs/spec/interfaces/advanced-features.md §Domain Service Routing")
+}
+
+// ---------------------------------------------------------------------------
+
+/// Resolves the primary domain service and any secondary services for a
+/// sub-work-item's set of artifacts and interface types.
+///
+/// The primary service is selected via [`select_service_for_artifacts`] from
+/// `artifact_paths`. Secondary services are those whose `interface_types`
+/// intersect with `interface_type_identifiers` — used for cross-domain
+/// interface extraction and validation.
+///
+/// # Arguments
+///
+/// * `registry` — the service registry to search.
+/// * `artifact_paths` — the artifacts produced or modified by the sub-work-item.
+/// * `interface_type_identifiers` — interface type identifiers relevant to the
+///   sub-work-item (e.g. `"rust/trait"`, `"openapi/path"`).
+///
+/// # Returns
+///
+/// `(primary, secondaries)` where `secondaries` excludes the primary and is
+/// guaranteed to be empty if no other service handles the sub-work-item's
+/// interface types.
+///
+/// # Errors
+///
+/// Propagates any error from [`select_service_for_artifacts`].
+///
+/// See `docs/spec/interfaces/advanced-features.md` §resolve_primary_and_secondary.
+pub fn resolve_primary_and_secondary(
+    _registry: &ServiceRegistry,
+    _artifact_paths: &[ArtifactPath],
+    _interface_type_identifiers: &[String],
+) -> Result<(DomainServiceName, Vec<DomainServiceName>), RoutingError> {
+    todo!("See docs/spec/interfaces/advanced-features.md §Domain Service Routing")
 }

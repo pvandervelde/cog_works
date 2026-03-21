@@ -1,0 +1,311 @@
+//! Alignment verification — checks that a node's output addresses its inputs.
+//!
+//! Alignment verification detects cases where LLM output has drifted from the
+//! work it was asked to do: implementing the wrong function, adding files
+//! outside the approved scope, or failing to produce a declared output slot.
+//!
+//! Two check types are supported:
+//!
+//! - [`AlignmentCheckType::Deterministic`] — structural checks performed
+//!   purely from the data in [`DeclaredNodeInputs`] and [`crate::NodeOutput`].
+//!   No LLM is involved. [`run_deterministic_alignment`] implements these.
+//! - [`AlignmentCheckType::LlmSemantic`] — semantic checks delegated to a
+//!   (optionally different) LLM. These are orchestrated by the `nodes` crate
+//!   using [`AlignmentConfig::use_different_model`]; the function signatures
+//!   and result types are defined here but the LLM call itself lives in
+//!   `nodes`.
+//!
+//! ## Blocking vs. Non-Blocking Findings
+//!
+//! An [`AlignmentFinding`] with `blocking: true` causes the Alignment check
+//! to fail and triggers a rework cycle (subject to the rework budget from
+//! [`AlignmentConfig::rework_budget`]). Non-blocking findings are recorded in
+//! the audit trail but do not block progression.
+//!
+//! All [`MisalignmentType::ScopeExceeded`] findings are always blocking.
+//! [`MisalignmentType::Missing`] findings are blocking when the missing item
+//! is a declared required output slot.
+//!
+//! ## Pure Business Logic
+//!
+//! [`run_deterministic_alignment`] is pure (no I/O, no async). Semantic
+//! alignment requires an LLM call and is orchestrated by the `nodes` crate.
+//!
+//! ## Specification
+//!
+//! See `docs/spec/interfaces/advanced-features.md` §Alignment Verification for
+//! the full contract, field semantics, and examples.
+
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    execution::NodeOutput, identifiers::ArtifactPath, security::ApprovedScope,
+    types::AlignmentScore,
+};
+
+// ─── Check type ───────────────────────────────────────────────────────────────
+
+/// The kind of alignment check that produced a finding.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §AlignmentCheckType.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AlignmentCheckType {
+    /// Structural check: output slots, scope containment, protected-path
+    /// compliance. No LLM involved.
+    Deterministic,
+    /// Semantic check: verifies that the implementation matches the
+    /// specification intent. Delegated to an LLM in the `nodes` crate.
+    LlmSemantic,
+}
+
+// ─── Misalignment category ────────────────────────────────────────────────────
+
+/// Category of a misalignment discovered by an alignment check.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §MisalignmentType.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MisalignmentType {
+    /// An expected output, requirement, or declared output slot was not addressed.
+    Missing,
+    /// Output was produced for something not in the input scope.
+    Extra,
+    /// An artifact changed in a way that contradicts the input specification.
+    Modified,
+    /// The relationship between input and output is unclear or cannot be
+    /// determined structurally.
+    Ambiguous,
+    /// Output touches artifacts outside the declared approved scope.
+    ScopeExceeded,
+}
+
+impl std::fmt::Display for MisalignmentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => write!(f, "missing"),
+            Self::Extra => write!(f, "extra"),
+            Self::Modified => write!(f, "modified"),
+            Self::Ambiguous => write!(f, "ambiguous"),
+            Self::ScopeExceeded => write!(f, "scope_exceeded"),
+        }
+    }
+}
+
+// ─── Finding ─────────────────────────────────────────────────────────────────
+
+/// A single misalignment discovered by one alignment check.
+///
+/// ## Blocking Rules
+///
+/// - All [`MisalignmentType::ScopeExceeded`] findings are always `blocking`.
+/// - [`MisalignmentType::Missing`] findings are `blocking` when the missing
+///   item was a declared required output slot.
+/// - [`AlignmentCheckType::LlmSemantic`] findings: `blocking` is set by the
+///   LLM's judgement in the response payload.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §AlignmentFinding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlignmentFinding {
+    /// Which kind of check produced this finding.
+    pub check_type: AlignmentCheckType,
+
+    /// The category of misalignment.
+    pub misalignment: MisalignmentType,
+
+    /// Human-readable explanation of the finding.
+    ///
+    /// For deterministic checks this describes the structural violation
+    /// (e.g. "Output slot 'spec_doc' not populated"). For LLM-semantic checks
+    /// this is the LLM's explanation.
+    pub description: String,
+
+    /// `true` if this finding must halt progression (triggers rework cycle).
+    ///
+    /// See blocking rules above.
+    pub blocking: bool,
+}
+
+// ─── Traceability entry ───────────────────────────────────────────────────────
+
+/// A single link between a requirement reference and an output artifact or
+/// section, produced by the alignment check for use in traceability matrix updates.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §TraceabilityEntry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceabilityEntry {
+    /// Identifier of the requirement being addressed (e.g. `"REQ-001"`).
+    pub requirement_ref: String,
+
+    /// Identifier of the output that addresses the requirement.
+    ///
+    /// This is typically a repo-relative file path, a section header within a
+    /// spec document, or a module name — whatever is most meaningful for the
+    /// node type that produced the output.
+    pub output_ref: String,
+}
+
+// ─── Aggregate result ─────────────────────────────────────────────────────────
+
+/// The complete result of one alignment check pass.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §AlignmentResult.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlignmentResult {
+    /// Fraction of items checked that aligned, in `[0.0, 1.0]`.
+    ///
+    /// Computed as `(checked_items - blocking_findings) / checked_items`.
+    /// When no items were checked this is `1.0` (vacuously aligned).
+    pub score: AlignmentScore,
+
+    /// All individual misalignments found during this check pass.
+    pub findings: Vec<AlignmentFinding>,
+
+    /// Requirement-to-output pairs for advancing the traceability matrix.
+    ///
+    /// Populated by LLM-semantic checks that identify which requirements each
+    /// output section or file addresses. Deterministic checks do not populate
+    /// this field.
+    pub traceability_entries: Vec<TraceabilityEntry>,
+
+    /// `true` when there are no blocking findings.
+    ///
+    /// The pipeline may proceed to the next node only when `aligned == true`.
+    pub aligned: bool,
+}
+
+// ─── Configuration ────────────────────────────────────────────────────────────
+
+/// Configuration for one alignment check pass.
+///
+/// Loaded from `.cogworks/pipeline.toml` and applied to each relevant node via
+/// the `nodes` crate's `AlignmentChecker`. Default values are defined per-node
+/// in the pipeline configuration.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §AlignmentConfig.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlignmentConfig {
+    /// Minimum score required for the alignment check to pass.
+    ///
+    /// Below this threshold the check fails even if `aligned` would otherwise
+    /// be `true` (used to enforce a quantitative quality floor in addition to
+    /// the binary blocking-findings gate).
+    pub threshold: AlignmentScore,
+
+    /// Which check types to run in this pass.
+    ///
+    /// Typically `[Deterministic, LlmSemantic]` for most nodes; the Code
+    /// Generation node may run only `LlmSemantic` after the domain service
+    /// validation has already covered structural slot-filling.
+    pub enabled_checks: Vec<AlignmentCheckType>,
+
+    /// Maximum number of rework cycles permitted before escalation.
+    ///
+    /// When the rework count reaches this limit and alignment still fails,
+    /// the pipeline escalates rather than looping again.
+    pub rework_budget: u32,
+
+    /// If `true`, the `nodes` crate uses a separate critic model (rather than
+    /// the main node model) for [`AlignmentCheckType::LlmSemantic`] checks.
+    ///
+    /// Using a different model for alignment helps avoid confirmation bias —
+    /// the producing model's blind spots differ from the critic model's.
+    pub use_different_model: bool,
+}
+
+// ─── Declared inputs (for deterministic alignment) ───────────────────────────
+
+/// The node input declarations needed for deterministic alignment checking.
+///
+/// This is the subset of node input metadata that [`run_deterministic_alignment`]
+/// requires. Full `NodeInput` (including context packs, artifact content, and
+/// pipeline state) is defined in the `nodes` crate (PR 9); this struct carries
+/// only the structural declarations used for scope and slot checking.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §run_deterministic_alignment.
+#[derive(Debug, Clone)]
+pub struct DeclaredNodeInputs {
+    /// Output slot names that the node was required to populate.
+    ///
+    /// Each name must appear as a key in [`NodeOutput::artifacts`] for the
+    /// corresponding `Missing` check to pass.
+    pub required_output_slots: Vec<String>,
+
+    /// The scope boundary approved for this node's execution.
+    ///
+    /// Any artifact key in [`NodeOutput::artifacts`] that falls outside this
+    /// scope generates a [`MisalignmentType::ScopeExceeded`] finding.
+    pub approved_scope: ApprovedScope,
+
+    /// Artifact paths that must not appear in the node's output.
+    ///
+    /// These are the globally-protected paths (from the safety registry plus
+    /// pipeline configuration). Any match generates a
+    /// [`MisalignmentType::ScopeExceeded`] finding.
+    pub protected_paths: Vec<ArtifactPath>,
+}
+
+// ─── Core function ────────────────────────────────────────────────────────────
+
+/// Performs structural alignment checks that do not require an LLM.
+///
+/// Checks:
+/// 1. Every slot in `inputs.required_output_slots` is present in
+///    `node_output.artifacts`.
+/// 2. No artifact key in `node_output.artifacts` falls outside
+///    `inputs.approved_scope`.
+/// 3. No artifact key matches any path in `inputs.protected_paths`.
+///
+/// # Arguments
+///
+/// * `inputs` — declared input constraints for the node that produced the output.
+/// * `node_output` — the output produced by the node.
+///
+/// # Returns
+///
+/// Zero or more [`AlignmentFinding`] values. An empty vec means all structural
+/// checks passed.
+///
+/// # Examples
+///
+/// ```
+/// use pipeline::alignment::{run_deterministic_alignment, DeclaredNodeInputs};
+/// use pipeline::execution::NodeOutput;
+/// use pipeline::security::{ApprovedScope, ScopeParameters};
+/// use pipeline::types::TokenCost;
+/// use std::collections::HashMap;
+///
+/// let scope_params = ScopeParameters {
+///     allowed_artifact_patterns: vec!["**".to_string()],
+///     max_file_changes: None,
+///     max_new_files: u32::MAX,
+///     prohibited_artifact_patterns: vec![],
+/// };
+/// let inputs = DeclaredNodeInputs {
+///     required_output_slots: vec!["spec_doc".to_string()],
+///     approved_scope: ApprovedScope::from_scope_parameters(&scope_params),
+///     protected_paths: vec![],
+/// };
+/// let mut artifacts = HashMap::new();
+/// artifacts.insert("spec_doc".to_string(), serde_json::json!("content"));
+/// let output = NodeOutput { artifacts, cost_delta: TokenCost::zero(), state_updates: vec![] };
+/// let findings = run_deterministic_alignment(&inputs, &output);
+/// assert!(findings.is_empty(), "All declared slots populated, no scope violations");
+/// ```
+///
+/// See `docs/spec/interfaces/advanced-features.md` §run_deterministic_alignment.
+pub fn run_deterministic_alignment(
+    _inputs: &DeclaredNodeInputs,
+    _node_output: &NodeOutput,
+) -> Vec<AlignmentFinding> {
+    todo!("See docs/spec/interfaces/advanced-features.md §Alignment Verification")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ToolProfile extension: allowed_skills accessor
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The skill validation in tools.rs checks that a skill name appears in the
+// active ToolProfile's allowed_skills list. That field is defined in
+// crates/pipeline/src/knowledge.rs; no duplicate definition here.
+// This comment is a cross-reference for implementors.
+//
+// See crates/pipeline/src/knowledge.rs §ToolProfile::allowed_skills.

@@ -9,6 +9,15 @@
 //! - [`StructuredResponse`] — validated completion with token accounting.
 //! - [`LlmError`] — all failure modes for LLM provider calls.
 //!
+//! It also contains progressive tool discovery and skill validation types:
+//!
+//! - [`ToolIndexEntry`] / [`CompactToolIndex`] — compact index for LLM tool discovery.
+//! - [`build_compact_index`] / [`search_tools`] — index construction and search.
+//! - [`SkillLifecycle`] / [`SkillManifest`] / [`SkillInvocation`] — skill metadata.
+//! - [`ValidatedSkillInvocation`] — opaque validated skill invocation token.
+//! - [`SkillError`] — skill validation error variants.
+//! - [`validate_skill_invocation`] — skill lifecycle, profile, and schema validation.
+//!
 //! ## LLM Call Flow
 //!
 //! The `nodes` crate's `LlmGateway` orchestrates constitutional prompt wrapping
@@ -36,12 +45,17 @@
 //!
 //! See `docs/spec/interfaces/domain-traits.md` §LLM Provider Trait for the
 //! full contract.
+//! See `docs/spec/interfaces/advanced-features.md` for tool discovery and
+//! skill validation contracts.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::types::TokenCount;
+use crate::{
+    identifiers::{SkillName, ToolName},
+    types::TokenCount,
+};
 
 // ─── LLM call types ─────────────────────────────────────────────────────────
 
@@ -411,4 +425,294 @@ pub trait LlmProvider: Send + Sync {
         schema: &OutputSchema,
         model: &ModelConfig,
     ) -> Result<StructuredResponse, LlmError>;
+}
+
+// ─── Progressive tool discovery ──────────────────────────────────────────────
+
+/// A single entry in the compact tool index.
+///
+/// Used by LLM nodes during progressive tool discovery: the node first receives
+/// a [`CompactToolIndex`] and searches for a fitting tool before requesting the
+/// full tool definition.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §ToolIndexEntry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolIndexEntry {
+    /// The tool's canonical name.
+    pub tool_name: ToolName,
+
+    /// One-line human-readable description of the tool.
+    ///
+    /// Currently populated as an empty string when built via
+    /// [`build_compact_index`]; description enrichment is expected to occur
+    /// in the `nodes` crate when the index is assembled for LLM consumption.
+    pub description: String,
+
+    /// `true` if this entry represents a composite skill rather than a raw
+    /// tool call.
+    ///
+    /// Skills are ranked before raw tools in [`CompactToolIndex::entries`].
+    pub is_skill: bool,
+}
+
+// ---------------------------------------------------------------------------
+
+/// An ordered, skill-first list of all available tools and skills.
+///
+/// Used as the first response to an LLM agent querying which tools exist.
+/// The agent searches the compact index to find a tool of interest, then
+/// requests its full definition before invoking it.
+///
+/// ## Ordering
+///
+/// Skills appear before raw tools. Within each group, entries are sorted
+/// alphabetically by `tool_name`.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §CompactToolIndex.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactToolIndex {
+    /// All available tools and skills, skills ranked first then alphabetical.
+    pub entries: Vec<ToolIndexEntry>,
+}
+
+// ---------------------------------------------------------------------------
+
+/// Constructs a compact tool index from a list of available tool names and
+/// their profile metadata.
+///
+/// # Arguments
+///
+/// * `tool_list` — canonical names of tools that may be invoked.
+/// * `profiles` — tool profiles used to determine which tools are skills.
+///
+/// # Returns
+///
+/// A [`CompactToolIndex`] with skills sorted before raw tools; within each
+/// group, alphabetical by `tool_name`. [`ToolIndexEntry::description`] is
+/// populated as an empty string.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §build_compact_index.
+pub fn build_compact_index(
+    _tool_list: &[ToolName],
+    _profiles: &[crate::knowledge::ToolProfile],
+) -> CompactToolIndex {
+    todo!("See docs/spec/interfaces/advanced-features.md §Progressive Tool Discovery")
+}
+
+// ---------------------------------------------------------------------------
+
+/// Returns all entries in a [`CompactToolIndex`] whose name or description
+/// contains `query` as a case-insensitive substring.
+///
+/// Matching entries are returned in the same order they appear in
+/// `index.entries` (skills before raw tools, alphabetical within each group).
+///
+/// # Arguments
+///
+/// * `index` — the compact tool index to search.
+/// * `query` — case-insensitive substring to look for in `tool_name` and
+///   `description`.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §search_tools.
+pub fn search_tools(_index: &CompactToolIndex, _query: &str) -> Vec<ToolIndexEntry> {
+    todo!("See docs/spec/interfaces/advanced-features.md §Progressive Tool Discovery")
+}
+
+// ─── Skill validation ────────────────────────────────────────────────────────
+
+/// Lifecycle state of a skill; governs whether the skill may be invoked.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §SkillLifecycle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SkillLifecycle {
+    /// Under review, not yet approved for use. Not invocable.
+    Proposed,
+    /// Review complete but not yet activated. Not invocable.
+    Reviewed,
+    /// Fully approved. Invocable.
+    Active,
+    /// Deprecated in favour of `alternative`. Not invocable.
+    Deprecated {
+        /// The replacement skill that callers should use instead.
+        alternative: SkillName,
+    },
+    /// Permanently removed. Not invocable.
+    Retired,
+}
+
+impl SkillLifecycle {
+    /// Returns `true` if the skill may be invoked (only [`Active`](Self::Active)
+    /// lifecycles are invocable).
+    #[must_use]
+    pub fn is_invocable(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Full specification of a skill, loaded from the skill registry.
+///
+/// A skill is a pre-composed, validated sequence of raw tool calls with
+/// declared scope constraints. LLM nodes prefer skills over raw tools because
+/// they reduce the number of turns needed and enforce approvals at the skill
+/// level rather than per-tool-call.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §SkillManifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillManifest {
+    /// Canonical skill identifier.
+    pub name: SkillName,
+
+    /// Current lifecycle state; determines invocability.
+    pub lifecycle: SkillLifecycle,
+
+    /// JSON Schema that skill parameter values must conform to.
+    ///
+    /// Validated by [`validate_skill_invocation`] before the skill is allowed
+    /// to proceed.
+    pub parameter_schema: OutputSchema,
+
+    /// Ordered list of raw tool calls this skill expands to.
+    ///
+    /// The `nodes` crate executes these calls in sequence when the skill is
+    /// invoked.
+    pub tool_call_sequence: Vec<ToolName>,
+
+    /// Scope restrictions applied when this skill is invoked.
+    ///
+    /// Merged with the node's active [`crate::ScopeParameters`] at invocation
+    /// time; the stricter of the two values applies.
+    pub scope_constraints: crate::knowledge::ScopeParameters,
+}
+
+// ---------------------------------------------------------------------------
+
+/// A request to invoke a skill, before validation.
+///
+/// Produced by the `nodes` crate when an LLM agent selects a skill. Must be
+/// passed to [`validate_skill_invocation`] before the skill can be executed.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §SkillInvocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillInvocation {
+    /// The skill to invoke.
+    pub skill_name: SkillName,
+
+    /// Caller-supplied parameter values.
+    ///
+    /// Must conform to [`SkillManifest::parameter_schema`]; validated by
+    /// [`validate_skill_invocation`].
+    pub parameters: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+
+/// Opaque wrapper produced only when skill validation passes.
+///
+/// The `nodes` crate cannot construct `ValidatedSkillInvocation` directly —
+/// it can only be obtained by calling [`validate_skill_invocation`]. This
+/// enforces the invariant that a skill can only be executed after it has been
+/// validated against its manifest and the active tool profile.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §ValidatedSkillInvocation.
+#[derive(Debug, Clone)]
+pub struct ValidatedSkillInvocation {
+    /// The validated invocation payload.
+    ///
+    /// Private — consumers use the public accessor.
+    invocation: SkillInvocation,
+    /// Resolved tool call sequence from the skill manifest.
+    ///
+    /// Captured at validation time to prevent TOCTOU issues if the manifest
+    /// were to change between validation and execution.
+    pub(crate) tool_call_sequence: Vec<ToolName>,
+}
+
+impl ValidatedSkillInvocation {
+    /// Returns a reference to the validated skill invocation.
+    pub fn invocation(&self) -> &SkillInvocation {
+        &self.invocation
+    }
+
+    /// Returns the ordered tool call sequence resolved at validation time.
+    pub fn tool_call_sequence(&self) -> &[ToolName] {
+        &self.tool_call_sequence
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Errors from [`validate_skill_invocation`].
+///
+/// See `docs/spec/interfaces/advanced-features.md` §SkillError.
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+pub enum SkillError {
+    /// The skill's lifecycle state is not [`SkillLifecycle::Active`].
+    #[error("Skill '{skill_name}' lifecycle is not Active")]
+    LifecycleInactive {
+        /// The skill that was requested.
+        skill_name: SkillName,
+        /// The actual lifecycle state (serialised as its variant name).
+        lifecycle_state: String,
+    },
+
+    /// The supplied parameters do not conform to the skill's parameter schema.
+    #[error("Skill parameter schema validation failed: {description}")]
+    SchemaValidationFailed {
+        /// Human-readable description of the validation failure.
+        description: String,
+    },
+
+    /// The active [`crate::ToolProfile`] does not permit this skill.
+    #[error("Skill '{skill_name}' is not permitted by the active tool profile")]
+    ProfileProhibited {
+        /// The skill that was requested.
+        skill_name: SkillName,
+    },
+
+    /// No manifest exists for the requested skill name.
+    #[error("Unknown skill '{skill_name}'")]
+    UnknownSkill {
+        /// The name of the skill that was not found.
+        skill_name: SkillName,
+    },
+}
+
+// ---------------------------------------------------------------------------
+
+/// Validates that a skill invocation is permitted by its lifecycle, parameter
+/// schema, and active tool profile.
+///
+/// # Validation Order
+///
+/// 1. `Err(SkillError::LifecycleInactive)` if `manifest.lifecycle` is not `Active`.
+/// 2. `Err(SkillError::ProfileProhibited)` if `manifest.name` is not in
+///    `profile.allowed_skills`.
+/// 3. `Err(SkillError::SchemaValidationFailed)` if `invocation.parameters`
+///    does not conform to `manifest.parameter_schema`.
+/// 4. `Ok(ValidatedSkillInvocation { … })` with the resolved tool call sequence.
+///
+/// # Arguments
+///
+/// * `invocation` — caller-supplied invocation request.
+/// * `manifest` — the skill's full specification (loaded from skill registry).
+/// * `profile` — the active tool profile for the current node execution.
+///
+/// # Returns
+///
+/// A [`ValidatedSkillInvocation`] on success. The `nodes` crate passes this
+/// value to its skill executor to drive the tool call sequence.
+///
+/// # Errors
+///
+/// See [`SkillError`] variants.
+///
+/// See `docs/spec/interfaces/advanced-features.md` §validate_skill_invocation.
+pub fn validate_skill_invocation(
+    _invocation: &SkillInvocation,
+    _manifest: &SkillManifest,
+    _profile: &crate::knowledge::ToolProfile,
+) -> Result<ValidatedSkillInvocation, SkillError> {
+    todo!("See docs/spec/interfaces/advanced-features.md §Skill Validation")
 }
