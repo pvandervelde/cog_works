@@ -235,20 +235,25 @@ Configuration for one alignment check pass.
 
 ```rust
 pub fn run_deterministic_alignment(
-    upstream_inputs: &NodeInputs,
+    inputs: &DeclaredNodeInputs,
     node_output: &NodeOutput,
 ) -> Vec<AlignmentFinding>
 ```
 
 **Purpose**: Performs structural alignment checks that do not require an LLM.
 
+**Note**: The parameter type is `DeclaredNodeInputs` (defined in `alignment.rs`)
+rather than `NodeInputs` (defined in the future `nodes` crate). This subset type
+contains exactly the fields that deterministic checks require, avoiding a
+cross-crate dependency on PR 9.
+
 **Behaviour**:
 
-1. Verifies that every output slot declared in `upstream_inputs.declared_outputs`
+1. Verifies that every output slot declared in `inputs.required_output_slots`
    is present as a key in `node_output.artifacts`.
 2. Checks that no artifact key in `node_output.artifacts` falls outside the
-   paths declared in `upstream_inputs.approved_scope`.
-3. Verifies no artifacts from `upstream_inputs.protected_paths` were modified
+   paths declared in `inputs.approved_scope`.
+3. Verifies no artifacts from `inputs.protected_paths` were modified
    (compares presence against `node_output.artifacts` keys).
 
 **Returns**: Zero or more `AlignmentFinding` values. An empty vec means the
@@ -610,7 +615,7 @@ validated against its manifest and the active profile.
 
 ```rust
 pub enum SkillError {
-    LifecycleInactive { lifecycle: SkillLifecycle },
+    LifecycleInactive { skill_name: SkillName, lifecycle_state: String },
     SchemaValidationFailed { description: String },
     ProfileProhibited { skill_name: SkillName },
     UnknownSkill { skill_name: SkillName },
@@ -730,10 +735,10 @@ of artifact paths.
    the file extensions of `artifact_paths`.
 3. If exactly one service has the highest score: returns its name.
 4. If multiple services tie at the highest score: returns
-   `Err(RegistryError::Ambiguous)`.
-5. If no service matches: returns `Err(RegistryError::NoServiceFound)`.
+   `Err(RoutingError::Ambiguous)`.
+5. If no service matches: returns `Err(RoutingError::NoServiceFound)`.
 6. If the best-matching service has `capabilities == None`:
-   returns `Err(RegistryError::HandshakePending)`.
+   returns `Err(RoutingError::HandshakePending)`.
 
 ### `fn resolve_primary_and_secondary`
 

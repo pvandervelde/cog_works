@@ -180,6 +180,10 @@ pub struct TrajectoryResult {
     pub scenario_id: String,
     pub passed: bool,
     pub satisfaction_score: SatisfactionScore,
+    /// When `true` this trajectory was expected to fail (explicit-failure scenario).
+    /// A failed trajectory with `expected_failure: true` does not reduce overall
+    /// satisfaction — it is counted as passing for scoring purposes.
+    pub expected_failure: bool,
     pub diagnostics: Diagnostics,
 }
 

@@ -299,14 +299,3 @@ pub fn run_deterministic_alignment(
 ) -> Vec<AlignmentFinding> {
     todo!("See docs/spec/interfaces/advanced-features.md §Alignment Verification")
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ToolProfile extension: allowed_skills accessor
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// The skill validation in tools.rs checks that a skill name appears in the
-// active ToolProfile's allowed_skills list. That field is defined in
-// crates/pipeline/src/knowledge.rs; no duplicate definition here.
-// This comment is a cross-reference for implementors.
-//
-// See crates/pipeline/src/knowledge.rs §ToolProfile::allowed_skills.
