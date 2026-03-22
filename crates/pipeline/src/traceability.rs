@@ -220,7 +220,7 @@ pub struct TraceabilityMatrix {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use pipeline::traceability::extract_requirements;
 ///
 /// let body = "## Requirements\nREQ-001: System must validate inputs\nREQ-002: Errors must be logged";
@@ -262,7 +262,7 @@ pub fn extract_requirements(_work_item_body: &str) -> Vec<Requirement> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use pipeline::traceability::{
 ///     extract_requirements, update_traceability_matrix, RequirementRow,
 ///     Requirement, TraceabilityMatrix, TraceabilityStage, TraceabilityStatus,

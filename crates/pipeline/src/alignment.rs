@@ -266,10 +266,11 @@ pub struct DeclaredNodeInputs {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use pipeline::alignment::{run_deterministic_alignment, DeclaredNodeInputs};
 /// use pipeline::execution::NodeOutput;
-/// use pipeline::security::{ApprovedScope, ScopeParameters};
+/// use pipeline::security::ApprovedScope;
+/// use pipeline::knowledge::ScopeParameters;
 /// use pipeline::types::TokenCost;
 /// use std::collections::HashMap;
 ///

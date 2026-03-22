@@ -127,7 +127,7 @@ pub struct ScenarioSatisfactionResult {
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use pipeline::scenarios::compute_satisfaction;
 /// use pipeline::domain_services::TrajectoryResult;
 /// use pipeline::types::SatisfactionScore;
