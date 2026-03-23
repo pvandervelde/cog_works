@@ -20,9 +20,9 @@
 //! | [`github`] | GitHub traits: `EventSource`, `IssueTracker`, `PullRequestManager`, `CodeRepository`, `ProjectBoard` and their data types |
 //! | [`templates`] | `TemplateEngine` trait |
 //! | [`audit`] | `AuditStore` trait, `AuditEvent` enum, `PipelineSummary` |
-//! | [`domain_services`] | `DomainServiceClient`, `InterfaceRegistryLoader`, `ScenarioExecutor`, `TwinProvisioner` and their data types |
+//! | [`domain_services`] | `DomainServiceClient`, `InterfaceRegistryLoader`, `ScenarioExecutor`, `TwinProvisioner`, service routing, and their data types |
 //! | [`knowledge`] | `SummaryCache`, `PipelineConfigurationLoader`, `ToolProfileStore`, `AdapterSpecLoader` and their data types |
-//! | [`tools`] | `LlmProvider`, `StructuredResponse`, `ModelConfig`, `ChatMessage`, `OutputSchema`, `LlmError` |
+//! | [`tools`] | `LlmProvider`, `StructuredResponse`, `ModelConfig`, `ChatMessage`, `OutputSchema`, `LlmError`, tool discovery, skill validation |
 //! | [`security`] | Constitutional layer, injection detection, scope enforcement, tool parameter scope |
 //! | [`context`] | Context assembly, context packs, `ClassificationResult`, `ContextPackage` |
 //! | [`labels`] | `PipelineLabel` enum, `parse_label`, `generate_label` |
@@ -31,6 +31,10 @@
 //! | [`classification`] | Safety override and scope threshold: `apply_safety_override`, `check_scope_threshold` |
 //! | [`review`] | Review aggregation: `ReviewPass`, `ReviewFinding`, `aggregate_review_results` |
 //! | [`interfaces`] | Cross-domain constraint validation: `ConstraintFinding`, `validate_cross_domain_constraints` |
+//! | [`scenarios`] | Scenario satisfaction scoring: `PerScenarioScore`, `ScenarioSatisfactionResult`, `compute_satisfaction` |
+//! | [`alignment`] | Alignment verification: `AlignmentFinding`, `AlignmentResult`, `run_deterministic_alignment` |
+//! | [`traceability`] | Traceability matrix: `TraceabilityMatrix`, `extract_requirements`, `update_traceability_matrix` |
+//! | [`observability`] | Observability hooks: `RootCause`, `record_node_start`, `record_node_complete`, `record_retry`, `record_rework` |
 //!
 //! ## Specification
 //!
@@ -41,7 +45,9 @@
 //! See [`docs/spec/interfaces/security.md`] for security and constitutional layer contracts.
 //! See [`docs/spec/interfaces/context.md`] for context assembly and label contracts.
 //! See [`docs/spec/interfaces/pipeline-execution.md`] for state machine, budget, review, and cross-domain validation contracts.
+//! See [`docs/spec/interfaces/advanced-features.md`] for scenario satisfaction, alignment, traceability, observability, tool discovery, skill validation, and service routing contracts.
 
+pub mod alignment;
 pub mod audit;
 pub mod budget;
 pub mod classification;
@@ -55,10 +61,13 @@ pub mod identifiers;
 pub mod interfaces;
 pub mod knowledge;
 pub mod labels;
+pub mod observability;
 pub mod review;
+pub mod scenarios;
 pub mod security;
 pub mod templates;
 pub mod tools;
+pub mod traceability;
 pub mod types;
 
 // Re-export everything at the crate root for ergonomic usage by downstream crates.
@@ -159,3 +168,35 @@ pub use review::{
 
 // Re-exports from interfaces
 pub use interfaces::{validate_cross_domain_constraints, ConstraintFinding};
+
+// Re-exports from scenarios
+pub use scenarios::{compute_satisfaction, PerScenarioScore, ScenarioSatisfactionResult};
+
+// Re-exports from alignment
+pub use alignment::{
+    run_deterministic_alignment, AlignmentCheckType, AlignmentConfig, AlignmentFinding,
+    AlignmentResult, DeclaredNodeInputs, MisalignmentType, TraceabilityEntry,
+};
+
+// Re-exports from traceability
+pub use traceability::{
+    extract_requirements, update_traceability_matrix, Requirement, RequirementRow,
+    TraceabilityMatrix, TraceabilityStage, TraceabilityStatus,
+};
+
+// Re-exports from observability
+pub use observability::{
+    record_node_complete, record_node_start, record_retry, record_rework, RootCause,
+};
+
+// Re-exports from tools (additions)
+pub use tools::{
+    build_compact_index, search_tools, validate_skill_invocation, CompactToolIndex, SkillError,
+    SkillInvocation, SkillLifecycle, SkillManifest, ToolIndexEntry, ValidatedSkillInvocation,
+};
+
+// Re-exports from domain_services (additions)
+pub use domain_services::{
+    resolve_primary_and_secondary, select_service_for_artifacts, DomainServiceRegistration,
+    RoutingError, ServiceCapabilities, ServiceRegistry,
+};
