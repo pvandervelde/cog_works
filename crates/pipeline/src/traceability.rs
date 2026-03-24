@@ -38,7 +38,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    alignment::AlignmentFinding,
+    alignment::TraceabilityEntry,
     identifiers::{PipelineRunId, WorkItemId},
 };
 
@@ -237,24 +237,32 @@ pub fn extract_requirements(_work_item_body: &str) -> Vec<Requirement> {
 
 // ---------------------------------------------------------------------------
 
-/// Applies alignment findings from one pipeline stage to update coverage flags
-/// in the traceability matrix.
+/// Applies structured traceability entries from one pipeline stage to update
+/// coverage flags in the traceability matrix.
 ///
-/// Scans each non-blocking [`AlignmentFinding::description`] for embedded
-/// requirement references of the form `[REQ-NNN]`. When a reference is found
-/// and a row with the matching `id` exists in `matrix.rows`, the corresponding
-/// stage coverage flag is set to `true`.
+/// For each [`TraceabilityEntry`] in `entries`, matches `requirement_ref`
+/// against the `id` field of each row in `matrix.rows`. When a match is found
+/// the corresponding stage coverage flag is set to `true`.
 ///
 /// After updating flags, recomputes each row's `status` field and the
 /// matrix-level `complete` flag.
+///
+/// ## Source of entries
+///
+/// `entries` must come from [`AlignmentResult::traceability_entries`], which is
+/// only populated by the [`AlignmentCheckType::LlmSemantic`] check path. The
+/// deterministic alignment path does not produce traceability entries; if only
+/// deterministic checks were run for a stage, pass an empty slice and the stage
+/// coverage flags will remain unchanged (recording an honest *uncovered* status
+/// rather than fabricating coverage).
 ///
 /// # Arguments
 ///
 /// * `matrix` — the current traceability matrix (consumed and returned as
 ///   updated).
-/// * `stage` — the pipeline stage whose alignment findings are being applied.
-/// * `results` — alignment findings from the current stage; only non-blocking
-///   findings whose descriptions contain `[REQ-NNN]` markers advance coverage.
+/// * `stage` — the pipeline stage whose traceability entries are being applied.
+/// * `entries` — structured requirement-to-output pairs from the LLM-semantic
+///   alignment check for this stage.
 ///
 /// # Returns
 ///
@@ -267,11 +275,11 @@ pub fn extract_requirements(_work_item_body: &str) -> Vec<Requirement> {
 ///     extract_requirements, update_traceability_matrix, RequirementRow,
 ///     Requirement, TraceabilityMatrix, TraceabilityStage, TraceabilityStatus,
 /// };
-/// use pipeline::alignment::{AlignmentFinding, AlignmentCheckType, MisalignmentType};
+/// use pipeline::alignment::TraceabilityEntry;
 /// use pipeline::identifiers::{PipelineRunId, WorkItemId};
 ///
 /// let reqs = extract_requirements("REQ-001: Must validate inputs");
-/// let mut rows: Vec<RequirementRow> = reqs
+/// let rows: Vec<RequirementRow> = reqs
 ///     .into_iter()
 ///     .map(|r| RequirementRow {
 ///         requirement: r,
@@ -288,13 +296,11 @@ pub fn extract_requirements(_work_item_body: &str) -> Vec<Requirement> {
 ///     work_item_id: WorkItemId::new(42),
 ///     complete: false,
 /// };
-/// let findings = vec![AlignmentFinding {
-///     check_type: AlignmentCheckType::Deterministic,
-///     misalignment: MisalignmentType::Missing,
-///     description: "Addresses [REQ-001] via input validator".to_string(),
-///     blocking: false,
+/// let entries = vec![TraceabilityEntry {
+///     requirement_ref: "REQ-001".to_string(),
+///     output_ref: "docs/spec/architecture.md#input-validation".to_string(),
 /// }];
-/// let updated = update_traceability_matrix(matrix, TraceabilityStage::Architecture, &findings);
+/// let updated = update_traceability_matrix(matrix, TraceabilityStage::Architecture, &entries);
 /// assert!(updated.rows[0].architecture_covered);
 /// ```
 ///
@@ -302,7 +308,7 @@ pub fn extract_requirements(_work_item_body: &str) -> Vec<Requirement> {
 pub fn update_traceability_matrix(
     _matrix: TraceabilityMatrix,
     _stage: TraceabilityStage,
-    _results: &[AlignmentFinding],
+    _entries: &[TraceabilityEntry],
 ) -> TraceabilityMatrix {
     todo!("See docs/spec/interfaces/advanced-features.md §Traceability Matrix")
 }
