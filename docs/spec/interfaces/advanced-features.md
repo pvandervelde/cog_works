@@ -203,7 +203,7 @@ The complete result of one alignment check pass.
 |-------|------|-------------|
 | `score` | `AlignmentScore` | Fraction of items checked that aligned, in `[0.0, 1.0]` |
 | `findings` | `Vec<AlignmentFinding>` | All individual misalignments found |
-| `traceability_entries` | `Vec<TraceabilityEntry>` | Pairs of (requirement ref, output ref) for matrix update |
+| `traceability_entries` | `Vec<TraceabilityEntry>` | Pairs of (requirement ref, output ref) for matrix update. **Only populated by `LlmSemantic` checks.** Deterministic checks leave this field empty; passing an empty slice to `update_traceability_matrix` records an honest *uncovered* status for that stage rather than fabricating coverage. |
 | `aligned` | `bool` | `true` when there are no blocking findings |
 
 ### TraceabilityEntry
@@ -364,21 +364,29 @@ to the relevant `WorkItemId` after calling this function.
 pub fn update_traceability_matrix(
     matrix: TraceabilityMatrix,
     stage: TraceabilityStage,
-    results: &[AlignmentFinding],
+    entries: &[TraceabilityEntry],
 ) -> TraceabilityMatrix
 ```
 
-**Purpose**: Applies the alignment findings from one pipeline stage to update
-the coverage flags in the traceability matrix.
+**Purpose**: Applies structured traceability entries from one pipeline stage to
+advance the coverage flags in the traceability matrix.
 
 **Behaviour**:
 
-1. For each `AlignmentFinding` that is **not** blocking and whose `description`
-   references a requirement ID (format: `[REQ-NNN]` embedded anywhere in the
-   description), marks the corresponding `RequirementRow`'s stage flag to
-   `true`.
-2. Recomputes each row's `status` field (Complete / Partial / Missing).
-3. Recomputes the matrix-level `complete` flag.
+1. For each `TraceabilityEntry` in `entries`, match `requirement_ref` against
+   the `id` field of each row in `matrix.rows`.
+2. When a match is found, set the corresponding stage coverage flag
+   (`architecture_covered`, `interface_covered`, `sub_work_item_covered`, or
+   `code_covered`) to `true`.
+3. Recompute each row's `status` field (Complete / Partial / Missing).
+4. Recompute the matrix-level `complete` flag.
+
+**Source of entries**: `entries` must be `AlignmentResult::traceability_entries`
+from a completed `LlmSemantic` alignment check. That field is only populated by
+the LLM-semantic check path — deterministic checks do not produce traceability
+entries. If only deterministic checks were run for a stage, the caller passes an
+empty slice; stage coverage flags remain unchanged, recording an honest
+*uncovered* status rather than fabricating coverage.
 
 **Returns**: The updated matrix (value, not in-place mutation).
 
