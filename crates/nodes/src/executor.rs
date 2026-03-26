@@ -10,8 +10,10 @@
 //! 2. Load and validate the pipeline graph.
 //! 3. Reconstruct pipeline state from GitHub.
 //! 4. Determine next actions.
-//! 5. Execute eligible nodes (with budget serialisation for parallel batches).
-//! 6. Write updated state comment to GitHub.
+//! 5. Dispatch — route action variants to the appropriate outcome path.
+//! 6. Execute eligible nodes (with budget serialisation for parallel batches).
+//! 7. Persist updated `PipelineStateComment` to GitHub.
+//! 8. Return a `StepResult`; callers must loop to process subsequent steps.
 //!
 //! See `docs/spec/interfaces/nodes.md` §Pipeline Executor for the full contract.
 
