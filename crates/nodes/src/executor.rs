@@ -143,11 +143,23 @@ impl PipelineExecutor {
 ///    Graph validation failure halts immediately.
 /// 3. **Reconstruct state** — fetch the latest `PipelineStateComment` from GitHub.
 /// 4. **Determine next actions** — call `determine_next_actions`.
-/// 5. **Dispatch** — execute eligible nodes; serialise budget checks across
-///    any parallel batch via `BudgetTracker`.
-/// 6. **Persist** — write updated `PipelineStateComment` to GitHub.
-///
-/// Returns the first significant `StepResult` produced in this step.
+/// 5. **Dispatch** — inspect actions:
+///    - Empty vec → run complete; write final state comment; return `StepResult::Completed`.
+///    - `Wait` → return `StepResult::Gated`.
+///    - `Escalate` / `HaltWithError` → write comment; return `StepResult::Escalated` /
+///      `StepResult::Halted`.
+///    - `ExecuteNode` / `ExecuteParallel` → proceed to step 6.
+/// 6. **Execute nodes** — for eligible nodes; serialise budget checks across
+///    any parallel batch via `BudgetTracker`. For `ExecuteParallel`, all listed
+///    nodes run concurrently within this single call. On any `NonRetryable`
+///    failure, apply the retry/rework policy; escalate or halt as appropriate.
+/// 7. **Persist state** — write updated `PipelineStateComment` to the issue
+///    via `executor.issues.post_comment`. State includes contributions from all
+///    nodes in the batch.
+/// 8. **Return** — `StepResult::Completed { node_id, output }` for the node
+///    that completed. For a parallel batch, one representative node is returned;
+///    the caller **must loop** — calling `run_step` again will pick up the next
+///    set of eligible nodes from the persisted state.
 ///
 /// See `docs/spec/interfaces/nodes.md` §run_step for the detailed decision table.
 #[instrument(skip_all, fields(work_item_id = %_work_item_id))]

@@ -87,19 +87,21 @@ pub struct RateLimitState {
     ///
     /// Initialised to `u32::MAX` until the first response with rate-limit
     /// headers is received.
-    pub remaining_requests: u32,
+    pub(crate) remaining_requests: u32,
 
     /// Wall-clock time when the current window resets.
     ///
     /// `None` until a response with rate-limit headers is received.
-    pub window_reset: Option<std::time::Instant>,
+    /// On a 429 response this is set to `Instant::now() + retry_after` from
+    /// the `LlmError::RateLimited { retry_after }` payload.
+    pub(crate) window_reset: Option<std::time::Instant>,
 
     /// `true` when exponential backoff is active after receiving a 429 response.
     ///
     /// While `true` and `now < window_reset`, `LlmGateway::call` returns
     /// `Err(LlmError::RateLimited { ... })` immediately without making a
     /// network call.
-    pub backoff_active: bool,
+    pub(crate) backoff_active: bool,
 }
 
 impl Default for RateLimitState {
@@ -124,6 +126,8 @@ impl Default for RateLimitState {
 /// ```rust,no_run
 /// use std::sync::Arc;
 /// use nodes::gateway::LlmGateway;
+/// # use pipeline::LlmProvider;
+/// # let provider: Arc<dyn LlmProvider> = unimplemented!();
 ///
 /// // provider comes from the `llm` infrastructure crate
 /// let gateway = Arc::new(LlmGateway::new(provider));

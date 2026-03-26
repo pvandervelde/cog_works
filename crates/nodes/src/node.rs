@@ -218,7 +218,7 @@ impl ContextPackLoader {
 /// See `docs/spec/interfaces/nodes.md` §BudgetTracker.
 #[derive(Clone)]
 pub struct BudgetTracker {
-    accumulated: Arc<Mutex<CostBudget>>,
+    accumulated: Arc<Mutex<TokenCost>>,
     limit: CostBudget,
 }
 

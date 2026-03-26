@@ -292,8 +292,8 @@ parallel-node safety.
 
 | Field | Type |
 |-------|------|
-| `accumulated` | `Arc<Mutex<TokenCost>>` |
-| `limit` | `CostBudget` |
+| `accumulated` | `Arc<Mutex<TokenCost>>` — running total of tokens spent so far |
+| `limit` | `CostBudget` — maximum spend allowed for the pipeline run |
 
 **Constructor**:
 

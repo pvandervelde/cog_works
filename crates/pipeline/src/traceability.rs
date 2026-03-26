@@ -164,6 +164,9 @@ impl RequirementRow {
             self.code_covered,
         ];
         let count = covered.iter().filter(|&&b| b).count();
+        // IMPORTANT: the literal `4` matches the four stage fields above.
+        // If `TraceabilityStage` gains a fifth variant, add the corresponding
+        // `bool` field to `RequirementRow` AND update this match arm.
         match count {
             0 => TraceabilityStatus::Missing,
             4 => TraceabilityStatus::Complete,
