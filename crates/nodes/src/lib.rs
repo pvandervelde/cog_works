@@ -47,6 +47,7 @@ pub mod node;
 pub mod planning;
 pub mod review;
 pub mod spawning;
+pub mod templates;
 
 // ─── Re-exports ───────────────────────────────────────────────────────────────
 
@@ -73,3 +74,6 @@ pub use spawning::SpawningNode;
 
 // Executor
 pub use executor::{run_step, PipelineExecutor, StepResult};
+
+// Template engine implementation
+pub use templates::HandlebarsTemplateEngine;
