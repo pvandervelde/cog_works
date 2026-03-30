@@ -1,30 +1,63 @@
 //! CogWorks Extension API client adapter.
 //!
-//! Implements the [`pipeline::DomainServiceClient`] trait (and related traits)
-//! over the Extension API: a JSON request/response protocol carried on Unix
-//! domain sockets (default) or HTTP.
+//! Implements the [`pipeline::DomainServiceClient`] and
+//! [`pipeline::TwinProvisioner`] traits over the Extension API: a JSON
+//! request/response protocol carried on Unix domain sockets (default) or HTTP.
+//!
+//! ## Module Layout
+//!
+//! ```text
+//! lib.rs          ExtensionApiClient + DomainServiceClient/TwinProvisioner impls
+//!                 TransportKind, ServiceTransportConfig, envelope types
+//! unix_socket.rs  UnixSocketTransport (internal, Unix socket framing)
+//! http.rs         HttpTransport       (internal, HTTP/1.1 POST)
+//! ```
 //!
 //! ## Architectural Layer
 //!
 //! **Infrastructure.** Protocol framing, transport selection, handshake,
 //! serialisation, and connection back-off all live here. The [`pipeline`] crate
-//! sees only [`pipeline::DomainServiceClient`].
+//! sees only [`pipeline::DomainServiceClient`] and [`pipeline::TwinProvisioner`].
 //!
-//! ## Transport
+//! ## Transport Selection
 //!
-//! Transport is selected per domain service registration in `.cogworks/services.toml`:
+//! Transport is selected per domain service registration in
+//! `.cogworks/services.toml`:
 //!
 //! - `transport = "unix"` — Unix domain socket (default; file-system permissions
 //!   provide access control).
 //! - `transport = "http"` — HTTP/1.1 (configurable; authentication mechanism
-//!   is to be determined).
+//!   is TBD — do not use on a network boundary without adding authentication).
+//!
+//! ## JSON Envelope Protocol
+//!
+//! Every request is a JSON object:
+//!
+//! ```json
+//! { "version": "1.0", "operation": "<op>", "payload": { ... } }
+//! ```
+//!
+//! Every response is:
+//!
+//! ```json
+//! { "version": "1.0", "status": "ok",    "payload": { ... } }
+//! { "version": "1.0", "status": "error", "error":   "..." }
+//! ```
+//!
+//! The [`RequestEnvelope`] and [`ResponseEnvelope`] types are defined in this
+//! module and used by both transport sub-modules.
 //!
 //! ## Specification
 //!
 //! See `docs/spec/interfaces/domain-traits.md` and
 //! `docs/spec/interfaces/infrastructure.md` §extension-api for the full contract.
-//!
-//! *This crate is a skeleton. Method bodies are added in PR 10.*
+
+// Stub phase: transport types and helpers are unused until method bodies are
+// implemented. These attributes are removed when stubs are implemented.
+#![allow(dead_code)]
+
+pub mod http;
+pub mod unix_socket;
 
 use std::path::PathBuf;
 
@@ -37,6 +70,81 @@ use pipeline::{
     InterfaceMap, NormaliseResult, Scenario, SimulationResults, TwinError, TwinHandle,
     TwinProvisioner, TwinSpec, ValidationResult,
 };
+
+// ─── Internal JSON envelope types ────────────────────────────────────────────
+
+/// JSON request envelope sent to a domain service.
+///
+/// Both [`crate::unix_socket::UnixSocketTransport`] and
+/// [`crate::http::HttpTransport`] serialise this to JSON before sending.
+///
+/// See `docs/spec/interfaces/infrastructure.md` §JSON Envelope Protocol.
+#[derive(Debug, Serialize)]
+pub(crate) struct RequestEnvelope {
+    /// Protocol version; always `"1.0"` at present.
+    pub(crate) version: String,
+    /// Operation name (e.g. `"validate"`, `"health_check"`).
+    pub(crate) operation: String,
+    /// Operation-specific payload.
+    pub(crate) payload: serde_json::Value,
+}
+
+impl RequestEnvelope {
+    /// Creates a new envelope for the given `operation` and `payload`.
+    pub(crate) fn new(operation: impl Into<String>, payload: serde_json::Value) -> Self {
+        Self {
+            version: "1.0".to_string(),
+            operation: operation.into(),
+            payload,
+        }
+    }
+}
+
+/// JSON response envelope received from a domain service.
+///
+/// Both transport implementations deserialise the raw response body into this
+/// type before returning to the caller.
+///
+/// See `docs/spec/interfaces/infrastructure.md` §JSON Envelope Protocol.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ResponseEnvelope {
+    /// Protocol version; should be `"1.0"`.
+    pub(crate) version: String,
+    /// `"ok"` on success; `"error"` on failure.
+    pub(crate) status: String,
+    /// Response payload present when `status == "ok"`.
+    pub(crate) payload: Option<serde_json::Value>,
+    /// Error message present when `status == "error"`.
+    pub(crate) error: Option<String>,
+}
+
+// ─── Internal transport error ─────────────────────────────────────────────────
+
+/// Errors that can occur at the transport layer, before domain-level mapping.
+///
+/// These are mapped to [`pipeline::DomainServiceError`] by
+/// [`ExtensionApiClient`] before returning to callers.
+///
+/// See `docs/spec/interfaces/infrastructure.md` §transport error mapping.
+#[derive(Debug)]
+pub(crate) enum TransportError {
+    /// The connection to the domain service could not be established.
+    ///
+    /// Retried up to `ServiceTransportConfig::max_retries` times.
+    ConnectionFailed { message: String },
+    /// The request was sent but no response was received within the deadline.
+    ///
+    /// Retried up to `ServiceTransportConfig::max_retries` times.
+    Timeout,
+    /// The response body could not be deserialised.
+    ///
+    /// Not retried; indicates a protocol mismatch.
+    ResponseParseError { raw: String },
+    /// The HTTP transport received a non-2xx response.
+    ///
+    /// Not retried.
+    RequestFailed { status: u16, body: String },
+}
 
 // ─── Transport configuration ─────────────────────────────────────────────────
 

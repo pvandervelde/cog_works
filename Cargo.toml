@@ -47,6 +47,10 @@ opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["tonic"] }
 tracing-opentelemetry = "0.28"
 
+# Constant-time comparison (used by listener for HMAC-SHA256 webhook verification)
+# Required to prevent timing-oracle attacks when comparing HMAC digests.
+subtle = "2"
+
 # HTTP client (used by llm and extension-api over HTTP transport)
 reqwest = { version = "0.12", features = [
     "json",
@@ -63,6 +67,9 @@ github-bot-sdk = { git = "https://github.com/pvandervelde/github-bot-sdk", rev =
 # Cloud queue SDK (pvandervelde/queue-runtime)
 # rev is the commit reviewed in PR 11; update intentionally when upgrading.
 queue-runtime = { git = "https://github.com/pvandervelde/queue-runtime", rev = "ac848ffa72608db4e531297cae7ce0f5ba8fcaa2" }
+
+# Template engine (used by HandlebarsTemplateEngine in the nodes crate)
+handlebars = "6"
 
 # Internal workspace crates
 pipeline = { path = "crates/pipeline" }

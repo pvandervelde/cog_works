@@ -80,8 +80,11 @@ use pipeline::{
 ///
 /// See `docs/spec/interfaces/github-traits.md` §GithubClient.
 pub struct GithubClient {
-    // Internal SDK client and installation handle filled in during PR 10.
-    // Declared as `_private` to avoid unused-field warnings on the skeleton.
+    // TODO: replace with the real fields when method bodies are implemented:
+    //   inner: Arc<github_bot_sdk::GitHubClient>
+    //   audit_sender: tokio::sync::mpsc::Sender<(PipelineRunId, WorkItemId, AuditEvent)>
+    //   _flush_handle: tokio::task::JoinHandle<()>
+    // `_private` keeps the skeleton compilable; see SdkClientPlaceholder below.
     _private: (),
 }
 
