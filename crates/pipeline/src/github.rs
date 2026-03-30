@@ -203,10 +203,14 @@ impl std::fmt::Debug for WebhookConfig {
 /// ## Specification
 ///
 /// See `docs/spec/interfaces/github-traits.md` §QueueEventConfig.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct QueueEventConfig {
     /// Serialised `queue_runtime::ProviderConfig` (Azure Service Bus or AWS SQS).
     /// Format is provider-specific; see `queue-runtime` documentation.
+    ///
+    /// **Security**: This field can contain SAS tokens, connection strings, or
+    /// other credentials. It is redacted in the `Debug` impl — never print
+    /// `provider_config` directly.
     pub provider_config: JsonValue,
 
     /// The name of the queue (or topic subscription) to consume from.
@@ -221,6 +225,21 @@ pub struct QueueEventConfig {
 
     /// Maximum number of delivery attempts before a message is dead-lettered.
     pub max_retry_attempts: u32,
+}
+
+/// Redacts `provider_config` to prevent credential leakage in tracing output.
+///
+/// `provider_config` is an opaque JSON value that will contain Azure Service Bus
+/// connection strings or SAS tokens in production. It must never appear in logs.
+impl std::fmt::Debug for QueueEventConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueueEventConfig")
+            .field("provider_config", &"[REDACTED]")
+            .field("queue_name", &self.queue_name)
+            .field("use_session_ordering", &self.use_session_ordering)
+            .field("max_retry_attempts", &self.max_retry_attempts)
+            .finish()
+    }
 }
 
 /// The single interface all pipeline trigger sources satisfy.

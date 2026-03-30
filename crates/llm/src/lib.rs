@@ -81,7 +81,7 @@ impl AnthropicConfig {
 impl std::fmt::Debug for AnthropicConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnthropicConfig")
-            .field("api_key", &"***")
+            .field("api_key", &"[REDACTED]")
             .field("base_url", &self.base_url)
             .finish()
     }

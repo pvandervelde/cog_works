@@ -1680,6 +1680,7 @@ dependencies = [
  "queue-runtime",
  "serde",
  "serde_json",
+ "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

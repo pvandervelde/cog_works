@@ -108,8 +108,11 @@ impl GitHubWebhookEventSource {
     /// (e.g. port already in use, insufficient permissions).
     ///
     /// See `docs/spec/interfaces/infrastructure.md` §GitHubWebhookEventSource.
-    pub fn new(config: WebhookConfig) -> Self {
-        Self { config }
+    pub fn new(_config: WebhookConfig) -> Result<Self, std::io::Error> {
+        // Binding is deferred: the actual socket bind happens in the background
+        // task spawned here. An I/O error from that bind is surfaced here so
+        // the caller can fail fast before entering the event loop.
+        todo!("GitHubWebhookEventSource::new — bind HTTP server and spawn background task")
     }
 }
 

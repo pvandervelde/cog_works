@@ -12,10 +12,13 @@
 //!
 //! ## Authentication
 //!
-//! Authentication for the HTTP transport is TBD. Until a future ADR
-//! specifies the mechanism (mutual TLS, bearer token, or HMAC header), the
-//! transport sends unauthenticated requests. **Do not deploy the HTTP
-//! transport on a network boundary without authentication.**
+//! Authentication for the HTTP transport is TBD. The open decision is tracked
+//! in `docs/adr/ADR-0006-extension-api-http-transport-authentication.md`.
+//! Until that ADR is resolved, the transport sends unauthenticated requests.
+//! **Do not deploy the HTTP transport on a network boundary without
+//! authentication.** Use the Unix socket transport (default) for local
+//! domain services; apply a network-layer control (VPN, private subnet,
+//! firewall) as a compensating control if HTTP must be used remotely.
 //!
 //! ## TLS
 //!

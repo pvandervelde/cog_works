@@ -109,7 +109,6 @@ impl RequestEnvelope {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ResponseEnvelope {
     /// Protocol version; should be `"1.0"`.
-    #[allow(dead_code)]
     pub(crate) version: String,
     /// `"ok"` on success; `"error"` on failure.
     pub(crate) status: String,
