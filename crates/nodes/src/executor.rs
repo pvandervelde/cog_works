@@ -39,12 +39,22 @@ use crate::node::CliConfig;
 /// See `docs/spec/interfaces/nodes.md` §StepResult.
 #[derive(Debug)]
 pub enum StepResult {
-    /// At least one node completed successfully in this step.
+    /// A single node completed successfully in this step.
     Completed {
         /// The node that completed.
         node_id: NodeId,
         /// The node's output, ready to be applied to the pipeline state.
         output: NodeOutput,
+    },
+    /// Multiple nodes completed concurrently in this step (parallel branch).
+    ///
+    /// Used when an `ExecuteParallel` action fired multiple nodes. The caller
+    /// must apply **all** results to the pipeline state before evaluating
+    /// outgoing edges. Results are in completion order (not the order given
+    /// to `ExecuteParallel`).
+    CompletedParallel {
+        /// Per-node results for every node in the parallel branch.
+        results: Vec<(NodeId, NodeOutput)>,
     },
     /// A [`pipeline::NodeGate::HumanGated`] node is awaiting reviewer approval.
     Gated {

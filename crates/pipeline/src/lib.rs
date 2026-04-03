@@ -79,18 +79,18 @@ pub use audit::{
 pub use errors::{CogWorksError, RetryPolicy};
 pub use github::{
     CodeRepository, DirectoryEntry, DirectoryEntryKind, EventSource, EventSourceError, FileContent,
-    GitHubEvent, GitHubOperationError, Issue, IssueState, IssueTracker, Label, Milestone,
-    ProjectBoard, PullRequest, PullRequestFilter, PullRequestManager, QueueEventConfig,
+    GitHubEvent, GitHubOperationError, Issue, IssueComment, IssueState, IssueTracker, Label,
+    Milestone, ProjectBoard, PullRequest, PullRequestFilter, PullRequestManager, QueueEventConfig,
     ReviewDecision, ReviewStatus, SubIssue, TypedLink, TypedLinkKind, WebhookConfig,
 };
 pub use graph::{
     CompositeCondition, CycleError, EdgeConditionKind, EdgeDefinition, EdgeEvaluationRecord,
-    EvaluationMode, EvaluatorKind, Expression, GraphValidationError, NaturalLanguageCondition,
-    NodeDefinition, NodeGate, NodeState, NodeStatus, NodeType, OverflowBehaviour,
-    PipelineConfiguration, PipelineGraph, PipelineSettings, PipelineState, PipelineStateComment,
-    PipelineToolProfileConfig, ReworkEdge, ReworkSemantics, SchemaVersion, TimeoutSeconds,
-    ValidationKind, compute_eligible_nodes, evaluate_deterministic_condition, topological_sort,
-    validate_pipeline_graph,
+    EvaluationMode, EvaluatorKind, Expression, GateConfig, GateStatus, GraphValidationError,
+    NaturalLanguageCondition, NodeDefinition, NodeGate, NodeState, NodeStatus, NodeType,
+    OverflowBehaviour, PipelineConfiguration, PipelineGraph, PipelineSettings, PipelineState,
+    PipelineStateComment, PipelineToolProfileConfig, ReworkEdge, ReworkSemantics, SchemaVersion,
+    TimeoutSeconds, ValidationKind, compute_eligible_nodes, evaluate_deterministic_condition,
+    topological_sort, validate_pipeline_graph,
 };
 pub use identifiers::{
     ArtifactPath, BranchName, CommitSha, ContextPackId, DomainServiceName, EdgeId, GitObjectSha,
@@ -145,10 +145,9 @@ pub use labels::{PipelineLabel, generate_label, parse_label};
 
 // Re-exports from execution
 pub use execution::{
-    DependencyError, EscalationReason, GateConfig, GateStatus, NextAction, NodeOutput,
-    NodeStateUpdate, PipelineError, SubWorkItem, TerminationConditionReached, check_fan_in_ready,
-    determine_next_actions, evaluate_edge_condition, increment_rework_counter,
-    topological_sort_sub_work_items,
+    DependencyError, EscalationReason, NextAction, NodeOutput, NodeStateUpdate, PipelineError,
+    SubWorkItem, TerminationConditionReached, check_fan_in_ready, determine_next_actions,
+    evaluate_edge_condition, increment_rework_counter, topological_sort_sub_work_items,
 };
 
 // Re-exports from budget

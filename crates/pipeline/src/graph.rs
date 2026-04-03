@@ -358,6 +358,65 @@ pub struct NodeState {
     pub rework_edge_traversals: HashMap<EdgeId, u32>,
 }
 
+/// Human-gate status for a specific node within an active pipeline run.
+///
+/// Tracks whether a human has approved or rejected a gated node's output.
+///
+/// Persisted as part of [`PipelineStateComment`] so that gate decisions
+/// survive process restarts without requiring a re-approval.
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §GateStatus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GateStatus {
+    /// The node completed successfully and is waiting for human review.
+    AwaitingApproval,
+    /// A human reviewer approved this node's output; the pipeline may continue.
+    Approved {
+        /// The GitHub username of the approver.
+        ///
+        /// Raw `String` — no `GitHubUsername` newtype exists in the identifiers
+        /// module. Values originate from the GitHub API `login` field and are
+        /// expected to be non-empty strings conforming to GitHub's username
+        /// constraints (alphanumeric + hyphens, 1–39 chars). No validation is
+        /// performed here; the GitHub API is the authoritative source.
+        approved_by: String,
+    },
+    /// A human reviewer rejected this node's output; the pipeline must not continue.
+    Rejected {
+        /// The GitHub username of the reviewer.
+        ///
+        /// Raw `String` — no `GitHubUsername` newtype exists in the identifiers
+        /// module. Values originate from the GitHub API `login` field and are
+        /// expected to be non-empty strings conforming to GitHub's username
+        /// constraints (alphanumeric + hyphens, 1–39 chars). No validation is
+        /// performed here; the GitHub API is the authoritative source.
+        rejected_by: String,
+        /// Human-readable explanation of the rejection.
+        reason: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+
+/// Runtime gate state for all nodes in an active pipeline run.
+///
+/// Persisted inside [`PipelineStateComment`] so that gate approvals and
+/// rejections survive process restarts.  On resume the executor reconstructs
+/// this value from the latest state comment and passes it unchanged to
+/// [`crate::determine_next_actions`].
+///
+/// See `docs/spec/interfaces/pipeline-execution.md` §GateConfig.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GateConfig {
+    /// Per-node gate status, keyed by the node that completed and was gated.
+    ///
+    /// Nodes absent from this map have never been gated (or were
+    /// `AutoProceed` nodes).
+    pub gated_nodes: HashMap<NodeId, GateStatus>,
+}
+
+// ---------------------------------------------------------------------------
+
 /// The complete runtime state of a pipeline run at a single point in time.
 ///
 /// Updated atomically at every node boundary and persisted via
@@ -488,6 +547,14 @@ pub struct PipelineStateComment {
     pub work_item_id: WorkItemId,
     /// Full pipeline runtime state at the time this comment was written.
     pub state: PipelineState,
+    /// Gate approval and rejection records for all human-gated nodes in this run.
+    ///
+    /// Persisted alongside `state` so that gate decisions survive process
+    /// restarts.  On resume, the executor passes this value directly to
+    /// [`crate::determine_next_actions`].  An absent field deserialises as
+    /// [`GateConfig::default`] (empty map), which is correct for fresh runs.
+    #[serde(default)]
+    pub gate_config: GateConfig,
     /// SHA-256 hex digest of the pipeline configuration used for this run.
     ///
     /// Compared on resume to detect configuration drift. A mismatch must

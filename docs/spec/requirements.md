@@ -108,7 +108,7 @@ The orchestrator MUST support three types of edge conditions: deterministic cond
 
 ### REQ-EDGE-002: Edge priority and mutual exclusion
 
-When multiple edges leave the same source node, the orchestrator MUST evaluate them in declared order. The configuration MUST support: `all-matching` (all true edges taken — fan-out), `first-matching` (only first true edge taken — exclusive routing), and `explicit` (node output names the edges to take). The evaluation mode MUST be declared per source node.
+When multiple edges leave the same source node, the orchestrator MUST evaluate them in declared order. The configuration MUST support: `all-matching` (all true edges taken — fan-out), `first-matching` (only first true edge taken — exclusive routing), and `explicit` (the pipeline configuration declares exactly which edges fire for nodes using this mode; the explicit edge list is fixed at configuration load time and stored in `PipelineGraph::explicit_edge_lists`). The evaluation mode MUST be declared per source node.
 
 ### REQ-EDGE-003: Rework edges
 

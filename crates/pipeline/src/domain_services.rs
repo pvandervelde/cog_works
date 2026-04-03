@@ -158,13 +158,15 @@ pub struct InterfaceMap {
 /// `(dependency, dependent)` pairs; the first element is the lib/module
 /// that is depended on and the second is the one that depends on it.
 ///
+/// Nodes are repo-relative artifact paths (module/package identifiers).
+///
 /// See `docs/spec/interfaces/domain-traits.md` §DependencyGraph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyGraph {
-    /// Dependency graph nodes (module/package identifiers, domain-specific).
-    pub nodes: Vec<String>,
+    /// Dependency graph nodes (module/package artifact paths, repo-relative).
+    pub nodes: Vec<ArtifactPath>,
     /// Directed edges: `(dependency, dependent)`.
-    pub edges: Vec<(String, String)>,
+    pub edges: Vec<(ArtifactPath, ArtifactPath)>,
 }
 
 // ---------------------------------------------------------------------------

@@ -116,12 +116,14 @@ pub struct InterfaceMap {
 
 ### DependencyGraph
 
-Directed graph of domain dependencies.
+Directed graph of domain dependencies. Nodes represent artifact paths
+(module/package identifiers as repo-relative paths); edges represent
+`(dependency, dependent)` pairs.
 
 ```rust
 pub struct DependencyGraph {
-    pub nodes: Vec<String>,
-    pub edges: Vec<(String, String)>,  // (dependency, dependent)
+    pub nodes: Vec<ArtifactPath>,
+    pub edges: Vec<(ArtifactPath, ArtifactPath)>,  // (dependency, dependent)
 }
 ```
 

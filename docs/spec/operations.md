@@ -70,13 +70,13 @@ On startup, CogWorks performs a handshake with each registered service to discov
 ### CLI Interface
 
 ```
-cogworks process <issue-url>     # Process a single work item (one step)
-cogworks process-all <repo>      # Scan repo for trigger labels, process each
-cogworks process-all <repo> --milestone "v2.0"  # Process only work items in a specific milestone
-cogworks status <issue-url>      # Display current pipeline state (read-only)
-cogworks cost-report <issue-url> # Display cost report for a pipeline
-cogworks health                  # Check health of all registered domain services
-cogworks health <service-name>   # Check health of a specific domain service
+cogworks run --issue <number>               # Process a single work item (one step)
+cogworks run-all --repo <owner/repo>        # Scan repo for trigger labels, process each
+cogworks run-all --repo <owner/repo> --milestone "v2.0"  # Process only work items in a specific milestone
+cogworks status --issue <number>            # Display current pipeline state (read-only)
+cogworks cost-report --issue <number>       # Display cost report for a pipeline
+cogworks health                             # Check health of all registered domain services
+cogworks health <service-name>              # Check health of a specific domain service
 ```
 
 ### Future: Poll Mode
@@ -392,7 +392,7 @@ The metric sink is configured in `.cogworks/config.toml`:
 1. Restart the domain service process.
 2. Verify the socket/port is not in use by another process.
 3. If the service was never started, start it with the appropriate command for that domain.
-4. Re-invoke: `cogworks process <issue-url>`.
+4. Re-invoke: `cogworks run --issue <number>`.
 
 ---
 
@@ -429,7 +429,7 @@ The metric sink is configured in `.cogworks/config.toml`:
 1. If schema error: fix the TOML file to match the interface definition schema.
 2. If parameter conflict: resolve conflicting definitions across files for the same interface parameter.
 3. If unknown domain: either register the missing domain service in `.cogworks/services.toml` or remove the interface definition referencing it.
-4. Re-invoke: `cogworks process <issue-url>`.
+4. Re-invoke: `cogworks run --issue <number>`.
 
 ---
 
@@ -445,7 +445,7 @@ The metric sink is configured in `.cogworks/config.toml`:
 **Resolution**:
 
 1. Remove `cogworks:processing` label.
-2. Re-invoke: `cogworks process <issue-url>`.
+2. Re-invoke: `cogworks run --issue <number>`.
 3. The system will read GitHub state and resume from the last completed step.
 
 ---
@@ -480,7 +480,7 @@ The metric sink is configured in `.cogworks/config.toml`:
 
 1. Address review comments on the PR (or close it).
 2. Apply `cogworks:status:pending` label to the sub-work-item issue.
-3. Re-invoke: `cogworks process <parent-issue-url>`.
+3. Re-invoke: `cogworks run --issue <parent-number>`.
 4. The system will detect the pending sub-work-item and re-generate code incorporating the review feedback.
 
 ---
@@ -632,7 +632,7 @@ The metric sink is configured in `.cogworks/config.toml`:
 **Resolution**:
 
 - **If genuine injection attempt**: Mark the work item as contaminated. Remove the `cogworks:run` label and add a comment documenting the contamination. Do not remove the `cogworks:hold` label. Notify the team about the injection attempt origin.
-- **If false positive**: Remove the `cogworks:hold` label with a comment documenting why the flagged content is legitimate (e.g., "False positive — security test pseudocode, not an injection attempt"). Include the reviewer's name. Re-invoke: `cogworks process <issue-url>`.
+- **If false positive**: Remove the `cogworks:hold` label with a comment documenting why the flagged content is legitimate (e.g., "False positive — security test pseudocode, not an injection attempt"). Include the reviewer's name. Re-invoke: `cogworks run --issue <number>`.
 
 **Alert recommendation**: Integrate `cogworks_injection_detected_total` metric with an alert. Any non-zero value warrants immediate review.
 
@@ -654,7 +654,7 @@ The metric sink is configured in `.cogworks/config.toml`:
 2. For `SCOPE_UNDERSPECIFIED`: Update the specification PR or interface document to explicitly include the needed capability.
 3. For `SCOPE_AMBIGUOUS`: Clarify the ambiguous specification section by updating the spec PR with a more explicit definition.
 4. After updating the specification, the Interface Design node may need to be re-run to update the interface document.
-5. Re-invoke: `cogworks process <issue-url>`.
+5. Re-invoke: `cogworks run --issue <number>`.
 
 ---
 

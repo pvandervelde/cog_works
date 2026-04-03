@@ -446,6 +446,25 @@ pub enum GitHubOperationError {
     },
 }
 
+/// A single comment on a GitHub Issue.
+///
+/// Returned by [`IssueTracker::list_comments`]. Used for pipeline state
+/// reconstruction (reading the latest [`crate::PipelineStateComment`] JSON)
+/// and for locating processing-lock timestamp records (THREAT-007 mitigation).
+///
+/// See `docs/spec/interfaces/github-traits.md` §IssueComment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueComment {
+    /// Numeric GitHub comment ID.
+    pub id: u64,
+    /// Login name of the comment author.
+    pub author: String,
+    /// Comment body (Markdown).
+    pub body: String,
+    /// When the comment was created (UTC).
+    pub created_at: DateTime<Utc>,
+}
+
 /// GitHub Issues API — the operations the pipeline domain needs to read and
 /// update work items, sub-issues, labels, comments, and milestones.
 ///
@@ -467,6 +486,7 @@ pub enum GitHubOperationError {
 /// | `add_typed_link` | GraphQL `issueLink` mutation |
 /// | `get_typed_links` | GraphQL `issueLink` query |
 /// | `set_milestone` | PATCH issue milestone field |
+/// | `list_comments` | `issues().list_comments(owner, repo, number)` |
 ///
 /// ## Specification
 ///
@@ -587,6 +607,27 @@ pub trait IssueTracker: Send + Sync {
     /// - [`GitHubOperationError::NotFound`] — issue does not exist.
     /// - [`GitHubOperationError::PermissionDenied`] — insufficient write access.
     async fn post_comment(&self, id: WorkItemId, body: &str) -> Result<(), GitHubOperationError>;
+
+    /// List all comments on an issue, in ascending creation order.
+    ///
+    /// Used to:
+    /// - Reconstruct [`crate::PipelineStateComment`] on resume (read the last
+    ///   comment whose body is valid JSON with the `pipeline_run_id` field).
+    /// - Locate processing-lock timestamp records for THREAT-007 stale-lock
+    ///   detection (look for comments with body starting with
+    ///   `COGWORKS_LOCK:`).
+    ///
+    /// **SDK gap**: requires `github-bot-sdk` `issues().list_comments(owner,
+    /// repo, number)` support.
+    ///
+    /// # Errors
+    ///
+    /// - [`GitHubOperationError::NotFound`] — issue does not exist.
+    /// - [`GitHubOperationError::SdkCapabilityMissing`] — SDK addition pending.
+    async fn list_comments(
+        &self,
+        id: WorkItemId,
+    ) -> Result<Vec<IssueComment>, GitHubOperationError>;
 
     /// Return the current lifecycle state of an issue without fetching all fields.
     ///

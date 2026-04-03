@@ -25,6 +25,7 @@
 //! | `IssueTracker::add_typed_link` | GraphQL `issueLink` mutation |
 //! | `IssueTracker::get_typed_links` | GraphQL `issueLink` query |
 //! | `IssueTracker::set_milestone` | PATCH issue milestone field |
+//! | `IssueTracker::list_comments` | `issues().list_comments(owner, repo, number)` |
 //! | `PullRequestManager::find_pull_requests` | List PRs with filter params |
 //! | `PullRequestManager::post_review_comment` | Create inline PR review comment |
 //! | `CodeRepository::read_file` | GitHub Contents API |
@@ -54,8 +55,8 @@ use pipeline::{
     BranchName, CommitSha, MilestoneId, PipelineRunId, PullRequestId, RepositoryId, WorkItemId,
     audit::{AuditEvent, AuditStore, AuditStoreError, PipelineSummary},
     github::{
-        CodeRepository, DirectoryEntry, FileContent, GitHubOperationError, Issue, IssueState,
-        IssueTracker, Label, Milestone, ProjectBoard, PullRequest, PullRequestFilter,
+        CodeRepository, DirectoryEntry, FileContent, GitHubOperationError, Issue, IssueComment,
+        IssueState, IssueTracker, Label, Milestone, ProjectBoard, PullRequest, PullRequestFilter,
         PullRequestManager, ReviewStatus, SubIssue, TypedLink, TypedLinkKind,
     },
 };
@@ -183,6 +184,17 @@ impl IssueTracker for GithubClient {
     #[instrument(skip(self))]
     async fn post_comment(&self, _id: WorkItemId, _body: &str) -> Result<(), GitHubOperationError> {
         todo!("IssueTracker::post_comment — implemented in PR 10")
+    }
+
+    #[instrument(skip(self))]
+    async fn list_comments(
+        &self,
+        _id: WorkItemId,
+    ) -> Result<Vec<IssueComment>, GitHubOperationError> {
+        // SDK gap: REST list issue comments not yet in github-bot-sdk.
+        Err(GitHubOperationError::SdkCapabilityMissing {
+            capability: "list_issue_comments".to_string(),
+        })
     }
 
     #[instrument(skip(self))]

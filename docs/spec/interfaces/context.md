@@ -289,7 +289,7 @@ pub struct ContextAssemblyRequest {
   Used to fetch per-module summaries from `SummaryCache`.
 - `scenario_holdout_dirs` — repo-relative directories containing scenario files.
   Items derived from these paths are removed by `enforce_scenario_holdout` before
-  context assembly.
+  context assembly. Uses `ArtifactPath` (not `PathBuf`) to stay platform-neutral.
 - `pipeline_working_dir` — root of the pipeline's working directory checkout.
   Used to resolve relative paths when fetching summaries.
 
@@ -401,7 +401,7 @@ never silently dropped.
 ```rust
 pub fn enforce_scenario_holdout(
     items: Vec<ContextItem>,
-    holdout_dirs: &[PathBuf],
+    holdout_dirs: &[ArtifactPath],
 ) -> HoldoutFilteredItems
 ```
 

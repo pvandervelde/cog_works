@@ -120,6 +120,13 @@ All gate states for an active run, keyed by `NodeId`.
 |-------|------|-------------|
 | `gated_nodes` | `HashMap<NodeId, GateStatus>` | Per-node gate status |
 
+**Location note**: `GateConfig` and `GateStatus` are defined in
+`pipeline/src/graph.rs` (alongside `PipelineState`) and re-exported from
+`pipeline/src/execution.rs`. This placement avoids a circular module
+dependency: `execution.rs` imports from `graph.rs`, so placing gate types in
+`graph.rs` allows `PipelineStateComment` to embed `GateConfig` without a
+circular import. See `pipeline-graph.md §GateConfig`.
+
 ---
 
 ### Type: `PipelineError`
@@ -256,21 +263,44 @@ pub fn evaluate_edge_condition(
     cond: &EdgeConditionKind,
     state: &PipelineState,
     output: &NodeOutput,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
     evaluated_at: Timestamp,
 ) -> (bool, EdgeEvaluationRecord)
 ```
 
 **Purpose**: Evaluates a single edge condition and produces an audit record.
+Pure synchronous function — no I/O.
 
 **Parameters**:
 
 - `edge_id` — Required to populate `EdgeEvaluationRecord::edge_id`.
+- `llm_evaluated_results` — Pre-resolved LLM evaluation outcomes, keyed by
+  `EdgeId`. The `nodes` crate populates this before calling this function (see
+  **Calling convention** below).
 - `evaluated_at` — Passed explicitly so the function remains pure.
 
 **Dispatch**:
 
 - `Deterministic(expr)` → delegates to `evaluate_deterministic_condition(expr, state)`.
-- `LlmEvaluated(nlc)` → evaluated by the LLM gateway (wired in PR 9).
+- `LlmEvaluated(_)` → looks up `llm_evaluated_results[edge_id]`. If the key
+  is absent (should not occur in correct usage), treats as `false` (conservative
+  fallback). The caller is responsible for ensuring the map is fully populated.
+- `Composite(_)` → recursively evaluates inner conditions.
+
+**Calling convention** (`nodes` crate, PR 9):
+
+```text
+1. After a node completes, collect all outgoing edges with LlmEvaluated conditions.
+2. For each such edge, call LlmGateway::call asynchronously with the NLC and
+   serialised node output; collect the bool result.
+3. Build llm_evaluated_results: HashMap<EdgeId, bool> from these results.
+4. For every outgoing edge (all condition kinds), call evaluate_edge_condition
+   with the same llm_evaluated_results map (empty if no LlmEvaluated edges).
+```
+
+This preserves the purity of `evaluate_edge_condition` (no async, no I/O) while
+satisfying the `pipeline` crate's no-I/O constraint
+(`docs/spec/constraints.md §Module Boundaries`).
 - `Composite(_)` → recursively evaluates inner conditions.
 
 The `input_snapshot` field of the returned `EdgeEvaluationRecord` is

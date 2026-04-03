@@ -84,9 +84,8 @@ let client = Arc::new(GithubClient::new(Arc::new(sdk)));
 | `IssueTracker::remove_label` | `sdk.issues().remove_label(owner, repo, number, name)` | |
 | `IssueTracker::post_comment` | `sdk.issues().create_comment(owner, repo, number, body)` | |
 | `IssueTracker::get_issue_state` | `sdk.issues().get(owner, repo, number)` — inspect `.state` | |
-| `IssueTracker::get_milestone` | `sdk.issues().get_milestone(owner, repo, number)` | |
-| `IssueTracker::set_milestone` | *(SDK gap — PATCH issue .milestone)* | Returns `SdkCapabilityMissing` |
-| `PullRequestManager::create_pull_request` | `sdk.pull_requests().create(owner, repo, body)` | |
+| `IssueTracker::get_milestone` | `sdk.milestones().get(owner, repo, milestone_number)` — GitHub REST `GET /repos/{owner}/{repo}/milestones/{milestone_number}` | |
+| `IssueTracker::list_comments` | *(SDK gap — `issues().list_comments(owner, repo, number)`)* | Returns `SdkCapabilityMissing` || `IssueTracker::set_milestone` | *(SDK gap \u2014 PATCH issue .milestone)* | Returns `SdkCapabilityMissing` || `PullRequestManager::create_pull_request` | `sdk.pull_requests().create(owner, repo, body)` | |
 | `PullRequestManager::get_pull_request` | `sdk.pull_requests().get(owner, repo, number)` | |
 | `PullRequestManager::find_pull_requests` | *(SDK gap — list with filters)* | Returns `SdkCapabilityMissing` |
 | `PullRequestManager::post_review_comment` | *(SDK gap — inline PR review comment)* | Returns `SdkCapabilityMissing` |
@@ -596,6 +595,97 @@ fn run_service(executor, config, event_source) -> !  // loops forever
 ## Section 6 — `nodes` Crate Addition
 
 ### HandlebarsTemplateEngine (`nodes/src/templates.rs`)
+
+```rust
+pub struct HandlebarsTemplateEngine {
+    registry: handlebars::Handlebars<'static>,
+    required_vars: HashMap<String, Vec<String>>,
+}
+```
+
+`HandlebarsTemplateEngine` implements `pipeline::TemplateEngine`. Templates
+are registered at construction time via `register_template`. The
+`required_vars` map holds the declared required variable names per template
+(populated from a template manifest file at startup).
+
+**Template location**: Templates are expected in `.cogworks/templates/` in the
+repository working directory. Each template is a Handlebars file (`.hbs`
+extension). The manifest `.cogworks/templates/manifest.toml` lists required
+variables per template name.
+
+The `HandlebarsTemplateEngine` is an internal implementation detail of the
+`nodes` crate. The `cli` composition root creates an instance and injects it
+as `Arc<dyn TemplateEngine>` into the nodes that need it.
+
+---
+
+## Section 7 — CLI-Wired Adapters (`cli` crate, implements `pipeline` traits)
+
+### SummaryCache — `GithubCommentSummaryCache`
+
+Concrete adapter that implements `pipeline::SummaryCache`. Wired in `cli`.
+
+**Storage**: Pyramid summaries are stored as GitHub issue comments on the
+work-item issue using a structured prefix:
+
+```
+COGWORKS_SUMMARY: {"artifact_path":"<path>","level":"<L1|L2|L3|L4>","content":"..."}
+```
+
+**Struct fields** (private):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `issues` | `Arc<dyn IssueTracker>` | For reading and writing summary comments |
+| `work_item_id` | `WorkItemId` | The issue used as the backing store |
+
+**Cache key**: `(ArtifactPath, SummaryLevel)`.
+
+**Cache invalidation**: Summaries are not invalidated within a single pipeline
+run. Stale summaries from previous runs are identified by checking whether the
+summary's `git_ref` (stored in the comment JSON) matches the current HEAD SHA.
+If mismatched, the adapter fetches and re-stores the summary.
+
+**Construction** (in `cli`):
+
+```rust
+let summary_cache = Arc::new(GithubCommentSummaryCache::new(
+    Arc::clone(&github_client),
+    work_item_id,
+));
+```
+
+---
+
+### InterfaceRegistryLoader — `TomlInterfaceRegistryLoader`
+
+Concrete adapter that implements `pipeline::InterfaceRegistryLoader`. Wired in `cli`.
+
+**Storage**: Interface definitions are stored as TOML files under a directory
+declared in `.cogworks/config.toml` (`[interfaces] registry_dir`). The default
+path is `.cogworks/interfaces/`.
+
+**File format**: Each file in the registry directory is a TOML document
+representing a single `InterfaceDefinition`. The file name (minus extension) is
+used as the `InterfaceId`.
+
+**Struct fields** (private):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `registry_dir` | `PathBuf` | Absolute path to the interface registry directory |
+
+**Construction** (in `cli`):
+
+```rust
+let registry_loader = Arc::new(TomlInterfaceRegistryLoader::new(registry_dir));
+```
+
+**Error conditions**:
+
+- `RegistryError::NotFound` — the registry directory does not exist.
+- `RegistryError::ParseError` — a TOML file in the registry directory has invalid syntax.
+- `RegistryError::IoError` — filesystem read failure.
 
 ```rust
 pub struct HandlebarsTemplateEngine {

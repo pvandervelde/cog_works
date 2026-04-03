@@ -158,7 +158,25 @@ This document identifies security threats to CogWorks and specifies mitigations.
 
 **Mitigations**:
 
-1. **Timestamp tracking**: When applying the processing label, post a comment recording the timestamp. On subsequent invocations, check if the lock is older than a configurable timeout (default: 30 minutes).
+1. **Timestamp tracking**: When applying the processing label, post a comment with the following **LockComment** format:
+
+   ```
+   COGWORKS_LOCK: {"locked_at":"<RFC 3339 UTC timestamp>","run_id":"<PipelineRunId>"}
+   ```
+
+   Example:
+   ```
+   COGWORKS_LOCK: {"locked_at":"2026-04-01T10:23:45Z","run_id":"run-abc123"}
+   ```
+
+   On subsequent invocations, call `IssueTracker::list_comments`, scan for the
+   comment authored by the CogWorks bot whose body starts with `COGWORKS_LOCK: `,
+   parse the JSON after the prefix, and check `locked_at`. If the most recent such
+   comment is older than the configured stale-lock timeout (default: 30 minutes),
+   the lock is stale.
+
+   The `run_id` field is logged for debugging but is not used in the staleness check.
+
 2. **Stale lock override**: If the lock is stale, remove it and proceed. Log a warning.
 3. **Cleanup on exit**: The step function removes the processing label in a `finally` / drop guard, even on error.
 

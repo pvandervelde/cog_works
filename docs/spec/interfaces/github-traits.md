@@ -240,6 +240,29 @@ pub enum GitHubOperationError {
 
 ---
 
+### IssueComment
+
+A single comment posted on a GitHub Issue.
+
+```rust
+pub struct IssueComment {
+    pub id: u64,
+    pub author: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+}
+```
+
+Used for:
+- **Pipeline state reconstruction on resume**: `run_step` step 3 calls
+  `list_comments` and scans for a comment whose body parses as a valid
+  `PipelineStateComment` JSON object. The latest such comment wins.
+- **Stale-lock detection** (THREAT-007): Look for comments with bodies
+  starting with `COGWORKS_LOCK:` and parse the embedded timestamp. See
+  `docs/spec/security.md §THREAT-007` and the `LockComment` format below.
+
+---
+
 ### IssueTracker
 
 ```rust
@@ -254,6 +277,7 @@ pub trait IssueTracker: Send + Sync {
     async fn add_label(&self, id: WorkItemId, label: &Label) -> Result<(), GitHubOperationError>;
     async fn remove_label(&self, id: WorkItemId, label: &Label) -> Result<(), GitHubOperationError>;
     async fn post_comment(&self, id: WorkItemId, body: &str) -> Result<(), GitHubOperationError>;
+    async fn list_comments(&self, id: WorkItemId) -> Result<Vec<IssueComment>, GitHubOperationError>;
     async fn get_issue_state(&self, id: WorkItemId) -> Result<IssueState, GitHubOperationError>;
     async fn get_milestone(&self, id: MilestoneId) -> Result<Milestone, GitHubOperationError>;
     async fn set_milestone(&self, id: WorkItemId, milestone: Option<MilestoneId>) -> Result<(), GitHubOperationError>;
@@ -261,6 +285,32 @@ pub trait IssueTracker: Send + Sync {
 ```
 
 **Idempotency**: `add_label` and `remove_label` are idempotent (no-op if already in target state).
+
+`list_comments` returns comments in ascending `created_at` order (oldest first). The
+implementation calls `sdk.issues().list_comments(owner, repo, number)`.
+
+`get_milestone` looks up a **Milestone by its own numeric ID** (not by the issue it
+is attached to). It maps to the GitHub REST endpoint
+`GET /repos/{owner}/{repo}/milestones/{milestone_number}`, implemented via
+`sdk.milestones().get(owner, repo, milestone_number)` — **not** via
+`sdk.issues().get_milestone(…)`. The intent is to resolve a `MilestoneId` to a
+human-readable `Milestone` struct (title, due date) when the Planning node needs to
+display or record milestone information. To find the milestone attached to a specific
+issue, use `get_issue(id).milestone` instead.
+
+#### SDK Gap Table
+
+| Method | Required SDK capability |
+|--------|------------------------|
+| `list_sub_issues` | Sub-issues REST endpoint |
+| `create_sub_issue` | Sub-issues REST endpoint |
+| `add_typed_link` | GraphQL `issueLink` mutation |
+| `get_typed_links` | GraphQL `issueLink` query |
+| `set_milestone` | PATCH issue milestone field |
+| `list_comments` | `issues().list_comments(owner, repo, number)` |
+
+Until these capabilities land in `github-bot-sdk`, implementations return
+`GitHubOperationError::SdkCapabilityMissing`.
 
 ---
 
@@ -503,13 +553,26 @@ pub trait AuditStore: Send + Sync {
 }
 ```
 
+**Durability contract**: `record_event` implementations **may buffer events**
+and are **not** required to provide per-call durability guarantees. Events may
+be lost if the process crashes between a `record_event` call and the next
+scheduled flush. Callers that require at-least-once delivery of an event must
+call a flush checkpoint (e.g., before writing `PipelineStateComment`). The
+`write_summary` call at the end of a pipeline run acts as an implicit flush
+for the `GithubClient` implementation.
+
+Trait documentation must make this buffering behaviour visible rather than
+implying immediate durability with simple write semantics.
+
 **GitHub implementation format** (PR 10):
 
-- `record_event`: Each event is a `<details>` collapsible Markdown block posted
-  as a GitHub comment on the work-item issue. Events may be batched and flushed
-  on a timer to avoid rate limit exhaustion.
+- `record_event`: Events are batched internally and flushed either every 30
+  seconds or when the batch reaches 10 events, whichever comes first. Each
+  flush posts a `<details>` collapsible Markdown block as a GitHub issue
+  comment. This batching avoids rate-limit exhaustion.
 - `write_summary`: A Markdown table summarising the run, posted as the final
-  comment on the work-item issue.
+  comment on the work-item issue. Triggers an immediate flush of any pending
+  batched events before posting the summary.
 
 ---
 

@@ -131,7 +131,7 @@ direction. See `docs/spec/interfaces/README.md` for the full dependency graph.
 - **Protected paths**: CogWorks MUST NOT create or modify files matching protected path patterns through the normal pipeline. Protected paths include at minimum: the constitutional rules file, prompt template files, scenario specification files, and Extension API schemas. The protected path list is version-controlled and configurable.
 - **Rate limit respect**: The system must respect GitHub API rate limits (5000/hr for authenticated requests). Track remaining budget from response headers, back off proactively.
 - **LLM API rate limit respect**: The LLM Gateway must respect provider-imposed rate limits (requests per time window). Rate-limit state must be tracked from provider response headers, shared across parallel nodes, and enforced proactively (throttle before hitting the limit, not just react to 429s). If the required wait time exceeds the configured halt threshold (default: 30 minutes), the step must halt with a retriable exit code rather than blocking indefinitely.
-- **Extension API authentication**: For Unix domain sockets, file system permissions provide access control. For HTTP/gRPC transport, authentication mechanism is to be determined but the design must not preclude adding authentication later (e.g., bearer tokens, mutual TLS).
+- **Extension API authentication**: For Unix domain sockets, file system permissions provide access control. For HTTP/gRPC transport, authentication mechanism is to be determined but the design must not preclude adding authentication later (e.g., bearer tokens, mutual TLS). (see ADR-0006)
 
 ---
 

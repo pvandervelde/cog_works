@@ -110,9 +110,15 @@ Controls how outgoing edges from a node are selected after the node completes.
 |---------|-----------|
 | `AllMatching` | Every edge whose condition is `true` fires (fan-out) |
 | `FirstMatching` | First edge (declaration order) whose condition is `true` fires |
-| `Explicit` | Only edges listed in an explicit-edges list fire |
+| `Explicit` | Only the edges listed in `PipelineGraph::explicit_edge_lists[node_id]` fire; the list is fixed at configuration load time |
 
 Default: `FirstMatching` (nodes absent from `PipelineGraph::evaluation_modes`).
+
+**`Explicit` mode is static, not dynamic.** The set of edges to fire is declared
+in the pipeline configuration (in `PipelineGraph::explicit_edge_lists`) and does
+not change at runtime based on node output. This is aligned with REQ-EDGE-002.
+`validate_pipeline_graph` must reject any node whose `evaluation_modes` entry is
+`Explicit` but which is absent from `explicit_edge_lists`.
 
 ---
 
@@ -371,8 +377,42 @@ from GitHub`).
 | `pipeline_run_id` | `PipelineRunId` | Run identifier |
 | `work_item_id` | `WorkItemId` | GitHub issue being processed |
 | `state` | `PipelineState` | Full runtime state |
+| `gate_config` | `GateConfig` | Gate approval/rejection records; `#[serde(default)]` so absent field deserialises as empty map (correct for fresh runs) |
 | `graph_hash` | `String` | SHA-256 hex of the pipeline config; mismatch on resume → escalate |
 | `written_at` | `Timestamp` | Authoring timestamp |
+
+**Recovery contract**: On resume, the executor reads the latest
+`PipelineStateComment` from the issue, deserialises both `state` and
+`gate_config`, and passes them directly to `determine_next_actions`. No
+gate approvals are lost across restarts.
+
+---
+
+### `GateStatus`
+
+Human-gate review state for a specific node.
+
+```
+AwaitingApproval
+Approved  { approved_by: String }
+Rejected  { rejected_by: String, reason: String }
+```
+
+Defined in `graph.rs` alongside `PipelineState` (not in `execution.rs`) so
+that `PipelineStateComment.gate_config` can embed it without a circular
+module dependency.
+
+---
+
+### `GateConfig`
+
+All gate states for an active run, keyed by `NodeId`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `gated_nodes` | `HashMap<NodeId, GateStatus>` | Per-node gate status |
+
+`#[derive(Default)]` — an empty map is correct for a brand-new run.
 
 ---
 
@@ -519,6 +559,7 @@ let comment = PipelineStateComment {
     pipeline_run_id: run_id,
     work_item_id,
     state: current_state.clone(),
+    gate_config: current_gate_config.clone(),
     graph_hash: /* SHA-256 of config bytes */,
     written_at: Timestamp::now(),
 };

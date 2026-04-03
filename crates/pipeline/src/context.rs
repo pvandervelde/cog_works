@@ -374,7 +374,7 @@ pub struct ContextAssemblyRequest {
     ///
     /// Items derived from these paths are stripped by [`enforce_scenario_holdout`]
     /// before assembly. This enforces the hard holdout constraint.
-    pub scenario_holdout_dirs: Vec<PathBuf>,
+    pub scenario_holdout_dirs: Vec<ArtifactPath>,
 
     /// Root of the pipeline's working directory checkout.
     ///
@@ -523,7 +523,7 @@ pub fn apply_priority_truncation(
 /// See `docs/spec/interfaces/context.md` §enforce_scenario_holdout.
 pub fn enforce_scenario_holdout(
     _items: Vec<ContextItem>,
-    _holdout_dirs: &[PathBuf],
+    _holdout_dirs: &[ArtifactPath],
 ) -> HoldoutFilteredItems {
     todo!("See docs/spec/interfaces/context.md §enforce_scenario_holdout")
 }
