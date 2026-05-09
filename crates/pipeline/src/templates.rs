@@ -106,7 +106,7 @@ pub trait TemplateEngine: Send + Sync {
     /// - [`TemplateError::ConstraintViolation`] — rendered output violated a
     ///   post-render constraint.
     fn render(&self, name: &str, context: HashMap<String, String>)
-        -> Result<String, TemplateError>;
+    -> Result<String, TemplateError>;
 
     /// Return the list of variable names that the named template requires.
     ///

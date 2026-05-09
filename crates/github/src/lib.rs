@@ -51,13 +51,13 @@ use serde_json::Value as JsonValue;
 use tracing::instrument;
 
 use pipeline::{
+    BranchName, CommitSha, MilestoneId, PipelineRunId, PullRequestId, RepositoryId, WorkItemId,
     audit::{AuditEvent, AuditStore, AuditStoreError, PipelineSummary},
     github::{
         CodeRepository, DirectoryEntry, FileContent, GitHubOperationError, Issue, IssueState,
         IssueTracker, Label, Milestone, ProjectBoard, PullRequest, PullRequestFilter,
         PullRequestManager, ReviewStatus, SubIssue, TypedLink, TypedLinkKind,
     },
-    BranchName, CommitSha, MilestoneId, PipelineRunId, PullRequestId, RepositoryId, WorkItemId,
 };
 
 // ─── Client struct ───────────────────────────────────────────────────────────

@@ -545,7 +545,7 @@ pub trait IssueTracker: Send + Sync {
     /// - [`GitHubOperationError::NotFound`] — issue does not exist.
     /// - [`GitHubOperationError::SdkCapabilityMissing`] — SDK addition pending.
     async fn get_typed_links(&self, id: WorkItemId)
-        -> Result<Vec<TypedLink>, GitHubOperationError>;
+    -> Result<Vec<TypedLink>, GitHubOperationError>;
 
     /// Return the current set of labels applied to an issue.
     ///
@@ -573,7 +573,7 @@ pub trait IssueTracker: Send + Sync {
     /// - [`GitHubOperationError::NotFound`] — issue does not exist.
     /// - [`GitHubOperationError::PermissionDenied`] — insufficient write access.
     async fn remove_label(&self, id: WorkItemId, label: &Label)
-        -> Result<(), GitHubOperationError>;
+    -> Result<(), GitHubOperationError>;
 
     /// Post a comment on an issue.
     ///

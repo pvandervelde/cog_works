@@ -38,11 +38,7 @@ impl Expression {
     #[must_use]
     pub fn new(value: impl Into<String>) -> Option<Self> {
         let v = value.into();
-        if v.is_empty() {
-            None
-        } else {
-            Some(Self(v))
-        }
+        if v.is_empty() { None } else { Some(Self(v)) }
     }
 
     /// Returns the raw expression string.
@@ -64,11 +60,7 @@ impl NaturalLanguageCondition {
     #[must_use]
     pub fn new(value: impl Into<String>) -> Option<Self> {
         let v = value.into();
-        if v.is_empty() {
-            None
-        } else {
-            Some(Self(v))
-        }
+        if v.is_empty() { None } else { Some(Self(v)) }
     }
 
     /// Returns the raw condition description.

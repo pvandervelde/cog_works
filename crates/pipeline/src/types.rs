@@ -262,11 +262,7 @@ impl DiagnosticCategory {
     /// Returns `None` if the string is empty.
     pub fn new(category: impl Into<String>) -> Option<Self> {
         let c = category.into();
-        if c.is_empty() {
-            None
-        } else {
-            Some(Self(c))
-        }
+        if c.is_empty() { None } else { Some(Self(c)) }
     }
 
     /// Returns the category tag as a string slice.
