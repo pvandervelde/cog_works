@@ -53,7 +53,7 @@ pub mod templates;
 
 // Gateway
 pub use gateway::{
-    assemble_constitutional_prompt, ConstitutionallyWrappedPrompt, LlmGateway, RateLimitState,
+    ConstitutionallyWrappedPrompt, LlmGateway, RateLimitState, assemble_constitutional_prompt,
 };
 
 // Common node types
@@ -73,7 +73,7 @@ pub use review::ReviewNode;
 pub use spawning::SpawningNode;
 
 // Executor
-pub use executor::{run_step, PipelineExecutor, StepResult};
+pub use executor::{PipelineExecutor, StepResult, run_step};
 
 // Template engine implementation
 pub use templates::HandlebarsTemplateEngine;

@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    types::{ApiVersion, Diagnostic, SatisfactionScore},
     ArtifactPath, DomainServiceName, InterfaceId,
+    types::{ApiVersion, Diagnostic, SatisfactionScore},
 };
 
 // ─── Supporting data types ──────────────────────────────────────────────────

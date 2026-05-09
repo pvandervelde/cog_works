@@ -84,13 +84,13 @@ pub use github::{
     ReviewDecision, ReviewStatus, SubIssue, TypedLink, TypedLinkKind, WebhookConfig,
 };
 pub use graph::{
-    compute_eligible_nodes, evaluate_deterministic_condition, topological_sort,
-    validate_pipeline_graph, CompositeCondition, CycleError, EdgeConditionKind, EdgeDefinition,
-    EdgeEvaluationRecord, EvaluationMode, EvaluatorKind, Expression, GraphValidationError,
-    NaturalLanguageCondition, NodeDefinition, NodeGate, NodeState, NodeStatus, NodeType,
-    OverflowBehaviour, PipelineConfiguration, PipelineGraph, PipelineSettings, PipelineState,
-    PipelineStateComment, PipelineToolProfileConfig, ReworkEdge, ReworkSemantics, SchemaVersion,
-    TimeoutSeconds, ValidationKind,
+    CompositeCondition, CycleError, EdgeConditionKind, EdgeDefinition, EdgeEvaluationRecord,
+    EvaluationMode, EvaluatorKind, Expression, GraphValidationError, NaturalLanguageCondition,
+    NodeDefinition, NodeGate, NodeState, NodeStatus, NodeType, OverflowBehaviour,
+    PipelineConfiguration, PipelineGraph, PipelineSettings, PipelineState, PipelineStateComment,
+    PipelineToolProfileConfig, ReworkEdge, ReworkSemantics, SchemaVersion, TimeoutSeconds,
+    ValidationKind, compute_eligible_nodes, evaluate_deterministic_condition, topological_sort,
+    validate_pipeline_graph,
 };
 pub use identifiers::{
     ArtifactPath, BranchName, CommitSha, ContextPackId, DomainServiceName, EdgeId, GitObjectSha,
@@ -126,77 +126,77 @@ pub use tools::{
 
 // Re-exports from security
 pub use security::{
-    detect_injection, is_protected, validate_constitutional_prompt, validate_scope,
-    validate_tool_scope, ApprovedScope, ConstitutionalError, ConstitutionalRules,
-    InjectionDetectionResult, InjectionPattern, PromptAssembly, ProtectedPath, RequiredRule,
-    ScopeViolation, ScopeViolationKind, ToolParams, ToolScopeViolation, ValidatedPrompt,
+    ApprovedScope, ConstitutionalError, ConstitutionalRules, InjectionDetectionResult,
+    InjectionPattern, PromptAssembly, ProtectedPath, RequiredRule, ScopeViolation,
+    ScopeViolationKind, ToolParams, ToolScopeViolation, ValidatedPrompt, detect_injection,
+    is_protected, validate_constitutional_prompt, validate_scope, validate_tool_scope,
 };
 
 // Re-exports from context
 pub use context::{
-    apply_priority_truncation, assemble_context, enforce_scenario_holdout, merge_pack_guidance,
-    select_context_packs, ClassificationResult, ContextAssemblyRequest, ContextItem, ContextPack,
-    ContextPackTrigger, ContextPackage, ContextPriority, HoldoutFilteredItems, LoadedContextPacks,
-    MergedGuidance, TaskType,
+    ClassificationResult, ContextAssemblyRequest, ContextItem, ContextPack, ContextPackTrigger,
+    ContextPackage, ContextPriority, HoldoutFilteredItems, LoadedContextPacks, MergedGuidance,
+    TaskType, apply_priority_truncation, assemble_context, enforce_scenario_holdout,
+    merge_pack_guidance, select_context_packs,
 };
 
 // Re-exports from labels
-pub use labels::{generate_label, parse_label, PipelineLabel};
+pub use labels::{PipelineLabel, generate_label, parse_label};
 
 // Re-exports from execution
 pub use execution::{
-    check_fan_in_ready, determine_next_actions, evaluate_edge_condition, increment_rework_counter,
-    topological_sort_sub_work_items, DependencyError, EscalationReason, GateConfig, GateStatus,
-    NextAction, NodeOutput, NodeStateUpdate, PipelineError, SubWorkItem,
-    TerminationConditionReached,
+    DependencyError, EscalationReason, GateConfig, GateStatus, NextAction, NodeOutput,
+    NodeStateUpdate, PipelineError, SubWorkItem, TerminationConditionReached, check_fan_in_ready,
+    determine_next_actions, evaluate_edge_condition, increment_rework_counter,
+    topological_sort_sub_work_items,
 };
 
 // Re-exports from budget
 pub use budget::{
-    acquire_budget, BudgetAcquisition, CostReport, NodeCostEntry, SubWorkItemCostEntry,
+    BudgetAcquisition, CostReport, NodeCostEntry, SubWorkItemCostEntry, acquire_budget,
 };
 
 // Re-exports from classification
 pub use classification::{
-    apply_safety_override, check_scope_threshold, EscalationResult, SafetyCriticalRegistry,
+    EscalationResult, SafetyCriticalRegistry, apply_safety_override, check_scope_threshold,
 };
 
 // Re-exports from review
 pub use review::{
-    aggregate_review_results, AggregateReviewDecision, ReviewFinding, ReviewPass, ReviewResult,
+    AggregateReviewDecision, ReviewFinding, ReviewPass, ReviewResult, aggregate_review_results,
 };
 
 // Re-exports from interfaces
-pub use interfaces::{validate_cross_domain_constraints, ConstraintFinding};
+pub use interfaces::{ConstraintFinding, validate_cross_domain_constraints};
 
 // Re-exports from scenarios
-pub use scenarios::{compute_satisfaction, PerScenarioScore, ScenarioSatisfactionResult};
+pub use scenarios::{PerScenarioScore, ScenarioSatisfactionResult, compute_satisfaction};
 
 // Re-exports from alignment
 pub use alignment::{
-    run_deterministic_alignment, AlignmentCheckType, AlignmentConfig, AlignmentFinding,
-    AlignmentResult, DeclaredNodeInputs, MisalignmentType, TraceabilityEntry,
+    AlignmentCheckType, AlignmentConfig, AlignmentFinding, AlignmentResult, DeclaredNodeInputs,
+    MisalignmentType, TraceabilityEntry, run_deterministic_alignment,
 };
 
 // Re-exports from traceability
 pub use traceability::{
-    extract_requirements, update_traceability_matrix, Requirement, RequirementRow,
-    TraceabilityMatrix, TraceabilityStage, TraceabilityStatus,
+    Requirement, RequirementRow, TraceabilityMatrix, TraceabilityStage, TraceabilityStatus,
+    extract_requirements, update_traceability_matrix,
 };
 
 // Re-exports from observability
 pub use observability::{
-    record_node_complete, record_node_start, record_retry, record_rework, RootCause,
+    RootCause, record_node_complete, record_node_start, record_retry, record_rework,
 };
 
 // Re-exports from tools (additions)
 pub use tools::{
-    build_compact_index, search_tools, validate_skill_invocation, CompactToolIndex, SkillError,
-    SkillInvocation, SkillLifecycle, SkillManifest, ToolIndexEntry, ValidatedSkillInvocation,
+    CompactToolIndex, SkillError, SkillInvocation, SkillLifecycle, SkillManifest, ToolIndexEntry,
+    ValidatedSkillInvocation, build_compact_index, search_tools, validate_skill_invocation,
 };
 
 // Re-exports from domain_services (additions)
 pub use domain_services::{
-    resolve_primary_and_secondary, select_service_for_artifacts, DomainServiceRegistration,
-    RoutingError, ServiceCapabilities, ServiceRegistry,
+    DomainServiceRegistration, RoutingError, ServiceCapabilities, ServiceRegistry,
+    resolve_primary_and_secondary, select_service_for_artifacts,
 };

@@ -30,8 +30,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    graph::{EdgeEvaluationRecord, NodeStatus},
     ArtifactPath, NodeId, PipelineRunId, TokenCost, TokenCount, WorkItemId,
+    graph::{EdgeEvaluationRecord, NodeStatus},
 };
 
 // ─── Supporting types for AuditEvent variants ───────────────────────────────

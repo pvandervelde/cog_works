@@ -333,9 +333,7 @@ pub enum LlmError {
     ///
     /// Callers should reduce the context package (lower summary levels or
     /// fewer items) before retrying.
-    #[error(
-        "Prompt context window exceeded: requested {requested} tokens, model limit is {limit}"
-    )]
+    #[error("Prompt context window exceeded: requested {requested} tokens, model limit is {limit}")]
     ContextWindowExceeded {
         /// Number of tokens in the assembled prompt.
         requested: TokenCount,
