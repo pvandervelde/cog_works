@@ -215,9 +215,12 @@ def path_matches_any(rel_posix: str, patterns: List[str]) -> bool:
     """Check a forward-slash relative path against a list of glob patterns."""
     name = rel_posix.rsplit("/", 1)[-1]
     for pattern in patterns:
-        if fnmatch(rel_posix, pattern) or fnmatch(name, pattern):
-            return True
-        if "**" in pattern and _glob_to_regex(pattern).match(rel_posix):
+        if "**" in pattern:
+            # Use the custom regex engine so ** is treated as a recursive glob,
+            # not two consecutive single-level wildcards as fnmatch would do.
+            if _glob_to_regex(pattern).match(rel_posix):
+                return True
+        elif fnmatch(rel_posix, pattern) or fnmatch(name, pattern):
             return True
     return False
 
@@ -521,7 +524,7 @@ def _parse_table_row(row: str, domain: str) -> Optional[CatalogEntry]:
     tags = [t.strip() for t in tags_raw.split(",") if t.strip()] if tags_raw else []
 
     return CatalogEntry(
-        key=f"{file_str}::{name}",
+        key=f"{file_str}::{name}::{line}",
         name=name,
         kind=kind,
         file=file_str,
@@ -637,10 +640,11 @@ def generate_descriptions(symbols: List[Symbol], config: dict) -> List[Symbol]:
             sym.description = f"{sym.kind} in {sym.file}"
         return symbols
 
-    client = _anthropic.Anthropic(api_key=api_key)
+    client = _anthropic.Anthropic(api_key=api_key, max_retries=3)
     llm_config = config.get("llm", {})
     model      = llm_config.get("model", "claude-haiku-4-5-20251001")
     batch_size = llm_config.get("batch_size", 20)
+    api_timeout = llm_config.get("timeout", 60.0)
 
     descriptions: Dict[str, str] = {}
 
@@ -666,6 +670,7 @@ def generate_descriptions(symbols: List[Symbol], config: dict) -> List[Symbol]:
                 model=model,
                 max_tokens=1024,
                 system=_DESCRIPTION_SYSTEM,
+                timeout=api_timeout,
                 messages=[{
                     "role": "user",
                     "content": (
@@ -687,6 +692,12 @@ def generate_descriptions(symbols: List[Symbol], config: dict) -> List[Symbol]:
 
         except json.JSONDecodeError as e:
             print(f"    Warning: Could not parse LLM response for batch {batch_num}: {e}",
+                  file=sys.stderr)
+            for sym in batch:
+                descriptions.setdefault(sym.key, f"{sym.kind} — description unavailable")
+
+        except _anthropic.APITimeoutError as e:
+            print(f"    Warning: Anthropic API timeout for batch {batch_num}: {e}",
                   file=sys.stderr)
             for sym in batch:
                 descriptions.setdefault(sym.key, f"{sym.kind} — description unavailable")
@@ -973,7 +984,7 @@ def main() -> None:
     # ── Dry run ────────────────────────────────────────────────────────────────
 
     if args.dry_run:
-        print("\n── Dry run — no files written ──────────────────────────")
+        print("\n-- Dry run -- no files written --------------------------")
         if new_symbols:
             print(f"\nNew ({len(new_symbols)}):")
             for sym in sorted(new_symbols, key=lambda s: s.key):
@@ -995,7 +1006,18 @@ def main() -> None:
     # ── Merge and write ────────────────────────────────────────────────────────
 
     new_entries = {sym.key: _symbol_to_entry(sym) for sym in new_symbols}
-    final_entries: Dict[str, CatalogEntry] = {**unchanged_entries, **new_entries}
+    domain_entries: Dict[str, CatalogEntry] = {**unchanged_entries, **new_entries}
+
+    # When --domain is active, merge the updated domain back with the full
+    # existing catalog so write_catalog doesn't delete other domain files.
+    if args.domain:
+        all_existing = load_existing_catalog(config, repo_root)
+        final_entries: Dict[str, CatalogEntry] = {
+            k: v for k, v in all_existing.items() if v.domain != args.domain
+        }
+        final_entries.update(domain_entries)
+    else:
+        final_entries = domain_entries
 
     print("\nWriting catalog...")
     write_catalog(final_entries, config, repo_root, commit)

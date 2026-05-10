@@ -163,6 +163,12 @@ domains:
       - "crates/cli/**"
     tags: [ cli ]
 
+  - name: scripts
+    description: "Repository tooling scripts — catalog generator and other automation utilities"
+    paths:
+      - "scripts/**"
+    tags: [ tooling ]
+
   - name: general
     description: "Uncategorised entries — add domain rules above to reduce this"
     paths:
