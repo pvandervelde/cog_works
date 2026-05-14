@@ -85,7 +85,9 @@ let client = Arc::new(GithubClient::new(Arc::new(sdk)));
 | `IssueTracker::post_comment` | `sdk.issues().create_comment(owner, repo, number, body)` | |
 | `IssueTracker::get_issue_state` | `sdk.issues().get(owner, repo, number)` — inspect `.state` | |
 | `IssueTracker::get_milestone` | `sdk.milestones().get(owner, repo, milestone_number)` — GitHub REST `GET /repos/{owner}/{repo}/milestones/{milestone_number}` | |
-| `IssueTracker::list_comments` | *(SDK gap — `issues().list_comments(owner, repo, number)`)* | Returns `SdkCapabilityMissing` || `IssueTracker::set_milestone` | *(SDK gap \u2014 PATCH issue .milestone)* | Returns `SdkCapabilityMissing` || `PullRequestManager::create_pull_request` | `sdk.pull_requests().create(owner, repo, body)` | |
+| `IssueTracker::list_comments` | *(SDK gap — `issues().list_comments(owner, repo, number)`)* | Returns `SdkCapabilityMissing` |
+| `IssueTracker::set_milestone` | *(SDK gap — PATCH issue .milestone)* | Returns `SdkCapabilityMissing` |
+| `PullRequestManager::create_pull_request` | `sdk.pull_requests().create(owner, repo, body)` | |
 | `PullRequestManager::get_pull_request` | `sdk.pull_requests().get(owner, repo, number)` | |
 | `PullRequestManager::find_pull_requests` | *(SDK gap — list with filters)* | Returns `SdkCapabilityMissing` |
 | `PullRequestManager::post_review_comment` | *(SDK gap — inline PR review comment)* | Returns `SdkCapabilityMissing` |
@@ -629,7 +631,7 @@ Concrete adapter that implements `pipeline::SummaryCache`. Wired in `cli`.
 work-item issue using a structured prefix:
 
 ```
-COGWORKS_SUMMARY: {"artifact_path":"<path>","level":"<L1|L2|L3|L4>","content":"..."}
+COGWORKS_SUMMARY: {"artifact_path":"<path>","level":"<L1|L2|L3|L4>","git_ref":"<SHA>","content":"..."}
 ```
 
 **Struct fields** (private):
@@ -686,27 +688,6 @@ let registry_loader = Arc::new(TomlInterfaceRegistryLoader::new(registry_dir));
 - `RegistryError::NotFound` — the registry directory does not exist.
 - `RegistryError::ParseError` — a TOML file in the registry directory has invalid syntax.
 - `RegistryError::IoError` — filesystem read failure.
-
-```rust
-pub struct HandlebarsTemplateEngine {
-    registry: handlebars::Handlebars<'static>,
-    required_vars: HashMap<String, Vec<String>>,
-}
-```
-
-`HandlebarsTemplateEngine` implements `pipeline::TemplateEngine`. Templates
-are registered at construction time via `register_template`. The
-`required_vars` map holds the declared required variable names per template
-(populated from a template manifest file at startup).
-
-**Template location**: Templates are expected in `.cogworks/templates/` in the
-repository working directory. Each template is a Handlebars file (`.hbs`
-extension). The manifest `.cogworks/templates/manifest.toml` lists required
-variables per template name.
-
-The `HandlebarsTemplateEngine` is an internal implementation detail of the
-`nodes` crate. The `cli` composition root creates an instance and injects it
-as `Arc<dyn TemplateEngine>` into the nodes that need it.
 
 ---
 

@@ -170,10 +170,12 @@ This document identifies security threats to CogWorks and specifies mitigations.
    ```
 
    On subsequent invocations, call `IssueTracker::list_comments`, scan for the
-   comment authored by the CogWorks bot whose body starts with `COGWORKS_LOCK: `,
-   parse the JSON after the prefix, and check `locked_at`. If the most recent such
-   comment is older than the configured stale-lock timeout (default: 30 minutes),
-   the lock is stale.
+   comment authored by the CogWorks bot whose body starts with `COGWORKS_LOCK: `.
+   **Bot identity must be verified using the GitHub numeric user ID (an integer,
+   unforgeable), not the login string (which could be spoofed if the bot name
+   is known).** Parse the JSON after the prefix, and check `locked_at`. If the
+   most recent such comment is older than the configured stale-lock timeout
+   (default: 30 minutes), the lock is stale.
 
    The `run_id` field is logged for debugging but is not used in the staleness check.
 

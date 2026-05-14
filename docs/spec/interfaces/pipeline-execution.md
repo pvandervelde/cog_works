@@ -301,7 +301,6 @@ Pure synchronous function — no I/O.
 This preserves the purity of `evaluate_edge_condition` (no async, no I/O) while
 satisfying the `pipeline` crate's no-I/O constraint
 (`docs/spec/constraints.md §Module Boundaries`).
-- `Composite(_)` → recursively evaluates inner conditions.
 
 The `input_snapshot` field of the returned `EdgeEvaluationRecord` is
 `serde_json::to_value(state)` (serialised state at evaluation time).

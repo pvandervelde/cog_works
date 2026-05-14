@@ -541,7 +541,8 @@ pub enum StepResult {
     ///
     /// Emitted when an `ExecuteParallel` action fires multiple nodes.
     /// The caller must apply **all** results to the pipeline state before
-    /// evaluating outgoing edges. `results` is in completion order.
+    /// evaluating outgoing edges. `results` is in input order (the order
+    /// nodes were submitted to `ExecuteParallel`).
     CompletedParallel { results: Vec<(NodeId, NodeOutput)> },
     /// A `HumanGated` node is awaiting approval.
     Gated { node_id: NodeId, gate_reason: String },
@@ -632,7 +633,8 @@ pub async fn run_step(
 8. Return `StepResult::Completed { node_id, output }` for a single completed node,
    or `StepResult::CompletedParallel { results }` when an `ExecuteParallel` action
    fired multiple nodes. For `CompletedParallel`, `results` contains one entry per
-   node in the parallel branch in the order they completed.
+   node in the parallel branch in input order (the order they were submitted to
+   `ExecuteParallel`).
 
 ---
 

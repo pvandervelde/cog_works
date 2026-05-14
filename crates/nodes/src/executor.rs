@@ -50,8 +50,8 @@ pub enum StepResult {
     ///
     /// Used when an `ExecuteParallel` action fired multiple nodes. The caller
     /// must apply **all** results to the pipeline state before evaluating
-    /// outgoing edges. Results are in completion order (not the order given
-    /// to `ExecuteParallel`).
+    /// outgoing edges. Results are in input order (the order nodes were given
+    /// to `ExecuteParallel`); `tokio::join_all` preserves submission order.
     CompletedParallel {
         /// Per-node results for every node in the parallel branch.
         results: Vec<(NodeId, NodeOutput)>,
