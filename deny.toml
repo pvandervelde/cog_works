@@ -8,8 +8,8 @@
 db-urls = ["https://github.com/rustsec/advisory-db"]
 
 # Ignore specific advisories (use with caution and document why)
-# All three are transitive through first-party git deps (github-bot-sdk, queue-runtime).
-# No upstream fix is available for any of them as of 2026-03-02.
+# All are transitive through first-party git deps (github-bot-sdk, queue-runtime).
+# No upstream fix is available for any of them as of 2026-05-14.
 ignore = [
     # RUSTSEC-2023-0071: Marvin Attack timing side-channel in rsa 0.9.x
     # Source: rsa <- github-bot-sdk (webhook signature verification only;
@@ -23,6 +23,16 @@ ignore = [
     # Source: paste <- azure_core <- queue-runtime
     # Risk: maintenance gap only; no security vulnerability identified.
     { id = "RUSTSEC-2024-0436" },
+    # RUSTSEC-2026-0097: rand unsoundness with custom logger + thread_rng reseed
+    # Source: rand 0.7.3 <- http-types 2.12.0 <- azure_core 0.20.0 <- queue-runtime (git dep)
+    # The 0.7.x line has no patched release; the fix requires upgrading to >=0.8.6.
+    # azure_core 0.20.0 (via queue-runtime) hard-requires http-types 2.12.0 which pins
+    # rand ^0.7, making a in-place upgrade impossible without a queue-runtime release.
+    # The unsoundness is only triggered when a custom logger calls rand::rng() during
+    # reseeding; CogWorks does not use rand in any logger implementation, so the
+    # preconditions for UB are not met in this codebase.
+    # Revisit when queue-runtime bumps azure_core past 0.20.0.
+    { id = "RUSTSEC-2026-0097" },
 ]
 
 [licenses]
