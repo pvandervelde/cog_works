@@ -401,8 +401,10 @@ pub fn determine_next_actions(
 ///   asynchronously for every `LlmEvaluated` condition on the outgoing edges
 ///   of the completed node, and the `(EdgeId, bool)` results are collected
 ///   into the map. The map entry **must** exist for every `LlmEvaluated`
-///   edge; a missing entry is treated as `false` and should be accompanied by
-///   an audit log warning.
+///   edge; a missing entry is treated as `false` (conservative fallback) and
+///   **must** be surfaced immediately via `debug_assert!(false, "LlmEvaluated
+///   result missing for edge {:?}", edge_id)` or an equivalent audit-log
+///   warning, to prevent silent pipeline stalls that are hard to debug.
 /// - [`EdgeConditionKind::Composite`]: recursively evaluates inner conditions.
 ///
 /// ## Parameters

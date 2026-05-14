@@ -192,6 +192,12 @@ impl IssueTracker for GithubClient {
         _id: WorkItemId,
     ) -> Result<Vec<IssueComment>, GitHubOperationError> {
         // SDK gap: REST list issue comments not yet in github-bot-sdk.
+        // Returns Err (not todo!()) so that run_step step 3 (state
+        // reconstruction) falls through gracefully to a fresh-run
+        // initialisation rather than panicking. Callers treat
+        // SdkCapabilityMissing on list_comments as "no prior state found"
+        // and proceed with a new run. This is intentional until the SDK
+        // adds the REST endpoint.
         Err(GitHubOperationError::SdkCapabilityMissing {
             capability: "list_issue_comments".to_string(),
         })
