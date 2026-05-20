@@ -220,6 +220,11 @@ impl IssueTracker for GithubClient {
         _milestone: Option<MilestoneId>,
     ) -> Result<(), GitHubOperationError> {
         // SDK gap: PATCH issue milestone not yet in github-bot-sdk.
+        // Returns Err (not todo!()) so that callers on the write path receive a
+        // propagatable error rather than a panic. Milestone assignment is
+        // non-critical for pipeline correctness; callers log the
+        // SdkCapabilityMissing error and continue rather than aborting the run.
+        // This is intentional until the SDK adds the PATCH endpoint.
         Err(GitHubOperationError::SdkCapabilityMissing {
             capability: "patch_issue_milestone".to_string(),
         })

@@ -15,6 +15,11 @@ ignore = [
     # Source: rsa <- github-bot-sdk (webhook signature verification only;
     #         no decryption oracle exposed to attackers).
     { id = "RUSTSEC-2023-0071" },
+    # RUSTSEC-2024-0384: `instant` crate unmaintained
+    # Source: instant <- fastrand <- futures-lite <- http-types <- azure_core 0.21.0 <- queue-runtime 0.2.0
+    # Risk: maintenance gap only; no security vulnerability identified.
+    # Revisit when azure_core drops the http-types/fastrand dependency chain.
+    { id = "RUSTSEC-2024-0384" },
     # RUSTSEC-2024-0436: `paste` crate unmaintained
     # Source: paste <- azure_core 0.21.0 <- queue-runtime 0.2.0
     # Risk: maintenance gap only; no security vulnerability identified.
