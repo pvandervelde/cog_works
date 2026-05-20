@@ -62,7 +62,7 @@ async-trait = "0.1"
 
 # GitHub SDK (pvandervelde/github-bot-sdk)
 # rev is the commit reviewed in PR 11; update intentionally when upgrading.
-github-bot-sdk = { git = "https://github.com/pvandervelde/github-bot-sdk", rev = "ba1e456cb25ea038e69b78432c2bb8f2050ef65d" }
+github-bot-sdk = { git = "https://github.com/pvandervelde/github-bot-sdk", rev = "2bd1160fbc9f7d15515d0faea0f412af5d173f65" }
 
 # Cloud queue SDK (pvandervelde/queue-runtime)
 # rev is the commit reviewed in PR 11; update intentionally when upgrading.
