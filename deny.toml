@@ -8,30 +8,23 @@
 db-urls = ["https://github.com/rustsec/advisory-db"]
 
 # Ignore specific advisories (use with caution and document why)
-# All are transitive through first-party git deps (github-bot-sdk, queue-runtime).
+# All are transitive through third-party deps (azure_core <- queue-runtime).
 # No upstream fix is available for any of them as of 2026-05-14.
 ignore = [
     # RUSTSEC-2023-0071: Marvin Attack timing side-channel in rsa 0.9.x
     # Source: rsa <- github-bot-sdk (webhook signature verification only;
     #         no decryption oracle exposed to attackers).
     { id = "RUSTSEC-2023-0071" },
-    # RUSTSEC-2024-0384: `instant` crate unmaintained
-    # Source: instant <- fastrand <- futures-lite <- http-types <- azure_core <- queue-runtime
-    # Risk: maintenance gap only; no security vulnerability identified.
-    { id = "RUSTSEC-2024-0384" },
     # RUSTSEC-2024-0436: `paste` crate unmaintained
-    # Source: paste <- azure_core <- queue-runtime
+    # Source: paste <- azure_core 0.21.0 <- queue-runtime 0.2.0
     # Risk: maintenance gap only; no security vulnerability identified.
     { id = "RUSTSEC-2024-0436" },
     # RUSTSEC-2026-0097: rand unsoundness with custom logger + thread_rng reseed
-    # Source: rand 0.7.3 <- http-types 2.12.0 <- azure_core 0.20.0 <- queue-runtime (git dep)
-    # The 0.7.x line has no patched release; the fix requires upgrading to >=0.8.6.
-    # azure_core 0.20.0 (via queue-runtime) hard-requires http-types 2.12.0 which pins
-    # rand ^0.7, making a in-place upgrade impossible without a queue-runtime release.
-    # The unsoundness is only triggered when a custom logger calls rand::rng() during
-    # reseeding; CogWorks does not use rand in any logger implementation, so the
-    # preconditions for UB are not met in this codebase.
-    # Revisit when queue-runtime bumps azure_core past 0.20.0.
+    # Source: rand 0.7.3 <- http-types 2.12.0 <- azure_core 0.21.0 <- queue-runtime 0.2.0
+    # The 0.7.x line has no patched release; azure_core 0.21.0 still depends on
+    # http-types 2.12.0 which pins rand ^0.7. CogWorks does not call rand in any
+    # logger implementation, so the UB preconditions are not met.
+    # Revisit when azure_core drops http-types or http-types upgrades rand.
     { id = "RUSTSEC-2026-0097" },
 ]
 
@@ -91,8 +84,5 @@ unknown-git = "deny"
 
 # Allowed registries
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Allow git sources for first-party libraries not yet published to crates.io
-allow-git = [
-    "https://github.com/pvandervelde/github-bot-sdk",
-    "https://github.com/pvandervelde/queue-runtime",
-]
+# All first-party libraries now published to crates.io; no git sources needed.
+allow-git = []
