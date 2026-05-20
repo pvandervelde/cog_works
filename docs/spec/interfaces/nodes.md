@@ -117,11 +117,40 @@ pub fn assemble_constitutional_prompt(
 **Purpose**: Embeds constitutional rules at the privileged leading position of
 the system prompt and combines them with the node-specific system prompt text.
 
+**Composition with `validate_constitutional_prompt`**:
+
+`assemble_constitutional_prompt` calls `validate_constitutional_prompt` internally
+as its first step. The call chain is:
+
+```text
+assemble_constitutional_prompt(rules, system_prompt)
+  └─ validate_constitutional_prompt(rules, PromptAssembly { system_prompt, user_content: "" })
+       ├─ Verifies source_branch is on approved list
+       ├─ Verifies SHA-256 hash of rules.content matches source_hash
+       ├─ Verifies every RequiredRule signature is present in rules.content
+       └─ Returns ValidatedPrompt (or Err(ConstitutionalError))
+  └─ Wraps ValidatedPrompt into ConstitutionallyWrappedPrompt
+```
+
+`ConstitutionallyWrappedPrompt` is therefore a strict superset of `ValidatedPrompt`:
+it carries all the same invariants (rules present, branch valid, hash verified) plus
+the `nodes`-layer invariant that the assembled prompt is ready for LLM dispatch.
+
+Callers in the `nodes` crate never call `validate_constitutional_prompt` directly;
+they call `assemble_constitutional_prompt` which performs the validation internally.
+Code in the `pipeline` crate may call `validate_constitutional_prompt` directly for
+unit-testable validation without going through the full assembly.
+
+`run_step` step 1 does not call `assemble_constitutional_prompt` directly.  It calls
+`validate_constitutional_prompt` to verify the rules file is intact — the full
+assembly happens inside each node's `execute` function when it calls `LlmGateway`.
+
 **Behaviour**:
 
-1. Copies `rules.content` verbatim as the leading segment of the internal prompt.
-2. Appends `system_prompt` after the constitutional content (separated by a
-   blank line so they remain visually distinct in the LLM context window).
+1. Calls `validate_constitutional_prompt(rules, PromptAssembly { system_prompt, user_content: "" })`.
+   If this returns `Err(ConstitutionalError)`, propagates the error immediately
+   (callers receive a `PipelineError::ConstitutionalRulesLoadFailed`).
+2. Wraps the `ValidatedPrompt` in a `ConstitutionallyWrappedPrompt` (private fields).
 3. Returns the opaque `ConstitutionallyWrappedPrompt`.
 
 **Contract**: `run_step` calls this only after Step 1 (constitutional rules
@@ -506,8 +535,15 @@ The outcome of one call to `run_step`.
 
 ```rust
 pub enum StepResult {
-    /// At least one node completed successfully in this step.
+    /// A single node completed successfully in this step.
     Completed { node_id: NodeId, output: NodeOutput },
+    /// Multiple nodes completed concurrently (parallel branch).
+    ///
+    /// Emitted when an `ExecuteParallel` action fires multiple nodes.
+    /// The caller must apply **all** results to the pipeline state before
+    /// evaluating outgoing edges. `results` is in input order (the order
+    /// nodes were submitted to `ExecuteParallel`).
+    CompletedParallel { results: Vec<(NodeId, NodeOutput)> },
     /// A `HumanGated` node is awaiting approval.
     Gated { node_id: NodeId, gate_reason: String },
     /// The pipeline cannot continue without human intervention.
@@ -558,9 +594,12 @@ pub async fn run_step(
    `executor.config_loader.get_named_pipeline(name)` or `get_default_pipeline()`.
    Validate the graph; validation failure → `StepResult::Halted(PipelineError::GraphInvalid { ... })`.
 
-3. **Reconstruct pipeline state** — read the latest `PipelineStateComment` from
-   the work-item issue via `executor.issues.get_issue`. If no comment exists
-   the state is initialised as a fresh run.
+3. **Reconstruct pipeline state** — call `executor.issues.list_comments(work_item_id)`
+   and scan the returned list (newest first) for a comment whose body is valid JSON
+   that deserialises as a `PipelineStateComment` (the `schema_version` field must be
+   present). The first matching comment is the latest state snapshot. Deserialise both
+   `state` and `gate_config` from it. If no matching comment exists, initialise a fresh
+   `PipelineState` and an empty `GateConfig` (new run).
 
 4. **Determine next actions** — call
    `determine_next_actions(&state, &graph, &gate_config)`.
@@ -581,11 +620,21 @@ pub async fn run_step(
    - Dispatch to the appropriate node `execute` function.
    - On `NodeExecutionResult::Failure` → apply retry/rework policy; on
      `NonRetryable` escalate or halt as appropriate.
+   - After a node completes successfully: for every outgoing edge with an
+     `LlmEvaluated` condition, call `LlmGateway::call` (async) to resolve the
+     natural-language condition to a `bool`. Collect results into a
+     `HashMap<EdgeId, bool>`. Pass this map as `llm_evaluated_results` to
+     `evaluate_edge_condition` for each outgoing edge. See
+     `docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition`.
 
 7. **Persist state** — write updated `PipelineStateComment` to the issue via
    `executor.issues.post_comment`.
 
-8. Return `StepResult::Completed { node_id, output }` for the completed node.
+8. Return `StepResult::Completed { node_id, output }` for a single completed node,
+   or `StepResult::CompletedParallel { results }` when an `ExecuteParallel` action
+   fired multiple nodes. For `CompletedParallel`, `results` contains one entry per
+   node in the parallel branch in input order (the order they were submitted to
+   `ExecuteParallel`).
 
 ---
 

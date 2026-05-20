@@ -40,7 +40,7 @@ This design choice has several consequences:
 
 | Mode | Phase | Description |
 |------|-------|-------------|
-| **CLI** | Phase 1 | Direct invocation: `cogworks process <issue-url>` |
+| **CLI** | Phase 1 | Direct invocation: `cogworks run --issue <number>` |
 | **Poll** | Phase 2+ | Periodic scan for trigger labels, invokes step function per work item |
 | **Webhook** | Phase 3+ | GitHub App events via smee.io (dev) or direct (prod), invokes step function per event |
 

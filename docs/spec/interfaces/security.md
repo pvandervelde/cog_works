@@ -213,6 +213,32 @@ pub fn validate_constitutional_prompt(
 
 **Side effects**: None. Pure function.
 
+#### Composition with `assemble_constitutional_prompt`
+
+`validate_constitutional_prompt` (in `pipeline`) and `assemble_constitutional_prompt`
+(in `nodes::gateway`) enforce the same security invariant but at different layers:
+
+| | `validate_constitutional_prompt` | `assemble_constitutional_prompt` |
+|---|---|---|
+| Crate | `pipeline` | `nodes` |
+| Input | `ConstitutionalRules` + `PromptAssembly` | `ConstitutionalRules` + `system_prompt: &str` |
+| Output | `Result<ValidatedPrompt, ConstitutionalError>` | `ConstitutionallyWrappedPrompt` |
+| Purpose | Validates rules are intact and complete | Validates (via calling `validate_constitutional_prompt`) **and** packages for LLM dispatch |
+
+**`assemble_constitutional_prompt` calls `validate_constitutional_prompt` internally
+as its first step.** `ConstitutionallyWrappedPrompt` is therefore a strict superset of
+`ValidatedPrompt`. This composition means:
+
+- Every `ConstitutionallyWrappedPrompt` has been through the full validation pipeline.
+- There is no path to produce a `ConstitutionallyWrappedPrompt` that bypasses the
+  rule-presence and hash checks in `validate_constitutional_prompt`.
+- `run_step` step 1 calls `validate_constitutional_prompt` to verify the rules file
+  at the start of each step. Individual node `execute` functions call
+  `assemble_constitutional_prompt`, which re-validates before assembling.
+
+See `docs/spec/interfaces/nodes.md §assemble_constitutional_prompt` for the full
+call chain diagram.
+
 ---
 
 ## Part 2 — Injection Detection

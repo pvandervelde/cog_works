@@ -25,6 +25,7 @@
 //! | `IssueTracker::add_typed_link` | GraphQL `issueLink` mutation |
 //! | `IssueTracker::get_typed_links` | GraphQL `issueLink` query |
 //! | `IssueTracker::set_milestone` | PATCH issue milestone field |
+//! | `IssueTracker::list_comments` | `issues().list_comments(owner, repo, number)` |
 //! | `PullRequestManager::find_pull_requests` | List PRs with filter params |
 //! | `PullRequestManager::post_review_comment` | Create inline PR review comment |
 //! | `CodeRepository::read_file` | GitHub Contents API |
@@ -54,8 +55,8 @@ use pipeline::{
     BranchName, CommitSha, MilestoneId, PipelineRunId, PullRequestId, RepositoryId, WorkItemId,
     audit::{AuditEvent, AuditStore, AuditStoreError, PipelineSummary},
     github::{
-        CodeRepository, DirectoryEntry, FileContent, GitHubOperationError, Issue, IssueState,
-        IssueTracker, Label, Milestone, ProjectBoard, PullRequest, PullRequestFilter,
+        CodeRepository, DirectoryEntry, FileContent, GitHubOperationError, Issue, IssueComment,
+        IssueState, IssueTracker, Label, Milestone, ProjectBoard, PullRequest, PullRequestFilter,
         PullRequestManager, ReviewStatus, SubIssue, TypedLink, TypedLinkKind,
     },
 };
@@ -186,6 +187,23 @@ impl IssueTracker for GithubClient {
     }
 
     #[instrument(skip(self))]
+    async fn list_comments(
+        &self,
+        _id: WorkItemId,
+    ) -> Result<Vec<IssueComment>, GitHubOperationError> {
+        // SDK gap: REST list issue comments not yet in github-bot-sdk.
+        // Returns Err (not todo!()) so that run_step step 3 (state
+        // reconstruction) falls through gracefully to a fresh-run
+        // initialisation rather than panicking. Callers treat
+        // SdkCapabilityMissing on list_comments as "no prior state found"
+        // and proceed with a new run. This is intentional until the SDK
+        // adds the REST endpoint.
+        Err(GitHubOperationError::SdkCapabilityMissing {
+            capability: "list_issue_comments".to_string(),
+        })
+    }
+
+    #[instrument(skip(self))]
     async fn get_issue_state(&self, _id: WorkItemId) -> Result<IssueState, GitHubOperationError> {
         todo!("IssueTracker::get_issue_state — implemented in PR 10")
     }
@@ -202,6 +220,11 @@ impl IssueTracker for GithubClient {
         _milestone: Option<MilestoneId>,
     ) -> Result<(), GitHubOperationError> {
         // SDK gap: PATCH issue milestone not yet in github-bot-sdk.
+        // Returns Err (not todo!()) so that callers on the write path receive a
+        // propagatable error rather than a panic. Milestone assignment is
+        // non-critical for pipeline correctness; callers log the
+        // SdkCapabilityMissing error and continue rather than aborting the run.
+        // This is intentional until the SDK adds the PATCH endpoint.
         Err(GitHubOperationError::SdkCapabilityMissing {
             capability: "patch_issue_milestone".to_string(),
         })

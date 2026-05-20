@@ -810,7 +810,7 @@ A GitHub Milestone associated with a work item, representing a development phase
 
 - Optional: Work items are not required to have a milestone
 - Inherited: When CogWorks creates sub-work-items, each sub-work-item inherits the parent work item's milestone (if set)
-- Filtering: The `cogworks process-all` command supports filtering by milestone (e.g., `cogworks process-all <repo> --milestone "v2.0"`) to process only work items in a specific release phase
+- Filtering: The `cogworks run-all` command supports filtering by milestone (e.g., `cogworks run-all --repo <owner/repo> --milestone "v2.0"`) to process only work items in a specific release phase
 - Not modified: CogWorks MUST NOT create, modify, or delete milestones. Milestone management is a human responsibility
 - Visibility: Milestones provide natural grouping for human oversight, showing which work items belong to which release or development phase
 

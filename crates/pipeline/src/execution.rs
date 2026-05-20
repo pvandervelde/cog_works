@@ -100,61 +100,10 @@ pub struct NodeOutput {
 
 // ─── Execution decision types ────────────────────────────────────────────────
 
-/// Human-gate status for a specific node within an active pipeline run.
-///
-/// Tracks whether a human has approved or rejected a gated node's output.
-///
-/// See `docs/spec/interfaces/pipeline-execution.md` §GateStatus.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum GateStatus {
-    /// The node completed successfully and is waiting for human review.
-    AwaitingApproval,
-    /// A human reviewer approved this node's output; the pipeline may continue.
-    Approved {
-        /// The GitHub username of the approver.
-        ///
-        /// Raw `String` — no `GitHubUsername` newtype exists in the identifiers
-        /// module. Values originate from the GitHub API `login` field and are
-        /// expected to be non-empty strings conforming to GitHub's username
-        /// constraints (alphanumeric + hyphens, 1–39 chars). No validation is
-        /// performed here; the GitHub API is the authoritative source.
-        approved_by: String,
-    },
-    /// A human reviewer rejected this node's output; the pipeline must not continue.
-    Rejected {
-        /// The GitHub username of the reviewer.
-        ///
-        /// Raw `String` — no `GitHubUsername` newtype exists in the identifiers
-        /// module. Values originate from the GitHub API `login` field and are
-        /// expected to be non-empty strings conforming to GitHub's username
-        /// constraints (alphanumeric + hyphens, 1–39 chars). No validation is
-        /// performed here; the GitHub API is the authoritative source.
-        rejected_by: String,
-        /// Human-readable explanation of the rejection.
-        reason: String,
-    },
-}
-
-// ---------------------------------------------------------------------------
-
-/// Runtime gate state for all nodes in an active pipeline run.
-///
-/// Passed to [`determine_next_actions`] so it can check whether a
-/// [`NodeGate::HumanGated`] node has been approved before emitting an
-/// [`NextAction::ExecuteNode`] for the next step.
-///
-/// Gates are persisted via [`crate::PipelineStateComment`] and reconstructed
-/// on resume from GitHub.
-///
-/// See `docs/spec/interfaces/pipeline-execution.md` §GateConfig.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GateConfig {
-    /// Per-node gate status, keyed by the node that completed and was gated.
-    ///
-    /// Nodes absent from this map have never been gated (or were
-    /// `AutoProceed` nodes).
-    pub gated_nodes: HashMap<NodeId, GateStatus>,
-}
+// GateStatus and GateConfig are defined in `graph.rs` (alongside PipelineState)
+// so that PipelineStateComment can include gate_config without a circular
+// dependency.  They are re-exported here for backward-compatibility.
+pub use crate::graph::{GateConfig, GateStatus};
 
 // ---------------------------------------------------------------------------
 
@@ -446,17 +395,35 @@ pub fn determine_next_actions(
 /// - [`EdgeConditionKind::Deterministic`]: delegates to
 ///   [`crate::evaluate_deterministic_condition`]. Pure; always returns the
 ///   same result for the same inputs.
-/// - [`EdgeConditionKind::LlmEvaluated`]: the LLM evaluator is invoked
-///   with the natural-language description and the serialised `output`. The
-///   `edge_id` and this function signature are placeholders for the full
-///   LLM-gateway integration completed in the `nodes` crate (PR 9).
+/// - [`EdgeConditionKind::LlmEvaluated`]: looks up the pre-resolved result
+///   in `llm_evaluated_results`. This map is populated by the `nodes` crate
+///   (PR 9) before calling this function: `LlmGateway::call` is invoked
+///   asynchronously for every `LlmEvaluated` condition on the outgoing edges
+///   of the completed node, and the `(EdgeId, bool)` results are collected
+///   into the map. The map entry **must** exist for every `LlmEvaluated`
+///   edge; a missing entry is treated as `false` (conservative fallback) and
+///   **must** be surfaced immediately via `debug_assert!(false, "LlmEvaluated
+///   result missing for edge {:?}", edge_id)` or an equivalent audit-log
+///   warning, to prevent silent pipeline stalls that are hard to debug.
 /// - [`EdgeConditionKind::Composite`]: recursively evaluates inner conditions.
 ///
 /// ## Parameters
 ///
 /// - `edge_id` — Required to populate `EdgeEvaluationRecord::edge_id`.
+/// - `llm_evaluated_results` — Pre-resolved LLM condition outcomes, keyed by
+///   [`EdgeId`]. Populated by the `nodes` crate before calling this function
+///   (see above). Empty for graphs with no `LlmEvaluated` edges.
 /// - `evaluated_at` — Wall-clock time of evaluation; passed in so the function
 ///   remains pure and testable without `std::time` access.
+///
+/// ## Calling Convention (nodes crate)
+///
+/// ```text
+/// // 1. Collect all LlmEvaluated edges leaving the completed node
+/// // 2. For each, call LlmGateway::call to get a bool result (async)
+/// // 3. Build llm_evaluated_results: HashMap<EdgeId, bool>
+/// // 4. Call evaluate_edge_condition for every outgoing edge (sync)
+/// ```
 ///
 /// # See also
 ///
@@ -467,6 +434,7 @@ pub fn evaluate_edge_condition(
     _cond: &EdgeConditionKind,
     _state: &PipelineState,
     _output: &NodeOutput,
+    _llm_evaluated_results: &HashMap<EdgeId, bool>,
     _evaluated_at: Timestamp,
 ) -> (bool, EdgeEvaluationRecord) {
     todo!("See docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition")
