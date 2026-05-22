@@ -642,6 +642,13 @@ pub enum GraphValidationError {
         /// The node ID that could not be resolved.
         node: NodeId,
     },
+
+    /// A node has EvaluationMode::Explicit but is absent from PipelineGraph::explicit_edge_lists.
+    #[error("Node '{node}' has Explicit evaluation mode but no explicit-edge-list entry")]
+    ExplicitModeWithoutEdgeList {
+        /// The node whose explicit-edge-list entry is missing.
+        node: NodeId,
+    },
 }
 
 // ─── Pure business logic functions ──────────────────────────────────────────
@@ -716,3 +723,7 @@ pub fn validate_pipeline_graph(_graph: &PipelineGraph) -> Result<(), Vec<GraphVa
 pub fn compute_eligible_nodes(_state: &PipelineState, _graph: &PipelineGraph) -> Vec<NodeId> {
     todo!("See docs/spec/interfaces/pipeline-graph.md §compute_eligible_nodes")
 }
+
+#[cfg(test)]
+#[path = "graph_tests.rs"]
+mod tests;
