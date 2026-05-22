@@ -654,6 +654,15 @@ pub enum GraphValidationError {
 
 // ─── Pure business logic functions ──────────────────────────────────────────
 
+/// Collects all node IDs from a slice into a [`HashSet`] for O(1) membership
+/// tests.
+///
+/// Shared by [`topological_sort`] and [`validate_pipeline_graph`] to test
+/// whether edge endpoints reference declared nodes.
+fn make_node_id_set(nodes: &[NodeDefinition]) -> HashSet<&NodeId> {
+    nodes.iter().map(|n| &n.id).collect()
+}
+
 /// Returns the forward-edge topological ordering of node IDs (sources first).
 ///
 /// Rework (back) edges are excluded from the sort traversal; the result
@@ -672,7 +681,7 @@ pub fn topological_sort(
     edges: &[EdgeDefinition],
 ) -> Result<Vec<NodeId>, CycleError> {
     // Build an index of all node IDs.
-    let node_set: HashSet<&NodeId> = nodes.iter().map(|n| &n.id).collect();
+    let node_set = make_node_id_set(nodes);
 
     // Consider only forward (non-rework) edges.
     let forward_edges: Vec<&EdgeDefinition> =
@@ -848,7 +857,7 @@ pub fn validate_pipeline_graph(graph: &PipelineGraph) -> Result<(), Vec<GraphVal
     }
 
     // Build node ID set for reference checks.
-    let node_id_set: HashSet<&NodeId> = graph.nodes.iter().map(|n| &n.id).collect();
+    let node_id_set = make_node_id_set(&graph.nodes);
 
     // Check 4: UnknownNode — check each edge's source and target.
     for edge in &graph.edges {

@@ -4,8 +4,7 @@
 //! behavioral assertions in `docs/spec/assertions.md` (ASSERT-PSM-002,
 //! ASSERT-PSM-008).
 //!
-//! All four functions are currently `todo!()` stubs; every test below is
-//! expected to panic (RED) until implementations are written.
+//! All four functions are implemented; every test below is expected to pass (GREEN).
 //!
 //! ## Coverage targets
 //! - `topological_sort`              ≥ 7 tests (Tier 1 + 2)

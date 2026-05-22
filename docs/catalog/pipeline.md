@@ -30,6 +30,7 @@ Core orchestration domain — domain concepts, newtype identifiers, shared primi
 | `CogWorksError` | enum | `crates/pipeline/src/errors.rs:65` | enum in crates/pipeline/src/errors.rs | core, pipeline |
 | `CompactToolIndex` | struct | `crates/pipeline/src/tools.rs:473` | struct in crates/pipeline/src/tools.rs | core, pipeline |
 | `CompositeCondition` | enum | `crates/pipeline/src/graph.rs:177` | enum in crates/pipeline/src/graph.rs | core, pipeline |
+| `compute_eligible_nodes` | fn | `crates/pipeline/src/graph.rs:944` | Returns nodes with Pending status whose every forward-edge predecessor is Completed; gate decisions are excluded from eligibility | graph, pipeline |
 | `ConfigError` | enum | `crates/pipeline/src/knowledge.rs:200` | enum in crates/pipeline/src/knowledge.rs | core, pipeline |
 | `ConstitutionalError` | enum | `crates/pipeline/src/security.rs:266` | enum in crates/pipeline/src/security.rs | core, pipeline |
 | `ConstitutionalRules` | struct | `crates/pipeline/src/security.rs:133` | struct in crates/pipeline/src/security.rs | core, pipeline |
@@ -63,6 +64,7 @@ Core orchestration domain — domain concepts, newtype identifiers, shared primi
 | `EdgeEvaluationRecord` | struct | `crates/pipeline/src/graph.rs:469` | struct in crates/pipeline/src/graph.rs | core, pipeline |
 | `EscalationReason` | struct | `crates/pipeline/src/execution.rs:189` | struct in crates/pipeline/src/execution.rs | core, pipeline |
 | `EscalationResult` | struct | `crates/pipeline/src/classification.rs:90` | struct in crates/pipeline/src/classification.rs | core, pipeline |
+| `evaluate_deterministic_condition` | fn | `crates/pipeline/src/graph.rs:762` | Evaluates a deterministic Expression against PipelineState via dot-path JSON navigation; returns false on unknown field paths or parse failure | graph, pipeline |
 | `EvaluationMode` | enum | `crates/pipeline/src/graph.rs:134` | enum in crates/pipeline/src/graph.rs | core, pipeline |
 | `EvaluatorKind` | enum | `crates/pipeline/src/graph.rs:452` | enum in crates/pipeline/src/graph.rs | core, pipeline |
 | `EventSource` | trait | `crates/pipeline/src/github.rs:266` | trait in crates/pipeline/src/github.rs | core, pipeline, trait |
@@ -191,6 +193,7 @@ Core orchestration domain — domain concepts, newtype identifiers, shared primi
 | `ToolProfile` | struct | `crates/pipeline/src/knowledge.rs:325` | struct in crates/pipeline/src/knowledge.rs | core, pipeline |
 | `ToolProfileStore` | trait | `crates/pipeline/src/knowledge.rs:399` | trait in crates/pipeline/src/knowledge.rs | core, pipeline, trait |
 | `ToolScopeViolation` | struct | `crates/pipeline/src/security.rs:708` | struct in crates/pipeline/src/security.rs | core, pipeline |
+| `topological_sort` | fn | `crates/pipeline/src/graph.rs:679` | Returns the forward-edge topological ordering of node IDs (sources first), excluding rework back-edges; returns CycleError on a directed cycle | graph, pipeline |
 | `TraceabilityEntry` | struct | `crates/pipeline/src/alignment.rs:134` | struct in crates/pipeline/src/alignment.rs | core, pipeline |
 | `TraceabilityMatrix` | struct | `crates/pipeline/src/traceability.rs:188` | struct in crates/pipeline/src/traceability.rs | core, pipeline |
 | `TraceabilityStage` | enum | `crates/pipeline/src/traceability.rs:83` | enum in crates/pipeline/src/traceability.rs | core, pipeline |
@@ -202,6 +205,7 @@ Core orchestration domain — domain concepts, newtype identifiers, shared primi
 | `TwinSpec` | struct | `crates/pipeline/src/domain_services.rs:449` | struct in crates/pipeline/src/domain_services.rs | core, pipeline |
 | `TypedLink` | struct | `crates/pipeline/src/github.rs:337` | struct in crates/pipeline/src/github.rs | core, pipeline |
 | `TypedLinkKind` | enum | `crates/pipeline/src/github.rs:325` | enum in crates/pipeline/src/github.rs | core, pipeline |
+| `validate_pipeline_graph` | fn | `crates/pipeline/src/graph.rs:831` | Validates a PipelineGraph for structural correctness (unique IDs, valid edges, no unterminated cycles, no orphans, Explicit-mode completeness); collects all violations rather than short-circuiting | graph, pipeline |
 | `ValidatedPrompt` | struct | `crates/pipeline/src/security.rs:225` | struct in crates/pipeline/src/security.rs | core, pipeline |
 | `ValidatedSkillInvocation` | struct | `crates/pipeline/src/tools.rs:620` | struct in crates/pipeline/src/tools.rs | core, pipeline |
 | `ValidationKind` | enum | `crates/pipeline/src/graph.rs:123` | enum in crates/pipeline/src/graph.rs | core, pipeline |
