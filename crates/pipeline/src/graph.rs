@@ -799,10 +799,12 @@ fn navigate_json<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serd
 /// Parse a literal token into a `serde_json::Value`.
 /// Supports single-quoted strings, double-quoted strings, and boolean literals.
 fn parse_literal(raw: &str) -> Option<serde_json::Value> {
-    if (raw.starts_with('"') && raw.ends_with('"'))
-        || (raw.starts_with('\'') && raw.ends_with('\''))
+    if raw.len() >= 2
+        && ((raw.starts_with('"') && raw.ends_with('"'))
+            || (raw.starts_with('\'') && raw.ends_with('\'')))
     {
         // Strip the surrounding quote characters.
+        // Safety: raw.len() >= 2 ensures 1..len-1 is a valid non-empty range.
         let inner = &raw[1..raw.len() - 1];
         Some(serde_json::Value::String(inner.to_string()))
     } else if raw == "true" {

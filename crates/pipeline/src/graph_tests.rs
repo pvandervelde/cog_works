@@ -916,6 +916,28 @@ mod parse_literal_kill_tests {
         let result = super::parse_literal("not_a_literal");
         assert_eq!(result, None);
     }
+
+    /// FINDING-001 regression: a bare double-quote (len == 1) must return None,
+    /// not panic with a slice-index-out-of-bounds.
+    #[test]
+    fn test_parse_literal_bare_double_quote_returns_none_not_panic() {
+        let result = super::parse_literal("\"");
+        assert_eq!(
+            result, None,
+            "bare double-quote must not panic and must return None"
+        );
+    }
+
+    /// FINDING-001 regression: a bare single-quote (len == 1) must return None,
+    /// not panic with a slice-index-out-of-bounds.
+    #[test]
+    fn test_parse_literal_bare_single_quote_returns_none_not_panic() {
+        let result = super::parse_literal("'");
+        assert_eq!(
+            result, None,
+            "bare single-quote must not panic and must return None"
+        );
+    }
 }
 
 // ─── Scalar accessor kill tests (surviving mutants) ──────────────────────────
