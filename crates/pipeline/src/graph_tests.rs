@@ -787,3 +787,249 @@ mod compute_eligible_nodes_tests {
         );
     }
 }
+
+// ─── topological_sort kill tests (surviving mutants) ─────────────────────────
+
+mod topological_sort_kill_tests {
+    use super::*;
+
+    /// Kills line 700:44 mutant: `&&` → `||` in the forward-edge guard.
+    ///
+    /// When an edge references a source node that is not in the node list the
+    /// guard prevents that edge from being added to the adjacency/in-degree
+    /// maps.  With the `||` mutant, the unknown source is inserted into the
+    /// adjacency map and the known target's in-degree is incremented, so the
+    /// known target never reaches in-degree 0 and the sort incorrectly reports
+    /// a cycle.
+    #[test]
+    fn test_topological_sort_edge_with_unknown_source_is_silently_excluded() {
+        // "ghost" is not declared in nodes; the edge "ghost" → "a" must be
+        // ignored so that A → B sorts cleanly.
+        let nodes = vec![make_node("a"), make_node("b")];
+        let edges = vec![make_edge("e1", "a", "b"), make_edge("e2", "ghost", "a")];
+
+        let result = topological_sort(&nodes, &edges);
+
+        assert!(
+            result.is_ok(),
+            "edge with unknown source must be silently excluded; got {result:?}"
+        );
+        let sorted = result.unwrap();
+        assert_eq!(
+            sorted.len(),
+            2,
+            "result must contain exactly the 2 known nodes"
+        );
+        assert!(sorted.contains(&nid("a")));
+        assert!(sorted.contains(&nid("b")));
+    }
+
+    /// Companion to the above: unknown *target* is equally excluded.
+    #[test]
+    fn test_topological_sort_edge_with_unknown_target_is_silently_excluded() {
+        let nodes = vec![make_node("a"), make_node("b")];
+        let edges = vec![make_edge("e1", "a", "b"), make_edge("e2", "a", "phantom")];
+
+        let result = topological_sort(&nodes, &edges);
+
+        assert!(
+            result.is_ok(),
+            "edge with unknown target must be silently excluded; got {result:?}"
+        );
+        let sorted = result.unwrap();
+        assert_eq!(sorted.len(), 2);
+    }
+}
+
+// ─── parse_literal kill tests (surviving mutants) ────────────────────────────
+
+mod parse_literal_kill_tests {
+    /// Kills line 808:19 mutant: `raw == "true"` → `raw != "true"`.
+    ///
+    /// With the mutant, `parse_literal("true")` evaluates the branch condition
+    /// as `"true" != "true"` = false and falls through to return `None`.
+    #[test]
+    fn test_parse_literal_true_returns_bool_true() {
+        let result = super::parse_literal("true");
+        assert_eq!(result, Some(serde_json::Value::Bool(true)));
+    }
+
+    /// Kills line 810:19 mutant: `raw == "false"` → `raw != "false"`.
+    ///
+    /// With the mutant, `parse_literal("false")` returns `None`.
+    #[test]
+    fn test_parse_literal_false_returns_bool_false() {
+        let result = super::parse_literal("false");
+        assert_eq!(result, Some(serde_json::Value::Bool(false)));
+    }
+
+    /// Kills line 802:30 mutant: `raw.starts_with('"') && raw.ends_with('"')` → `||`.
+    ///
+    /// A half-open double-quoted string (starts with `"` but does not end with
+    /// it) is not a valid literal.  With the `||` mutant this would be parsed
+    /// as a string by stripping one char from each end, producing a wrong value.
+    #[test]
+    fn test_parse_literal_unclosed_double_quote_returns_none() {
+        let result = super::parse_literal("\"unclosed");
+        assert_eq!(
+            result, None,
+            "half-open double-quoted literal must not parse"
+        );
+    }
+
+    /// Kills line 803:35 mutant: `raw.starts_with('\'') && raw.ends_with('\'')` → `||`.
+    ///
+    /// Same invariant for single-quote delimiters.
+    #[test]
+    fn test_parse_literal_unclosed_single_quote_returns_none() {
+        let result = super::parse_literal("'unclosed");
+        assert_eq!(
+            result, None,
+            "half-open single-quoted literal must not parse"
+        );
+    }
+
+    /// Verify that a properly closed double-quoted string parses correctly.
+    /// This also confirms the inner content is returned (not empty string).
+    #[test]
+    fn test_parse_literal_closed_double_quoted_string_returns_inner_value() {
+        let result = super::parse_literal("\"hello world\"");
+        assert_eq!(
+            result,
+            Some(serde_json::Value::String("hello world".to_string()))
+        );
+    }
+
+    /// Verify that a properly closed single-quoted string parses correctly.
+    #[test]
+    fn test_parse_literal_closed_single_quoted_string_returns_inner_value() {
+        let result = super::parse_literal("'hello world'");
+        assert_eq!(
+            result,
+            Some(serde_json::Value::String("hello world".to_string()))
+        );
+    }
+
+    /// An unrecognised token (no quotes, not bool) must return None.
+    #[test]
+    fn test_parse_literal_unrecognised_token_returns_none() {
+        let result = super::parse_literal("not_a_literal");
+        assert_eq!(result, None);
+    }
+}
+
+// ─── Scalar accessor kill tests (surviving mutants) ──────────────────────────
+
+mod scalar_accessor_kill_tests {
+    use super::*;
+
+    /// Kills line 504:9 mutants (×2): `SchemaVersion::as_str` returning `""` or `"xyzzy"`.
+    #[test]
+    fn test_schema_version_as_str_returns_the_current_version_string() {
+        let v = SchemaVersion::current();
+        assert_eq!(
+            v.as_str(),
+            SchemaVersion::CURRENT,
+            "as_str must return the inner version string"
+        );
+        assert!(!v.as_str().is_empty(), "as_str must not be empty");
+        assert_ne!(v.as_str(), "xyzzy", "as_str must not return a placeholder");
+    }
+
+    /// Kills line 523:9 mutant: `From<SchemaVersion> for String` returning `Default::default()` (`""`).
+    #[test]
+    fn test_schema_version_into_string_roundtrip_preserves_version() {
+        let v = SchemaVersion::current();
+        let s: String = v.into();
+        assert_eq!(s, SchemaVersion::CURRENT);
+        assert_ne!(
+            s,
+            String::default(),
+            "conversion must not return the empty default"
+        );
+    }
+
+    /// Kills line 87:9 mutant: `From<TimeoutSeconds> for Duration` returning `Default::default()` (0 secs).
+    #[test]
+    fn test_timeout_seconds_into_duration_preserves_seconds() {
+        let t = TimeoutSeconds(42);
+        let d: std::time::Duration = t.into();
+        assert_eq!(
+            d.as_secs(),
+            42,
+            "conversion must preserve the timeout value"
+        );
+        assert_ne!(
+            d,
+            std::time::Duration::default(),
+            "must not collapse to zero"
+        );
+    }
+
+    /// Kills line 69:9 mutants (×2): `NaturalLanguageCondition::as_str` returning `""` or `"xyzzy"`.
+    #[test]
+    fn test_natural_language_condition_as_str_returns_the_inner_string() {
+        let cond = NaturalLanguageCondition::new("the spec requires X to hold").expect("non-empty");
+        assert_eq!(
+            cond.as_str(),
+            "the spec requires X to hold",
+            "as_str must return the inner description"
+        );
+        assert!(!cond.as_str().is_empty());
+        assert_ne!(cond.as_str(), "xyzzy");
+    }
+}
+
+// ─── Adversarial expression inputs (Tier 5 — no raw bytes, structured inputs) ─
+
+mod adversarial_expression_tests {
+    use super::*;
+
+    fn empty_state() -> PipelineState {
+        make_state()
+    }
+
+    /// No operator at all: must return false without panicking.
+    #[test]
+    fn test_expression_no_operator_returns_false_without_panic() {
+        let expr = Expression::new("just_a_field_no_operator").expect("non-empty");
+        assert!(!evaluate_deterministic_condition(&expr, &empty_state()));
+    }
+
+    /// Expression is all spaces (non-empty but no operator): must return false.
+    #[test]
+    fn test_expression_only_spaces_returns_false_without_panic() {
+        let expr = Expression::new("   ").expect("non-empty whitespace");
+        assert!(!evaluate_deterministic_condition(&expr, &empty_state()));
+    }
+
+    /// Seven-level dot path: navigate_json must return None gracefully, not panic.
+    #[test]
+    fn test_expression_deeply_nested_dot_path_returns_false_without_panic() {
+        let expr = Expression::new("a.b.c.d.e.f.g == \"x\"").expect("valid expr string");
+        assert!(!evaluate_deterministic_condition(&expr, &empty_state()));
+    }
+
+    /// Unicode characters in path segments: must return false without panicking.
+    #[test]
+    fn test_expression_unicode_path_segments_returns_false_without_panic() {
+        let expr = Expression::new("ñoño.状態 == \"x\"").expect("valid expr string");
+        assert!(!evaluate_deterministic_condition(&expr, &empty_state()));
+    }
+
+    /// Operator present but LHS path is empty (leading space before `==`):
+    /// navigate_json must handle the empty-string segment without panicking.
+    #[test]
+    fn test_expression_empty_lhs_path_returns_false_without_panic() {
+        let expr = Expression::new(" == \"value\"").expect("non-empty");
+        assert!(!evaluate_deterministic_condition(&expr, &empty_state()));
+    }
+
+    /// Operator present but RHS literal is empty (trailing space after `==`):
+    /// parse_literal must return None for an empty token without panicking.
+    #[test]
+    fn test_expression_empty_rhs_literal_returns_false_without_panic() {
+        let expr = Expression::new("field == ").expect("non-empty");
+        assert!(!evaluate_deterministic_condition(&expr, &empty_state()));
+    }
+}
