@@ -14,7 +14,7 @@
 //!
 //! See `docs/spec/interfaces/pipeline-graph.md` for the full contract.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -365,7 +365,7 @@ pub struct NodeState {
 /// Persisted as part of [`PipelineStateComment`] so that gate decisions
 /// survive process restarts without requiring a re-approval.
 ///
-/// See `docs/spec/interfaces/pipeline-execution.md` §GateStatus.
+/// See `docs/spec/interfaces/pipeline-execution.md` §[`GateStatus`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GateStatus {
     /// The node completed successfully and is waiting for human review.
@@ -405,7 +405,7 @@ pub enum GateStatus {
 /// this value from the latest state comment and passes it unchanged to
 /// [`crate::determine_next_actions`].
 ///
-/// See `docs/spec/interfaces/pipeline-execution.md` §GateConfig.
+/// See `docs/spec/interfaces/pipeline-execution.md` §[`GateConfig`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GateConfig {
     /// Per-node gate status, keyed by the node that completed and was gated.
@@ -493,6 +493,7 @@ impl SchemaVersion {
     pub const CURRENT: &'static str = "1";
 
     /// Returns the current schema version.
+    #[must_use]
     pub fn current() -> Self {
         Self(Self::CURRENT.to_string())
     }
@@ -643,7 +644,7 @@ pub enum GraphValidationError {
         node: NodeId,
     },
 
-    /// A node has EvaluationMode::Explicit but is absent from PipelineGraph::explicit_edge_lists.
+    /// A node has [`EvaluationMode::Explicit`] but is absent from [`PipelineGraph::explicit_edge_lists`].
     #[error("Node '{node}' has Explicit evaluation mode but no explicit-edge-list entry")]
     ExplicitModeWithoutEdgeList {
         /// The node whose explicit-edge-list entry is missing.
@@ -667,10 +668,77 @@ pub enum GraphValidationError {
 ///
 /// `docs/spec/interfaces/pipeline-graph.md §topological_sort`
 pub fn topological_sort(
-    _nodes: &[NodeDefinition],
-    _edges: &[EdgeDefinition],
+    nodes: &[NodeDefinition],
+    edges: &[EdgeDefinition],
 ) -> Result<Vec<NodeId>, CycleError> {
-    todo!("See docs/spec/interfaces/pipeline-graph.md §topological_sort")
+    // Build an index of all node IDs.
+    let node_set: HashSet<&NodeId> = nodes.iter().map(|n| &n.id).collect();
+
+    // Consider only forward (non-rework) edges.
+    let forward_edges: Vec<&EdgeDefinition> =
+        edges.iter().filter(|e| e.rework_edge.is_none()).collect();
+
+    // Build adjacency list and in-degree map restricted to known nodes.
+    let mut adjacency: HashMap<&NodeId, Vec<&NodeId>> = HashMap::new();
+    let mut in_degree: HashMap<&NodeId, usize> = HashMap::new();
+
+    for node in nodes {
+        adjacency.entry(&node.id).or_default();
+        in_degree.entry(&node.id).or_insert(0);
+    }
+
+    for edge in &forward_edges {
+        if node_set.contains(&edge.source) && node_set.contains(&edge.target) {
+            adjacency
+                .entry(&edge.source)
+                .or_default()
+                .push(&edge.target);
+            *in_degree.entry(&edge.target).or_insert(0) += 1;
+        }
+    }
+
+    // Initialise queue with all zero-in-degree nodes, sorted for stable order.
+    let mut queue: VecDeque<&NodeId> = {
+        let mut sources: Vec<&NodeId> = in_degree
+            .iter()
+            .filter(|&(_, &deg)| deg == 0)
+            .map(|(&id, _)| id)
+            .collect();
+        sources.sort_by_key(|id| id.as_str());
+        VecDeque::from(sources)
+    };
+
+    let mut result: Vec<NodeId> = Vec::with_capacity(nodes.len());
+
+    while let Some(current) = queue.pop_front() {
+        result.push(current.clone());
+
+        if let Some(neighbours) = adjacency.get(current) {
+            let mut sorted_neighbours = neighbours.clone();
+            sorted_neighbours.sort_by_key(|id| id.as_str());
+            for neighbour in sorted_neighbours {
+                let deg = in_degree.entry(neighbour).or_insert(0);
+                *deg -= 1;
+                if *deg == 0 {
+                    queue.push_back(neighbour);
+                }
+            }
+        }
+    }
+
+    if result.len() < nodes.len() {
+        // Collect the unprocessed nodes — they form the cycle.
+        let processed: HashSet<&NodeId> = result.iter().collect();
+        let cycle: Vec<NodeId> = nodes
+            .iter()
+            .map(|n| &n.id)
+            .filter(|id| !processed.contains(id))
+            .cloned()
+            .collect();
+        return Err(CycleError { cycle });
+    }
+
+    Ok(result)
 }
 
 /// Evaluates a deterministic [`Expression`] against the current [`PipelineState`].
@@ -682,8 +750,59 @@ pub fn topological_sort(
 ///
 /// `docs/spec/interfaces/pipeline-graph.md §evaluate_deterministic_condition`
 #[must_use]
-pub fn evaluate_deterministic_condition(_expr: &Expression, _state: &PipelineState) -> bool {
-    todo!("See docs/spec/interfaces/pipeline-graph.md §evaluate_deterministic_condition")
+pub fn evaluate_deterministic_condition(expr: &Expression, state: &PipelineState) -> bool {
+    evaluate_condition_inner(expr.as_str(), state).unwrap_or(false)
+}
+
+/// Inner evaluator; returns `None` on any parse or navigation failure (→ false).
+fn evaluate_condition_inner(expr: &str, state: &PipelineState) -> Option<bool> {
+    // Find the operator: try " == " first, then " != ".
+    let (lhs, op, rhs) = if let Some(pos) = expr.find(" == ") {
+        (&expr[..pos], "==", &expr[pos + 4..])
+    } else if let Some(pos) = expr.find(" != ") {
+        (&expr[..pos], "!=", &expr[pos + 4..])
+    } else {
+        return None;
+    };
+
+    // Navigate the JSON representation of PipelineState.
+    let json_state = serde_json::to_value(state).ok()?;
+    let json_val = navigate_json(&json_state, lhs)?;
+
+    // Parse the RHS literal.
+    let rhs = rhs.trim();
+    let expected = parse_literal(rhs)?;
+
+    let equal = *json_val == expected;
+    Some(if op == "==" { equal } else { !equal })
+}
+
+/// Descend into a `serde_json::Value` using a dot-separated path.
+/// Returns `None` if any segment is missing.
+fn navigate_json<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut current = root;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
+}
+
+/// Parse a literal token into a `serde_json::Value`.
+/// Supports single-quoted strings, double-quoted strings, and boolean literals.
+fn parse_literal(raw: &str) -> Option<serde_json::Value> {
+    if (raw.starts_with('"') && raw.ends_with('"'))
+        || (raw.starts_with('\'') && raw.ends_with('\''))
+    {
+        // Strip the surrounding quote characters.
+        let inner = &raw[1..raw.len() - 1];
+        Some(serde_json::Value::String(inner.to_string()))
+    } else if raw == "true" {
+        Some(serde_json::Value::Bool(true))
+    } else if raw == "false" {
+        Some(serde_json::Value::Bool(false))
+    } else {
+        None
+    }
 }
 
 /// Validates a [`PipelineGraph`] for structural correctness before any
@@ -700,8 +819,101 @@ pub fn evaluate_deterministic_condition(_expr: &Expression, _state: &PipelineSta
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-graph.md §validate_pipeline_graph`
-pub fn validate_pipeline_graph(_graph: &PipelineGraph) -> Result<(), Vec<GraphValidationError>> {
-    todo!("See docs/spec/interfaces/pipeline-graph.md §validate_pipeline_graph")
+pub fn validate_pipeline_graph(graph: &PipelineGraph) -> Result<(), Vec<GraphValidationError>> {
+    let mut errors: Vec<GraphValidationError> = Vec::new();
+
+    // Check 1: EmptyGraph
+    if graph.nodes.is_empty() {
+        errors.push(GraphValidationError::EmptyGraph);
+    }
+
+    // Check 2: DuplicateNodeId
+    let mut seen_node_ids: HashSet<&NodeId> = HashSet::new();
+    for node in &graph.nodes {
+        if !seen_node_ids.insert(&node.id) {
+            errors.push(GraphValidationError::DuplicateNodeId {
+                id: node.id.clone(),
+            });
+        }
+    }
+
+    // Check 3: DuplicateEdgeId
+    let mut seen_edge_ids: HashSet<&EdgeId> = HashSet::new();
+    for edge in &graph.edges {
+        if !seen_edge_ids.insert(&edge.id) {
+            errors.push(GraphValidationError::DuplicateEdgeId {
+                id: edge.id.clone(),
+            });
+        }
+    }
+
+    // Build node ID set for reference checks.
+    let node_id_set: HashSet<&NodeId> = graph.nodes.iter().map(|n| &n.id).collect();
+
+    // Check 4: UnknownNode — check each edge's source and target.
+    for edge in &graph.edges {
+        if !node_id_set.contains(&edge.source) {
+            errors.push(GraphValidationError::UnknownNode {
+                edge: edge.id.clone(),
+                node: edge.source.clone(),
+            });
+        }
+        if !node_id_set.contains(&edge.target) {
+            errors.push(GraphValidationError::UnknownNode {
+                edge: edge.id.clone(),
+                node: edge.target.clone(),
+            });
+        }
+    }
+
+    // Check 5: OrphanNode — node with no incoming AND no outgoing edges.
+    let mut connected_nodes: HashSet<&NodeId> = HashSet::new();
+    for edge in &graph.edges {
+        connected_nodes.insert(&edge.source);
+        connected_nodes.insert(&edge.target);
+    }
+    for node in &graph.nodes {
+        if !connected_nodes.contains(&node.id) {
+            errors.push(GraphValidationError::OrphanNode {
+                node: node.id.clone(),
+            });
+        }
+    }
+
+    // Check 6: InvalidMaxTraversals — rework edge with max_traversals == 0.
+    for edge in &graph.edges {
+        if let Some(rework) = &edge.rework_edge
+            && rework.max_traversals == 0
+        {
+            errors.push(GraphValidationError::InvalidMaxTraversals {
+                edge: edge.id.clone(),
+            });
+        }
+    }
+
+    // Check 7: UnterminatedCycle — forward-edge cycle without rework edge.
+    if let Err(cycle_error) = topological_sort(&graph.nodes, &graph.edges) {
+        errors.push(GraphValidationError::UnterminatedCycle {
+            nodes: cycle_error.cycle,
+        });
+    }
+
+    // Check 8: ExplicitModeWithoutEdgeList.
+    for (node_id, mode) in &graph.evaluation_modes {
+        if matches!(mode, EvaluationMode::Explicit)
+            && !graph.explicit_edge_lists.contains_key(node_id)
+        {
+            errors.push(GraphValidationError::ExplicitModeWithoutEdgeList {
+                node: node_id.clone(),
+            });
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 /// Returns the set of nodes eligible to execute next given the current state.
@@ -720,8 +932,37 @@ pub fn validate_pipeline_graph(_graph: &PipelineGraph) -> Result<(), Vec<GraphVa
 ///
 /// `docs/spec/interfaces/pipeline-graph.md §compute_eligible_nodes`
 #[must_use]
-pub fn compute_eligible_nodes(_state: &PipelineState, _graph: &PipelineGraph) -> Vec<NodeId> {
-    todo!("See docs/spec/interfaces/pipeline-graph.md §compute_eligible_nodes")
+pub fn compute_eligible_nodes(state: &PipelineState, graph: &PipelineGraph) -> Vec<NodeId> {
+    let mut eligible: Vec<NodeId> = Vec::new();
+
+    for node in &graph.nodes {
+        // Skip nodes that are not Pending.
+        let status = state
+            .node_states
+            .get(&node.id)
+            .map_or(NodeStatus::Pending, |ns| ns.status);
+        if status != NodeStatus::Pending {
+            continue;
+        }
+
+        // Collect all forward-edge predecessors.
+        let all_predecessors_completed = graph
+            .edges
+            .iter()
+            .filter(|e| e.target == node.id && e.rework_edge.is_none())
+            .all(|e| {
+                state
+                    .node_states
+                    .get(&e.source)
+                    .is_some_and(|ns| ns.status == NodeStatus::Completed)
+            });
+
+        if all_predecessors_completed {
+            eligible.push(node.id.clone());
+        }
+    }
+
+    eligible
 }
 
 #[cfg(test)]
