@@ -580,13 +580,21 @@ pub struct PipelineStateComment {
 /// A cycle is only valid if every path around it passes through at least one
 /// edge with `rework_edge: Some(_)` specifying a finite `max_traversals`.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
-#[error("Cycle detected: {}", cycle.iter().map(NodeId::as_str).collect::<Vec<_>>().join(" → "))]
+#[error("Cycle detected involving: {}", cycle.iter().map(NodeId::as_str).collect::<Vec<_>>().join(", "))]
 pub struct CycleError {
-    /// The sequence of node IDs forming the detected cycle.
+    /// Node IDs of nodes involved in the detected cycle.
+    ///
+    /// Collected in declaration order from the `nodes` slice, **not** in
+    /// cycle-traversal order. The display message uses `", "` as separator
+    /// rather than `" \u2192 "` to avoid implying a directed ordering.
     pub cycle: Vec<NodeId>,
 }
 
 /// A single structural violation found by [`validate_pipeline_graph`].
+///
+/// This enum is `#[non_exhaustive]` — future checks may add new variants
+/// without requiring downstream match sites to be updated immediately.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum GraphValidationError {
     /// The graph contains no nodes.
@@ -649,6 +657,31 @@ pub enum GraphValidationError {
     ExplicitModeWithoutEdgeList {
         /// The node whose explicit-edge-list entry is missing.
         node: NodeId,
+    },
+
+    /// A rework edge's [`OverflowBehaviour::TakeEdge`] names an edge that is
+    /// not declared in the graph. The pipeline cannot use this overflow path.
+    #[error(
+        "Rework edge '{rework_edge}' overflow behaviour references unknown edge '{overflow_edge}'"
+    )]
+    UnknownOverflowEdge {
+        /// The rework edge containing the bad overflow edge reference.
+        rework_edge: EdgeId,
+        /// The edge ID that could not be resolved.
+        overflow_edge: EdgeId,
+    },
+
+    /// A node declares the same artifact slot name more than once in its
+    /// `declared_inputs` or `declared_outputs`.
+    ///
+    /// Spec invariant: *"`declared_inputs` and `declared_outputs` must not
+    /// contain duplicate names within the same node."*
+    #[error("Node '{node}' has duplicate slot name '{slot}'")]
+    DuplicateSlotName {
+        /// The node containing the duplicate slot.
+        node: NodeId,
+        /// The duplicated slot name.
+        slot: String,
     },
 }
 
@@ -804,7 +837,7 @@ fn parse_literal(raw: &str) -> Option<serde_json::Value> {
             || (raw.starts_with('\'') && raw.ends_with('\'')))
     {
         // Strip the surrounding quote characters.
-        // Safety: raw.len() >= 2 ensures 1..len-1 is a valid non-empty range.
+        // raw.len() >= 2 guarantees this slice never panics.
         let inner = &raw[1..raw.len() - 1];
         Some(serde_json::Value::String(inner.to_string()))
     } else if raw == "true" {
@@ -916,6 +949,38 @@ pub fn validate_pipeline_graph(graph: &PipelineGraph) -> Result<(), Vec<GraphVal
         {
             errors.push(GraphValidationError::ExplicitModeWithoutEdgeList {
                 node: node_id.clone(),
+            });
+        }
+    }
+
+    // Check 9: DuplicateSlotName — declared_inputs and declared_outputs must
+    // not contain duplicate names within the same node.
+    for node in &graph.nodes {
+        let mut slot_names: HashSet<&str> = HashSet::new();
+        for slot in node
+            .declared_inputs
+            .iter()
+            .chain(node.declared_outputs.iter())
+        {
+            if !slot_names.insert(slot.as_str()) {
+                errors.push(GraphValidationError::DuplicateSlotName {
+                    node: node.id.clone(),
+                    slot: slot.clone(),
+                });
+            }
+        }
+    }
+
+    // Check 10: UnknownOverflowEdge — OverflowBehaviour::TakeEdge must
+    // reference a declared edge.
+    for edge in &graph.edges {
+        if let Some(rework) = &edge.rework_edge
+            && let OverflowBehaviour::TakeEdge(ref overflow_edge_id) = rework.overflow_behaviour
+            && !seen_edge_ids.contains(overflow_edge_id)
+        {
+            errors.push(GraphValidationError::UnknownOverflowEdge {
+                rework_edge: edge.id.clone(),
+                overflow_edge: overflow_edge_id.clone(),
             });
         }
     }

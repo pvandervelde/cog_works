@@ -619,6 +619,89 @@ mod validate_pipeline_graph_tests {
             "OrphanNode must be collected alongside DuplicateNodeId; errors: {errors:?}"
         );
     }
+
+    #[test]
+    fn test_validate_pipeline_graph_overflow_take_edge_references_unknown_edge_returns_error() {
+        // Rework edge with OverflowBehaviour::TakeEdge("no-such-edge").
+        // The overflow target does not exist → UnknownOverflowEdge.
+        let nodes = vec![make_node("a"), make_node("b")];
+        let fwd = make_edge("e-fwd", "a", "b");
+        let mut rework = make_rework_edge("e-rework", "b", "a", 2);
+        if let Some(ref mut r) = rework.rework_edge {
+            r.overflow_behaviour =
+                OverflowBehaviour::TakeEdge(EdgeId::new("no-such-edge").expect("test edge id"));
+        }
+        let graph = make_graph(nodes, vec![fwd, rework]);
+
+        let errors = validate_pipeline_graph(&graph).unwrap_err();
+
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                GraphValidationError::UnknownOverflowEdge { overflow_edge, .. }
+                    if overflow_edge == &EdgeId::new("no-such-edge").unwrap()
+            )),
+            "expected UnknownOverflowEdge; got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_pipeline_graph_overflow_take_edge_references_known_edge_returns_ok() {
+        // OverflowBehaviour::TakeEdge("e-fwd") where "e-fwd" IS declared → valid.
+        let nodes = vec![make_node("a"), make_node("b")];
+        let fwd = make_edge("e-fwd", "a", "b");
+        let mut rework = make_rework_edge("e-rework", "b", "a", 2);
+        if let Some(ref mut r) = rework.rework_edge {
+            r.overflow_behaviour =
+                OverflowBehaviour::TakeEdge(EdgeId::new("e-fwd").expect("test edge id"));
+        }
+        let graph = make_graph(nodes, vec![fwd, rework]);
+
+        assert!(
+            validate_pipeline_graph(&graph).is_ok(),
+            "TakeEdge referencing a declared edge must be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_pipeline_graph_duplicate_slot_name_in_inputs_returns_error() {
+        // Node declares the same input slot twice → DuplicateSlotName.
+        let mut node = make_node("a");
+        node.declared_inputs = vec!["artifact".to_string(), "artifact".to_string()];
+        let nodes = vec![node, make_node("b")];
+        let graph = make_graph(nodes, vec![make_edge("e1", "a", "b")]);
+
+        let errors = validate_pipeline_graph(&graph).unwrap_err();
+
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                GraphValidationError::DuplicateSlotName { node, slot }
+                    if node == &nid("a") && slot == "artifact"
+            )),
+            "expected DuplicateSlotName for 'artifact' on node 'a'; got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_pipeline_graph_duplicate_slot_name_in_outputs_returns_error() {
+        // Node declares the same output slot twice → DuplicateSlotName.
+        let mut node = make_node("a");
+        node.declared_outputs = vec!["result".to_string(), "result".to_string()];
+        let nodes = vec![node, make_node("b")];
+        let graph = make_graph(nodes, vec![make_edge("e1", "a", "b")]);
+
+        let errors = validate_pipeline_graph(&graph).unwrap_err();
+
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                GraphValidationError::DuplicateSlotName { node, slot }
+                    if node == &nid("a") && slot == "result"
+            )),
+            "expected DuplicateSlotName for 'result' on node 'a'; got {errors:?}"
+        );
+    }
 }
 
 // ─── compute_eligible_nodes ──────────────────────────────────────────────────
