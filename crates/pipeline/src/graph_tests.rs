@@ -384,7 +384,7 @@ mod evaluate_deterministic_condition_tests {
 mod validate_pipeline_graph_tests {
     use super::*;
 
-    // Spec: all 8 checks must run — errors are collected, not short-circuited.
+    // Spec: all 10 checks must run — errors are collected, not short-circuited.
 
     #[test]
     fn test_validate_pipeline_graph_valid_linear_graph_returns_ok() {
@@ -664,8 +664,24 @@ mod validate_pipeline_graph_tests {
     }
 
     #[test]
+    fn test_validate_pipeline_graph_same_slot_name_in_inputs_and_outputs_is_valid() {
+        // Pass-through node: reads and writes the same artifact name.
+        // The check is per-list; a name appearing in both lists is permitted.
+        let mut node = make_node("a");
+        node.declared_inputs = vec!["code_diff".to_string()];
+        node.declared_outputs = vec!["code_diff".to_string()];
+        let nodes = vec![node, make_node("b")];
+        let graph = make_graph(nodes, vec![make_edge("e1", "a", "b")]);
+
+        assert!(
+            validate_pipeline_graph(&graph).is_ok(),
+            "same slot name in inputs and outputs must not be flagged as a duplicate"
+        );
+    }
+
+    #[test]
     fn test_validate_pipeline_graph_duplicate_slot_name_in_inputs_returns_error() {
-        // Node declares the same input slot twice → DuplicateSlotName.
+        // Node declares the same input slot twice (intra-list duplicate) → DuplicateSlotName.
         let mut node = make_node("a");
         node.declared_inputs = vec!["artifact".to_string(), "artifact".to_string()];
         let nodes = vec![node, make_node("b")];
@@ -685,7 +701,7 @@ mod validate_pipeline_graph_tests {
 
     #[test]
     fn test_validate_pipeline_graph_duplicate_slot_name_in_outputs_returns_error() {
-        // Node declares the same output slot twice → DuplicateSlotName.
+        // Node declares the same output slot twice (intra-list duplicate) → DuplicateSlotName.
         let mut node = make_node("a");
         node.declared_outputs = vec!["result".to_string(), "result".to_string()];
         let nodes = vec![node, make_node("b")];

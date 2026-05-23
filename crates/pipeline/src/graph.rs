@@ -866,35 +866,61 @@ fn parse_literal(raw: &str) -> Option<serde_json::Value> {
 pub fn validate_pipeline_graph(graph: &PipelineGraph) -> Result<(), Vec<GraphValidationError>> {
     let mut errors: Vec<GraphValidationError> = Vec::new();
 
-    // Check 1: EmptyGraph
+    // Pre-compute shared lookup structures.
+    let node_id_set = make_node_id_set(&graph.nodes);
+    let edge_id_set: HashSet<&EdgeId> = graph.edges.iter().map(|e| &e.id).collect();
+
+    check_empty_graph(graph, &mut errors);
+    check_duplicate_node_ids(graph, &mut errors);
+    check_duplicate_edge_ids(graph, &mut errors);
+    check_unknown_node_references(graph, &node_id_set, &mut errors);
+    check_orphan_nodes(graph, &mut errors);
+    check_invalid_max_traversals(graph, &mut errors);
+    check_unterminated_cycles(graph, &mut errors);
+    check_explicit_mode_without_edge_list(graph, &mut errors);
+    check_duplicate_slot_names(graph, &mut errors);
+    check_unknown_overflow_edges(graph, &edge_id_set, &mut errors);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn check_empty_graph(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
     if graph.nodes.is_empty() {
         errors.push(GraphValidationError::EmptyGraph);
     }
+}
 
-    // Check 2: DuplicateNodeId
-    let mut seen_node_ids: HashSet<&NodeId> = HashSet::new();
+fn check_duplicate_node_ids(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    let mut seen: HashSet<&NodeId> = HashSet::new();
     for node in &graph.nodes {
-        if !seen_node_ids.insert(&node.id) {
+        if !seen.insert(&node.id) {
             errors.push(GraphValidationError::DuplicateNodeId {
                 id: node.id.clone(),
             });
         }
     }
+}
 
-    // Check 3: DuplicateEdgeId
-    let mut seen_edge_ids: HashSet<&EdgeId> = HashSet::new();
+fn check_duplicate_edge_ids(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    let mut seen: HashSet<&EdgeId> = HashSet::new();
     for edge in &graph.edges {
-        if !seen_edge_ids.insert(&edge.id) {
+        if !seen.insert(&edge.id) {
             errors.push(GraphValidationError::DuplicateEdgeId {
                 id: edge.id.clone(),
             });
         }
     }
+}
 
-    // Build node ID set for reference checks.
-    let node_id_set = make_node_id_set(&graph.nodes);
-
-    // Check 4: UnknownNode — check each edge's source and target.
+fn check_unknown_node_references(
+    graph: &PipelineGraph,
+    node_id_set: &HashSet<&NodeId>,
+    errors: &mut Vec<GraphValidationError>,
+) {
     for edge in &graph.edges {
         if !node_id_set.contains(&edge.source) {
             errors.push(GraphValidationError::UnknownNode {
@@ -909,22 +935,24 @@ pub fn validate_pipeline_graph(graph: &PipelineGraph) -> Result<(), Vec<GraphVal
             });
         }
     }
+}
 
-    // Check 5: OrphanNode — node with no incoming AND no outgoing edges.
-    let mut connected_nodes: HashSet<&NodeId> = HashSet::new();
+fn check_orphan_nodes(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    let mut connected: HashSet<&NodeId> = HashSet::new();
     for edge in &graph.edges {
-        connected_nodes.insert(&edge.source);
-        connected_nodes.insert(&edge.target);
+        connected.insert(&edge.source);
+        connected.insert(&edge.target);
     }
     for node in &graph.nodes {
-        if !connected_nodes.contains(&node.id) {
+        if !connected.contains(&node.id) {
             errors.push(GraphValidationError::OrphanNode {
                 node: node.id.clone(),
             });
         }
     }
+}
 
-    // Check 6: InvalidMaxTraversals — rework edge with max_traversals == 0.
+fn check_invalid_max_traversals(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
     for edge in &graph.edges {
         if let Some(rework) = &edge.rework_edge
             && rework.max_traversals == 0
@@ -934,15 +962,20 @@ pub fn validate_pipeline_graph(graph: &PipelineGraph) -> Result<(), Vec<GraphVal
             });
         }
     }
+}
 
-    // Check 7: UnterminatedCycle — forward-edge cycle without rework edge.
+fn check_unterminated_cycles(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
     if let Err(cycle_error) = topological_sort(&graph.nodes, &graph.edges) {
         errors.push(GraphValidationError::UnterminatedCycle {
             nodes: cycle_error.cycle,
         });
     }
+}
 
-    // Check 8: ExplicitModeWithoutEdgeList.
+fn check_explicit_mode_without_edge_list(
+    graph: &PipelineGraph,
+    errors: &mut Vec<GraphValidationError>,
+) {
     for (node_id, mode) in &graph.evaluation_modes {
         if matches!(mode, EvaluationMode::Explicit)
             && !graph.explicit_edge_lists.contains_key(node_id)
@@ -952,43 +985,42 @@ pub fn validate_pipeline_graph(graph: &PipelineGraph) -> Result<(), Vec<GraphVal
             });
         }
     }
+}
 
-    // Check 9: DuplicateSlotName — declared_inputs and declared_outputs must
-    // not contain duplicate names within the same node.
+fn check_duplicate_slot_names(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
     for node in &graph.nodes {
-        let mut slot_names: HashSet<&str> = HashSet::new();
-        for slot in node
-            .declared_inputs
-            .iter()
-            .chain(node.declared_outputs.iter())
-        {
-            if !slot_names.insert(slot.as_str()) {
-                errors.push(GraphValidationError::DuplicateSlotName {
-                    node: node.id.clone(),
-                    slot: slot.clone(),
-                });
+        // Inputs and outputs are validated independently. A slot name that
+        // appears in both lists is permitted: pass-through nodes legitimately
+        // read and write the same artifact under the same name.
+        for slots in [&node.declared_inputs, &node.declared_outputs] {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for slot in slots {
+                if !seen.insert(slot.as_str()) {
+                    errors.push(GraphValidationError::DuplicateSlotName {
+                        node: node.id.clone(),
+                        slot: slot.clone(),
+                    });
+                }
             }
         }
     }
+}
 
-    // Check 10: UnknownOverflowEdge — OverflowBehaviour::TakeEdge must
-    // reference a declared edge.
+fn check_unknown_overflow_edges(
+    graph: &PipelineGraph,
+    edge_id_set: &HashSet<&EdgeId>,
+    errors: &mut Vec<GraphValidationError>,
+) {
     for edge in &graph.edges {
         if let Some(rework) = &edge.rework_edge
             && let OverflowBehaviour::TakeEdge(ref overflow_edge_id) = rework.overflow_behaviour
-            && !seen_edge_ids.contains(overflow_edge_id)
+            && !edge_id_set.contains(overflow_edge_id)
         {
             errors.push(GraphValidationError::UnknownOverflowEdge {
                 rework_edge: edge.id.clone(),
                 overflow_edge: overflow_edge_id.clone(),
             });
         }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
     }
 }
 
