@@ -14,7 +14,7 @@
 //!
 //! See `docs/spec/interfaces/pipeline-graph.md` for the full contract.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -365,7 +365,7 @@ pub struct NodeState {
 /// Persisted as part of [`PipelineStateComment`] so that gate decisions
 /// survive process restarts without requiring a re-approval.
 ///
-/// See `docs/spec/interfaces/pipeline-execution.md` §GateStatus.
+/// See `docs/spec/interfaces/pipeline-execution.md` §[`GateStatus`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GateStatus {
     /// The node completed successfully and is waiting for human review.
@@ -405,7 +405,7 @@ pub enum GateStatus {
 /// this value from the latest state comment and passes it unchanged to
 /// [`crate::determine_next_actions`].
 ///
-/// See `docs/spec/interfaces/pipeline-execution.md` §GateConfig.
+/// See `docs/spec/interfaces/pipeline-execution.md` §[`GateConfig`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GateConfig {
     /// Per-node gate status, keyed by the node that completed and was gated.
@@ -493,6 +493,7 @@ impl SchemaVersion {
     pub const CURRENT: &'static str = "1";
 
     /// Returns the current schema version.
+    #[must_use]
     pub fn current() -> Self {
         Self(Self::CURRENT.to_string())
     }
@@ -579,13 +580,21 @@ pub struct PipelineStateComment {
 /// A cycle is only valid if every path around it passes through at least one
 /// edge with `rework_edge: Some(_)` specifying a finite `max_traversals`.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
-#[error("Cycle detected: {}", cycle.iter().map(NodeId::as_str).collect::<Vec<_>>().join(" → "))]
+#[error("Cycle detected involving: {}", cycle.iter().map(NodeId::as_str).collect::<Vec<_>>().join(", "))]
 pub struct CycleError {
-    /// The sequence of node IDs forming the detected cycle.
+    /// Node IDs of nodes involved in the detected cycle.
+    ///
+    /// Collected in declaration order from the `nodes` slice, **not** in
+    /// cycle-traversal order. The display message uses `", "` as separator
+    /// rather than `" \u2192 "` to avoid implying a directed ordering.
     pub cycle: Vec<NodeId>,
 }
 
 /// A single structural violation found by [`validate_pipeline_graph`].
+///
+/// This enum is `#[non_exhaustive]` — future checks may add new variants
+/// without requiring downstream match sites to be updated immediately.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum GraphValidationError {
     /// The graph contains no nodes.
@@ -642,9 +651,50 @@ pub enum GraphValidationError {
         /// The node ID that could not be resolved.
         node: NodeId,
     },
+
+    /// A node has [`EvaluationMode::Explicit`] but is absent from [`PipelineGraph::explicit_edge_lists`].
+    #[error("Node '{node}' has Explicit evaluation mode but no explicit-edge-list entry")]
+    ExplicitModeWithoutEdgeList {
+        /// The node whose explicit-edge-list entry is missing.
+        node: NodeId,
+    },
+
+    /// A rework edge's [`OverflowBehaviour::TakeEdge`] names an edge that is
+    /// not declared in the graph. The pipeline cannot use this overflow path.
+    #[error(
+        "Rework edge '{rework_edge}' overflow behaviour references unknown edge '{overflow_edge}'"
+    )]
+    UnknownOverflowEdge {
+        /// The rework edge containing the bad overflow edge reference.
+        rework_edge: EdgeId,
+        /// The edge ID that could not be resolved.
+        overflow_edge: EdgeId,
+    },
+
+    /// A node declares the same artifact slot name more than once in its
+    /// `declared_inputs` or `declared_outputs`.
+    ///
+    /// Spec invariant: *"`declared_inputs` and `declared_outputs` must not
+    /// contain duplicate names within the same node."*
+    #[error("Node '{node}' has duplicate slot name '{slot}'")]
+    DuplicateSlotName {
+        /// The node containing the duplicate slot.
+        node: NodeId,
+        /// The duplicated slot name.
+        slot: String,
+    },
 }
 
 // ─── Pure business logic functions ──────────────────────────────────────────
+
+/// Collects all node IDs from a slice into a [`HashSet`] for O(1) membership
+/// tests.
+///
+/// Shared by [`topological_sort`] and [`validate_pipeline_graph`] to test
+/// whether edge endpoints reference declared nodes.
+fn make_node_id_set(nodes: &[NodeDefinition]) -> HashSet<&NodeId> {
+    nodes.iter().map(|n| &n.id).collect()
+}
 
 /// Returns the forward-edge topological ordering of node IDs (sources first).
 ///
@@ -660,10 +710,77 @@ pub enum GraphValidationError {
 ///
 /// `docs/spec/interfaces/pipeline-graph.md §topological_sort`
 pub fn topological_sort(
-    _nodes: &[NodeDefinition],
-    _edges: &[EdgeDefinition],
+    nodes: &[NodeDefinition],
+    edges: &[EdgeDefinition],
 ) -> Result<Vec<NodeId>, CycleError> {
-    todo!("See docs/spec/interfaces/pipeline-graph.md §topological_sort")
+    // Build an index of all node IDs.
+    let node_set = make_node_id_set(nodes);
+
+    // Consider only forward (non-rework) edges.
+    let forward_edges: Vec<&EdgeDefinition> =
+        edges.iter().filter(|e| e.rework_edge.is_none()).collect();
+
+    // Build adjacency list and in-degree map restricted to known nodes.
+    let mut adjacency: HashMap<&NodeId, Vec<&NodeId>> = HashMap::new();
+    let mut in_degree: HashMap<&NodeId, usize> = HashMap::new();
+
+    for node in nodes {
+        adjacency.entry(&node.id).or_default();
+        in_degree.entry(&node.id).or_insert(0);
+    }
+
+    for edge in &forward_edges {
+        if node_set.contains(&edge.source) && node_set.contains(&edge.target) {
+            adjacency
+                .entry(&edge.source)
+                .or_default()
+                .push(&edge.target);
+            *in_degree.entry(&edge.target).or_insert(0) += 1;
+        }
+    }
+
+    // Initialise queue with all zero-in-degree nodes, sorted for stable order.
+    let mut queue: VecDeque<&NodeId> = {
+        let mut sources: Vec<&NodeId> = in_degree
+            .iter()
+            .filter(|&(_, &deg)| deg == 0)
+            .map(|(&id, _)| id)
+            .collect();
+        sources.sort_by_key(|id| id.as_str());
+        VecDeque::from(sources)
+    };
+
+    let mut result: Vec<NodeId> = Vec::with_capacity(nodes.len());
+
+    while let Some(current) = queue.pop_front() {
+        result.push(current.clone());
+
+        if let Some(neighbours) = adjacency.get(current) {
+            let mut sorted_neighbours = neighbours.clone();
+            sorted_neighbours.sort_by_key(|id| id.as_str());
+            for neighbour in sorted_neighbours {
+                let deg = in_degree.entry(neighbour).or_insert(0);
+                *deg -= 1;
+                if *deg == 0 {
+                    queue.push_back(neighbour);
+                }
+            }
+        }
+    }
+
+    if result.len() < nodes.len() {
+        // Collect the unprocessed nodes — they form the cycle.
+        let processed: HashSet<&NodeId> = result.iter().collect();
+        let cycle: Vec<NodeId> = nodes
+            .iter()
+            .map(|n| &n.id)
+            .filter(|id| !processed.contains(id))
+            .cloned()
+            .collect();
+        return Err(CycleError { cycle });
+    }
+
+    Ok(result)
 }
 
 /// Evaluates a deterministic [`Expression`] against the current [`PipelineState`].
@@ -675,8 +792,61 @@ pub fn topological_sort(
 ///
 /// `docs/spec/interfaces/pipeline-graph.md §evaluate_deterministic_condition`
 #[must_use]
-pub fn evaluate_deterministic_condition(_expr: &Expression, _state: &PipelineState) -> bool {
-    todo!("See docs/spec/interfaces/pipeline-graph.md §evaluate_deterministic_condition")
+pub fn evaluate_deterministic_condition(expr: &Expression, state: &PipelineState) -> bool {
+    evaluate_condition_inner(expr.as_str(), state).unwrap_or(false)
+}
+
+/// Inner evaluator; returns `None` on any parse or navigation failure (→ false).
+fn evaluate_condition_inner(expr: &str, state: &PipelineState) -> Option<bool> {
+    // Find the operator: try " == " first, then " != ".
+    let (lhs, op, rhs) = if let Some(pos) = expr.find(" == ") {
+        (&expr[..pos], "==", &expr[pos + 4..])
+    } else if let Some(pos) = expr.find(" != ") {
+        (&expr[..pos], "!=", &expr[pos + 4..])
+    } else {
+        return None;
+    };
+
+    // Navigate the JSON representation of PipelineState.
+    let json_state = serde_json::to_value(state).ok()?;
+    let json_val = navigate_json(&json_state, lhs)?;
+
+    // Parse the RHS literal.
+    let rhs = rhs.trim();
+    let expected = parse_literal(rhs)?;
+
+    let equal = *json_val == expected;
+    Some(if op == "==" { equal } else { !equal })
+}
+
+/// Descend into a `serde_json::Value` using a dot-separated path.
+/// Returns `None` if any segment is missing.
+fn navigate_json<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut current = root;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
+}
+
+/// Parse a literal token into a `serde_json::Value`.
+/// Supports single-quoted strings, double-quoted strings, and boolean literals.
+fn parse_literal(raw: &str) -> Option<serde_json::Value> {
+    if raw.len() >= 2
+        && ((raw.starts_with('"') && raw.ends_with('"'))
+            || (raw.starts_with('\'') && raw.ends_with('\'')))
+    {
+        // Strip the surrounding quote characters.
+        // raw.len() >= 2 guarantees this slice never panics.
+        let inner = &raw[1..raw.len() - 1];
+        Some(serde_json::Value::String(inner.to_string()))
+    } else if raw == "true" {
+        Some(serde_json::Value::Bool(true))
+    } else if raw == "false" {
+        Some(serde_json::Value::Bool(false))
+    } else {
+        None
+    }
 }
 
 /// Validates a [`PipelineGraph`] for structural correctness before any
@@ -693,8 +863,165 @@ pub fn evaluate_deterministic_condition(_expr: &Expression, _state: &PipelineSta
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-graph.md §validate_pipeline_graph`
-pub fn validate_pipeline_graph(_graph: &PipelineGraph) -> Result<(), Vec<GraphValidationError>> {
-    todo!("See docs/spec/interfaces/pipeline-graph.md §validate_pipeline_graph")
+pub fn validate_pipeline_graph(graph: &PipelineGraph) -> Result<(), Vec<GraphValidationError>> {
+    let mut errors: Vec<GraphValidationError> = Vec::new();
+
+    // Pre-compute shared lookup structures.
+    let node_id_set = make_node_id_set(&graph.nodes);
+    let edge_id_set: HashSet<&EdgeId> = graph.edges.iter().map(|e| &e.id).collect();
+
+    check_empty_graph(graph, &mut errors);
+    check_duplicate_node_ids(graph, &mut errors);
+    check_duplicate_edge_ids(graph, &mut errors);
+    check_unknown_node_references(graph, &node_id_set, &mut errors);
+    check_orphan_nodes(graph, &mut errors);
+    check_invalid_max_traversals(graph, &mut errors);
+    check_unterminated_cycles(graph, &mut errors);
+    check_explicit_mode_without_edge_list(graph, &mut errors);
+    check_duplicate_slot_names(graph, &mut errors);
+    check_unknown_overflow_edges(graph, &edge_id_set, &mut errors);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn check_empty_graph(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    if graph.nodes.is_empty() {
+        errors.push(GraphValidationError::EmptyGraph);
+    }
+}
+
+fn check_duplicate_node_ids(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    let mut seen: HashSet<&NodeId> = HashSet::new();
+    for node in &graph.nodes {
+        if !seen.insert(&node.id) {
+            errors.push(GraphValidationError::DuplicateNodeId {
+                id: node.id.clone(),
+            });
+        }
+    }
+}
+
+fn check_duplicate_edge_ids(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    let mut seen: HashSet<&EdgeId> = HashSet::new();
+    for edge in &graph.edges {
+        if !seen.insert(&edge.id) {
+            errors.push(GraphValidationError::DuplicateEdgeId {
+                id: edge.id.clone(),
+            });
+        }
+    }
+}
+
+fn check_unknown_node_references(
+    graph: &PipelineGraph,
+    node_id_set: &HashSet<&NodeId>,
+    errors: &mut Vec<GraphValidationError>,
+) {
+    for edge in &graph.edges {
+        if !node_id_set.contains(&edge.source) {
+            errors.push(GraphValidationError::UnknownNode {
+                edge: edge.id.clone(),
+                node: edge.source.clone(),
+            });
+        }
+        if !node_id_set.contains(&edge.target) {
+            errors.push(GraphValidationError::UnknownNode {
+                edge: edge.id.clone(),
+                node: edge.target.clone(),
+            });
+        }
+    }
+}
+
+fn check_orphan_nodes(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    let mut connected: HashSet<&NodeId> = HashSet::new();
+    for edge in &graph.edges {
+        connected.insert(&edge.source);
+        connected.insert(&edge.target);
+    }
+    for node in &graph.nodes {
+        if !connected.contains(&node.id) {
+            errors.push(GraphValidationError::OrphanNode {
+                node: node.id.clone(),
+            });
+        }
+    }
+}
+
+fn check_invalid_max_traversals(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    for edge in &graph.edges {
+        if let Some(rework) = &edge.rework_edge
+            && rework.max_traversals == 0
+        {
+            errors.push(GraphValidationError::InvalidMaxTraversals {
+                edge: edge.id.clone(),
+            });
+        }
+    }
+}
+
+fn check_unterminated_cycles(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    if let Err(cycle_error) = topological_sort(&graph.nodes, &graph.edges) {
+        errors.push(GraphValidationError::UnterminatedCycle {
+            nodes: cycle_error.cycle,
+        });
+    }
+}
+
+fn check_explicit_mode_without_edge_list(
+    graph: &PipelineGraph,
+    errors: &mut Vec<GraphValidationError>,
+) {
+    for (node_id, mode) in &graph.evaluation_modes {
+        if matches!(mode, EvaluationMode::Explicit)
+            && !graph.explicit_edge_lists.contains_key(node_id)
+        {
+            errors.push(GraphValidationError::ExplicitModeWithoutEdgeList {
+                node: node_id.clone(),
+            });
+        }
+    }
+}
+
+fn check_duplicate_slot_names(graph: &PipelineGraph, errors: &mut Vec<GraphValidationError>) {
+    for node in &graph.nodes {
+        // Inputs and outputs are validated independently. A slot name that
+        // appears in both lists is permitted: pass-through nodes legitimately
+        // read and write the same artifact under the same name.
+        for slots in [&node.declared_inputs, &node.declared_outputs] {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for slot in slots {
+                if !seen.insert(slot.as_str()) {
+                    errors.push(GraphValidationError::DuplicateSlotName {
+                        node: node.id.clone(),
+                        slot: slot.clone(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn check_unknown_overflow_edges(
+    graph: &PipelineGraph,
+    edge_id_set: &HashSet<&EdgeId>,
+    errors: &mut Vec<GraphValidationError>,
+) {
+    for edge in &graph.edges {
+        if let Some(rework) = &edge.rework_edge
+            && let OverflowBehaviour::TakeEdge(ref overflow_edge_id) = rework.overflow_behaviour
+            && !edge_id_set.contains(overflow_edge_id)
+        {
+            errors.push(GraphValidationError::UnknownOverflowEdge {
+                rework_edge: edge.id.clone(),
+                overflow_edge: overflow_edge_id.clone(),
+            });
+        }
+    }
 }
 
 /// Returns the set of nodes eligible to execute next given the current state.
@@ -713,6 +1040,39 @@ pub fn validate_pipeline_graph(_graph: &PipelineGraph) -> Result<(), Vec<GraphVa
 ///
 /// `docs/spec/interfaces/pipeline-graph.md §compute_eligible_nodes`
 #[must_use]
-pub fn compute_eligible_nodes(_state: &PipelineState, _graph: &PipelineGraph) -> Vec<NodeId> {
-    todo!("See docs/spec/interfaces/pipeline-graph.md §compute_eligible_nodes")
+pub fn compute_eligible_nodes(state: &PipelineState, graph: &PipelineGraph) -> Vec<NodeId> {
+    let mut eligible: Vec<NodeId> = Vec::new();
+
+    for node in &graph.nodes {
+        // Skip nodes that are not Pending.
+        let status = state
+            .node_states
+            .get(&node.id)
+            .map_or(NodeStatus::Pending, |ns| ns.status);
+        if status != NodeStatus::Pending {
+            continue;
+        }
+
+        // Collect all forward-edge predecessors.
+        let all_predecessors_completed = graph
+            .edges
+            .iter()
+            .filter(|e| e.target == node.id && e.rework_edge.is_none())
+            .all(|e| {
+                state
+                    .node_states
+                    .get(&e.source)
+                    .is_some_and(|ns| ns.status == NodeStatus::Completed)
+            });
+
+        if all_predecessors_completed {
+            eligible.push(node.id.clone());
+        }
+    }
+
+    eligible
 }
+
+#[cfg(test)]
+#[path = "graph_tests.rs"]
+mod tests;

@@ -442,6 +442,9 @@ Single violation found by `validate_pipeline_graph`. Returned as a `Vec`.
 | `DuplicateEdgeId` | `id: EdgeId` | Two edges share an ID |
 | `UnknownNode` | `edge: EdgeId`, `node: NodeId` | Edge references undeclared node |
 | `InvalidMaxTraversals` | `edge: EdgeId` | Rework edge has `max_traversals == 0` (must be ≥ 1) |
+| `ExplicitModeWithoutEdgeList` | `node: NodeId` | Node has `EvaluationMode::Explicit` but no entry in `explicit_edge_lists` |
+| `UnknownOverflowEdge` | `rework_edge: EdgeId`, `overflow_edge: EdgeId` | Rework edge's `OverflowBehaviour::TakeEdge` references an undeclared edge |
+| `DuplicateSlotName` | `node: NodeId`, `slot: String` | Node declares the same artifact slot name more than once in `declared_inputs` or `declared_outputs` |
 
 ---
 
@@ -499,6 +502,9 @@ Validates a `PipelineGraph` for structural correctness.
 5. No orphan nodes (`OrphanNode`).
 6. All rework edges have `max_traversals >= 1` (`InvalidMaxTraversals`).
 7. No unterminated cycles — every cycle path must pass through ≥1 rework edge (`UnterminatedCycle`).
+8. Every node with `EvaluationMode::Explicit` has a corresponding entry in `explicit_edge_lists` (`ExplicitModeWithoutEdgeList`).
+9. Every declared input and output slot name is unique within its node (`DuplicateSlotName`).
+10. Every `OverflowBehaviour::TakeEdge` reference names a declared edge (`UnknownOverflowEdge`).
 
 Returns `Ok(())` only when all checks pass. Returns `Err(vec)` containing
 every violation found (all checks run; not short-circuited).
@@ -592,5 +598,5 @@ let json = serde_json::to_string(&comment)?;
 
 - **`EvaluationMode::Explicit` data**: The explicit edge lists are stored in
   `PipelineGraph::explicit_edge_lists`. If a node has `Explicit` mode but is
-  absent from that map, `validate_pipeline_graph` must produce a validation
-  error (this check will be added when the validator is implemented).
+  absent from that map, `validate_pipeline_graph` produces an
+  `ExplicitModeWithoutEdgeList` validation error (Check 8).
