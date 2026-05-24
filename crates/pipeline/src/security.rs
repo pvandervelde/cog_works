@@ -758,3 +758,7 @@ pub fn validate_tool_scope(
 ) -> Result<(), ToolScopeViolation> {
     todo!("See docs/spec/interfaces/security.md §validate_tool_scope")
 }
+
+#[cfg(test)]
+#[path = "security_tests.rs"]
+mod tests;

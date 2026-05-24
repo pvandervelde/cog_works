@@ -51,6 +51,15 @@ tracing-opentelemetry = "0.28"
 # Required to prevent timing-oracle attacks when comparing HMAC digests.
 subtle = "2"
 
+# Cryptographic hashing (used by pipeline/security.rs for constitutional rules hash verification)
+sha2 = { version = "0.10" }
+
+# Glob pattern matching (used by pipeline/security.rs for scope enforcement)
+globset = { version = "0.4" }
+
+# Property-based testing
+proptest = { version = "1" }
+
 # HTTP client (used by llm and extension-api over HTTP transport)
 reqwest = { version = "0.12", features = [
     "json",
