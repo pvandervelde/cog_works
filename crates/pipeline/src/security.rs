@@ -282,6 +282,18 @@ pub enum ConstitutionalError {
     },
 }
 
+/// Computes the SHA-256 digest of `data` and returns it as a 64-character
+/// lowercase hexadecimal string.
+fn sha256_hex(data: &[u8]) -> String {
+    use std::fmt::Write as _;
+    Sha256::digest(data)
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
 /// Mapping from every [`RequiredRule`] variant to its required text signature.
 const REQUIRED_RULE_SIGNATURES: &[(RequiredRule, &str)] = &[
     (
@@ -361,14 +373,7 @@ pub fn validate_constitutional_prompt(
     }
 
     // Step 2: hash check
-    let hash = Sha256::digest(rules.content.as_bytes());
-    let computed: String = {
-        use std::fmt::Write as _;
-        hash.iter().fold(String::with_capacity(64), |mut s, b| {
-            let _ = write!(s, "{b:02x}");
-            s
-        })
-    };
+    let computed = sha256_hex(rules.content.as_bytes());
     if computed != rules.source_hash {
         return Err(ConstitutionalError::HashMismatch {
             expected: rules.source_hash.clone(),
@@ -833,24 +838,14 @@ fn build_glob_set(patterns: &[String]) -> globset::GlobSet {
 ///
 /// See `docs/spec/interfaces/security.md` §is_protected.
 pub fn is_protected(path: &ArtifactPath, protected_paths: &[ProtectedPath]) -> bool {
-    for pp in protected_paths {
-        let pattern = pp.pattern.as_str();
-        let normalized = normalize_glob_pattern(pattern);
-        let glob = match GlobBuilder::new(&normalized).build() {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::warn!("is_protected: invalid glob pattern {:?}: {}", pattern, e);
-                continue;
-            }
-        };
-        let mut builder = GlobSetBuilder::new();
-        builder.add(glob);
-        let Ok(set) = builder.build() else { continue };
-        if set.is_match(path.as_str()) {
-            return true;
-        }
+    if protected_paths.is_empty() {
+        return false;
     }
-    false
+    let patterns: Vec<String> = protected_paths
+        .iter()
+        .map(|pp| pp.pattern.clone())
+        .collect();
+    build_glob_set(&patterns).is_match(path.as_str())
 }
 
 /// Normalizes a glob pattern to match `.gitignore`-style semantics.

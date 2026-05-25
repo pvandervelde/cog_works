@@ -54,9 +54,7 @@ fn approved(patterns: &[&str]) -> ApprovedScope {
 /// Computes the SHA-256 hex digest of the given string, matching the algorithm
 /// used by `validate_constitutional_prompt`.
 fn sha2_hex(content: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(content.as_bytes());
-    hash.iter().map(|b| format!("{b:02x}")).collect()
+    super::sha256_hex(content.as_bytes())
 }
 
 /// Builds a `ConstitutionalRules` with all five required signatures, a correct
