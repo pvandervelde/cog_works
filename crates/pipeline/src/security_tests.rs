@@ -1047,3 +1047,127 @@ fn test_validate_tool_scope_never_panics_proptest() {
         }
     );
 }
+
+// ─── Mutation kill tests ─────────────────────────────────────────────────────
+
+// SURVIVOR: crates/pipeline/src/security.rs:155:9
+// replace <impl Debug for ConstitutionalRules>::fmt -> std::fmt::Result
+// with Ok(Default::default())
+// Root cause: no test asserted on the Debug output; the redacted content
+// sentinel and field names were never checked.
+/// The custom Debug impl for `ConstitutionalRules` must:
+/// - include `source_hash` and `source_branch` values, and
+/// - redact `content` with the `<redacted` sentinel, NOT expose the raw text.
+#[test]
+fn test_constitutional_rules_debug_redacts_content_and_shows_hash() {
+    let rules = make_valid_rules("some secret rule text");
+    let debug_str = format!("{:?}", rules);
+
+    // Fields that must appear in the output.
+    assert!(
+        debug_str.contains("source_hash"),
+        "Debug output must contain 'source_hash'; got: {debug_str}"
+    );
+    assert!(
+        debug_str.contains("source_branch"),
+        "Debug output must contain 'source_branch'; got: {debug_str}"
+    );
+    // Redaction sentinel must appear.
+    assert!(
+        debug_str.contains("<redacted"),
+        "Debug output must redact content with '<redacted'; got: {debug_str}"
+    );
+    // The raw content must NOT appear verbatim.
+    assert!(
+        !debug_str.contains("some secret rule text"),
+        "Debug output must NOT expose raw content; got: {debug_str}"
+    );
+    // The actual hash value must appear.
+    assert!(
+        debug_str.contains(&rules.source_hash),
+        "Debug output must include the actual source_hash value; got: {debug_str}"
+    );
+}
+
+// SURVIVORS: crates/pipeline/src/security.rs:320:5 (×2)
+// replace format_missing_rules -> String with String::new()
+// replace format_missing_rules -> String with "xyzzy".into()
+// Root cause: tests checked the MissingRules variant's `missing` Vec but never
+// checked the Display string of ConstitutionalError::MissingRules.
+/// `ConstitutionalError::MissingRules.to_string()` must contain each missing
+/// rule's debug name so the operator can read the error without decoding a Vec.
+#[test]
+fn test_constitutional_error_missing_rules_display_contains_rule_names() {
+    let err = ConstitutionalError::MissingRules {
+        missing: vec![
+            RequiredRule::ScopeBinding,
+            RequiredRule::NoCredentialGeneration,
+        ],
+    };
+
+    let msg = err.to_string();
+
+    assert!(
+        msg.contains("ScopeBinding"),
+        "Display message must name ScopeBinding; got: {msg}"
+    );
+    assert!(
+        msg.contains("NoCredentialGeneration"),
+        "Display message must name NoCredentialGeneration; got: {msg}"
+    );
+}
+
+// SURVIVOR: crates/pipeline/src/security.rs:986:35
+// replace == with != in validate_tool_scope (the `key == "limit"` branch)
+// Root cause: every existing test that exercised the count/limit path used key
+// name "count"; key "limit" was never tested, so flipping its equality check
+// was invisible.
+/// `"limit"` is an alias for the numeric file-count parameter; it must be
+/// subject to the same `max_file_changes` check as `"count"`.
+#[test]
+fn test_validate_tool_scope_limit_param_exceeds_max_file_changes_returns_violation() {
+    let t = tool("batch-write");
+    let scope = ScopeParameters {
+        max_file_changes: Some(5),
+        allowed_artifact_patterns: vec!["src/**".to_string()],
+        prohibited_artifact_patterns: vec![],
+        max_new_files: 0,
+    };
+    let mut params = ToolParams::empty();
+    // Use key "limit" (not "count") — exactly the path the surviving mutant bypasses.
+    params
+        .params
+        .insert("limit".to_string(), serde_json::json!(6u64));
+
+    let result = validate_tool_scope(&t, &params, &scope);
+
+    let violation = result.expect_err("limit > max_file_changes must produce ToolScopeViolation");
+    assert_eq!(
+        violation.parameter_name, "limit",
+        "violation.parameter_name must be 'limit'"
+    );
+}
+
+/// `"limit"` at exactly max_file_changes must still be Ok (boundary check).
+#[test]
+fn test_validate_tool_scope_limit_param_at_max_file_changes_boundary_returns_ok() {
+    let t = tool("batch-write");
+    let scope = ScopeParameters {
+        max_file_changes: Some(5),
+        allowed_artifact_patterns: vec!["src/**".to_string()],
+        prohibited_artifact_patterns: vec![],
+        max_new_files: 0,
+    };
+    let mut params = ToolParams::empty();
+    params
+        .params
+        .insert("limit".to_string(), serde_json::json!(5u64));
+
+    let result = validate_tool_scope(&t, &params, &scope);
+
+    assert!(
+        result.is_ok(),
+        "limit == max_file_changes must be Ok (not a violation); got: {:?}",
+        result
+    );
+}
