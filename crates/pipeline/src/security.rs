@@ -617,10 +617,10 @@ pub enum ScopeViolationKind {
     /// A path matches both an allow-pattern and a prohibit-pattern, making
     /// it impossible to determine whether the operation is in or out of scope.
     ///
-    /// Produced by: [`validate_tool_scope`] (uses `ScopeParameters` which
-    /// carries both allowed and prohibited artifact patterns). Reserved in
-    /// [`validate_scope`] for when `prohibited_artifact_patterns` is added
-    /// to [`ApprovedScope`].
+    /// **Reserved — not currently produced by any function.** Intended for
+    /// future use when `prohibited_artifact_patterns` is plumbed through
+    /// [`ApprovedScope`], at which point a path matching both an allow-pattern
+    /// and a prohibit-pattern constitutes an ambiguous configuration.
     ScopeAmbiguous,
 
     /// The artifact path matches a [`ProtectedPath`] pattern, regardless of

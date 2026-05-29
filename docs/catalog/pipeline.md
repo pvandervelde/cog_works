@@ -33,7 +33,6 @@ Core orchestration domain — domain concepts, newtype identifiers, shared primi
 | `ConfigError` | enum | `crates/pipeline/src/knowledge.rs:200` | enum in crates/pipeline/src/knowledge.rs | core, pipeline |
 | `ConstitutionalError` | enum | `crates/pipeline/src/security.rs:266` | enum in crates/pipeline/src/security.rs | core, pipeline |
 | `ConstitutionalRules` | struct | `crates/pipeline/src/security.rs:133` | struct in crates/pipeline/src/security.rs | core, pipeline |
-| `ConstitutionalValidationResult` | struct | `crates/pipeline/src/security.rs:175` | struct in crates/pipeline/src/security.rs | core, pipeline |
 | `ConstraintFinding` | struct | `crates/pipeline/src/interfaces.rs:53` | struct in crates/pipeline/src/interfaces.rs | core, pipeline |
 | `ContextAssemblyRequest` | struct | `crates/pipeline/src/context.rs:356` | struct in crates/pipeline/src/context.rs | core, pipeline |
 | `ContextItem` | struct | `crates/pipeline/src/context.rs:141` | struct in crates/pipeline/src/context.rs | core, pipeline |

@@ -101,6 +101,30 @@ cases that exercise them. Updated as each module's test suite is written.
 | `validate_scope` never panics on arbitrary paths and patterns | `test_validate_scope_never_panics_proptest` |
 | `validate_tool_scope` never panics on arbitrary param values and patterns | `test_validate_tool_scope_never_panics_proptest` |
 
+### Regression / Remediation Tests (from security review)
+
+#### H-001 — Injection bypass via whitespace and invisible characters
+
+| Scenario | Test |
+|----------|------|
+| Double space between words does not bypass detection | `test_detect_injection_double_space_bypass_blocked` |
+| Zero-width space (U+200B) does not bypass detection | `test_detect_injection_zero_width_space_bypass_blocked` |
+| Newline between words does not bypass detection | `test_detect_injection_newline_bypass_blocked` |
+| Soft hyphen (U+00AD) within word does not bypass detection | `test_detect_injection_soft_hyphen_bypass_blocked` |
+
+#### M-004 — ArtifactPath normalization
+
+| Scenario | Test |
+|----------|------|
+| `./src/main.rs` normalizes to same value as `src/main.rs` | `test_artifact_path_strips_leading_dot_slash` |
+| Path with `..` component returns `None` | `test_artifact_path_rejects_traversal` |
+| `./`-prefixed path matches protection pattern | `test_is_protected_dot_slash_prefix_matches_protection` |
+| `./`-prefixed artifact matches approved scope | `test_validate_scope_dot_slash_artifact_matches_approved` |
+
+#### Additional mutant-killing tests (from d4bcef8)
+
+See commit `d4bcef8` — 4 additional tests added to improve mutation coverage beyond 95% to 100%.
+
 ### Gaps / Known Limitations
 
 - `validate_constitutional_prompt` performance test (< 5 ms for 10 KB rules) is not covered —
