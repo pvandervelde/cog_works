@@ -1,9 +1,11 @@
 //! Constitutional security layer, injection detection, scope enforcement, and
 //! protected-path validation for the CogWorks pipeline.
 //!
-//! All functions in this module are **pure** — no I/O, no async. They operate
-//! on data passed in as arguments and return new values, making them
-//! independently testable and composable.
+//! All functions in this module perform **no filesystem I/O, no network I/O,
+//! and no async operations**. They operate on data passed in as arguments and
+//! return new values, making them independently testable and composable. Note:
+//! some functions emit `tracing::warn!` diagnostics, which is a logging side
+//! effect but not I/O in the data-processing sense.
 //!
 //! ## Security Subsystems
 //!
@@ -200,6 +202,13 @@ pub struct PromptAssembly {
 /// compiler prevents any code path — inside or outside `pipeline` — from
 /// calling `LlmProvider::complete` without first passing through
 /// `validate_constitutional_prompt`.
+///
+/// # Design note: `Clone` is not implemented
+///
+/// `Clone` is intentionally not derived. A [`ValidatedPrompt`] is a single-use
+/// token — duplicating it could allow multiple LLM calls from a single
+/// constitutional check, bypassing the per-call enforcement guarantee. Call
+/// [`validate_constitutional_prompt`] again for every new LLM invocation.
 ///
 /// See `docs/spec/interfaces/security.md` §ValidatedPrompt.
 #[derive(Debug)]
@@ -574,12 +583,28 @@ pub fn detect_injection(content: &str, source_label: &str) -> InjectionDetection
         ),
     ];
 
+    let lower = content.to_lowercase();
+
     for (phrases, pattern) in categories {
         for phrase in *phrases {
             if normalized.contains(phrase) {
+                // Preserve the original casing of the matched span for audit
+                // clarity (e.g. "IGNORE ALL PREVIOUS INSTRUCTIONS" instead of
+                // the lowercase corpus phrase). We search in the simple
+                // lowercased form first; if the phrase only matched after
+                // whitespace/Unicode normalization, we fall back to the corpus
+                // phrase so the fallback is always safe.
+                let offending_text = lower
+                    .find(phrase)
+                    .filter(|&pos| {
+                        content.is_char_boundary(pos)
+                            && content.is_char_boundary(pos + phrase.len())
+                    })
+                    .map(|pos| content[pos..pos + phrase.len()].to_string())
+                    .unwrap_or_else(|| (*phrase).to_string());
                 return InjectionDetectionResult::InjectionDetected {
                     source: source_label.to_string(),
-                    offending_text: (*phrase).to_string(),
+                    offending_text,
                     pattern: pattern.clone(),
                 };
             }
@@ -598,14 +623,12 @@ pub fn detect_injection(content: &str, source_label: &str) -> InjectionDetection
 /// ## Variant reachability
 ///
 /// `validate_scope` only produces `ScopeUnderspecified`, `ProtectedPathViolation`,
-/// and `UnauthorizedCapability`. `ScopeAmbiguous` is reserved for future use when
-/// `ScopeParameters.prohibited_artifact_patterns` is plumbed through
-/// [`ApprovedScope`] — at that point a path matching both an allow-pattern and a
-/// prohibit-pattern constitutes an ambiguous configuration. Until then, this
-/// variant is only produced by [`validate_tool_scope`] (via `ScopeParameters`
-/// which already carries both allowed and prohibited patterns).
+/// and `UnauthorizedCapability`. This enum is marked `#[non_exhaustive]`; always
+/// use a wildcard arm (`_ =>`) in match statements to remain forward-compatible
+/// as new violation categories are added.
 ///
 /// See `docs/spec/interfaces/security.md` §ScopeViolationKind.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScopeViolationKind {
     /// The approved scope declaration is missing or contains no artifact
@@ -613,15 +636,6 @@ pub enum ScopeViolationKind {
     ///
     /// Produced by: [`validate_scope`].
     ScopeUnderspecified,
-
-    /// A path matches both an allow-pattern and a prohibit-pattern, making
-    /// it impossible to determine whether the operation is in or out of scope.
-    ///
-    /// **Reserved — not currently produced by any function.** Intended for
-    /// future use when `prohibited_artifact_patterns` is plumbed through
-    /// [`ApprovedScope`], at which point a path matching both an allow-pattern
-    /// and a prohibit-pattern constitutes an ambiguous configuration.
-    ScopeAmbiguous,
 
     /// The artifact path matches a [`ProtectedPath`] pattern, regardless of
     /// whether it would otherwise be within the approved scope.
@@ -747,7 +761,10 @@ pub struct ProtectedPath {
 /// # Violation precedence
 ///
 /// Protected-path violations are detected first. An artifact already flagged as
-/// protected is **not** also flagged as unauthorised.
+/// protected is **not** also flagged as unauthorised. However, protected
+/// artifacts **do** count toward the `max_files` total: if the file-count limit
+/// is exceeded, an additional `UnauthorizedCapability` violation is appended
+/// after per-artifact checks complete.
 ///
 /// # Example (pseudo-code)
 ///
@@ -785,10 +802,13 @@ pub fn validate_scope(
     }
 
     let allowed_set = build_glob_set(&approved_scope.artifact_patterns);
+    let protected_patterns: Vec<String> =
+        protected_paths.iter().map(|pp| pp.pattern.clone()).collect();
+    let protected_set = build_glob_set(&protected_patterns);
     let mut violations = Vec::new();
 
     for artifact in artifacts {
-        if is_protected(artifact, protected_paths) {
+        if protected_set.is_match(artifact.as_str()) {
             violations.push(ScopeViolation {
                 kind: ScopeViolationKind::ProtectedPathViolation,
                 artifact_path: Some(artifact.clone()),
