@@ -40,7 +40,7 @@ fuzz_target!(|data: &[u8]| {
             max_files,
             max_new_files: 0,
         };
-        let _ = validate_scope(&[], &scope, &[]);
+        let _ = validate_scope(&[], &[], &scope, &[]);
         return;
     }
 
@@ -85,5 +85,5 @@ fuzz_target!(|data: &[u8]| {
         }]
     };
 
-    let _ = validate_scope(&artifacts, &approved_scope, &protected_paths);
+    let _ = validate_scope(&artifacts, &[], &approved_scope, &protected_paths);
 });
