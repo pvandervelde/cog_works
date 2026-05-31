@@ -494,6 +494,55 @@ load time.
 
 ---
 
+### InvalidGlobPattern
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Error)]
+#[error("Invalid glob pattern {pattern:?}: {reason}")]
+pub struct InvalidGlobPattern {
+    pub pattern: String,
+    pub reason: String,
+}
+```
+
+Returned by `validate_protected_paths` for each entry whose `pattern` field is
+not a valid glob expression.
+
+- `pattern` — the raw pattern string that failed compilation.
+- `reason` — the underlying glob parse error message.
+
+---
+
+### fn validate_protected_paths
+
+```rust
+pub fn validate_protected_paths(
+    protected_paths: &[ProtectedPath],
+) -> Result<(), Vec<InvalidGlobPattern>>
+```
+
+Pre-validates every `ProtectedPath` entry at configuration load time by
+attempting to compile each `pattern` as a glob expression.
+
+**Behaviour**:
+
+- Iterates all entries unconditionally, collecting every failure.
+- Returns `Ok(())` when all patterns compile successfully **or** when
+  `protected_paths` is empty.
+- Returns `Err(failures)` containing **all** invalid entries when at least one
+  fails; the caller receives the complete list in a single pass.
+
+**Motivation**: `is_protected` treats invalid patterns as non-matching
+(fail-open) and only emits a `tracing::warn!`. A misconfigured `ProtectedPath`
+entry would therefore be silently ignored during pipeline runs.
+`validate_protected_paths` must be called when the pipeline configuration is
+loaded so that operators are alerted to misconfigured patterns before any run
+begins.
+
+**Side effects**: None. Pure function.
+
+---
+
 ## Part 4 — Tool Parameter Scope
 
 ### ToolParams
@@ -564,6 +613,7 @@ Returns on the **first violation** (unlike `validate_scope` which collects all).
 | `detect_injection` | infallible | N/A |
 | `validate_scope` | `Vec<ScopeViolation>` | `NonRetryable` |
 | `is_protected` | infallible | N/A |
+| `validate_protected_paths` | `Vec<InvalidGlobPattern>` | `NonRetryable` |
 | `validate_tool_scope` | `ToolScopeViolation` | `NonRetryable` |
 
 ---
