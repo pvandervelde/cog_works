@@ -1376,3 +1376,47 @@ This document defines testable behavioral assertions for CogWorks. Each assertio
 - **Then**: A warning is emitted noting that stalling detection cannot fire for this node (threshold 5 > retry budget 3)
 - **And**: Stalling detection is treated as disabled for that node (pipeline still starts — this is a warning, not an error)
 - **Traces to**: REQ-CODE-006
+
+---
+
+## Security — Constitutional Layer, Injection Detection, Scope Enforcement
+
+### ASSERT-SEC-001: Constitutional rules from non-approved branch are rejected
+
+- **Given**: A `ConstitutionalRules` document loaded from a feature branch (e.g. `"feature/my-work"`)
+- **When**: `validate_constitutional_prompt` is called with those rules
+- **Then**: The call returns `Err(ConstitutionalError::InvalidSourceBranch { branch })` where `branch` matches the feature branch name
+- **And**: No prompt is assembled
+- **Traces to**: THREAT-003, THREAT-015
+
+### ASSERT-SEC-002: Tampered constitutional rules (hash mismatch) are rejected before rule-presence check
+
+- **Given**: A `ConstitutionalRules` document whose `content` has been modified after load (so the computed SHA-256 no longer matches `source_hash`), and whose content is also missing required rule signatures
+- **When**: `validate_constitutional_prompt` is called with those rules on an approved branch
+- **Then**: The call returns `Err(ConstitutionalError::HashMismatch { expected, computed })` — **not** `Err(ConstitutionalError::MissingRules)`
+- **And**: The hash check is proved to run **before** the rule-presence check
+- **Traces to**: THREAT-015
+
+### ASSERT-SEC-003: Constitutional rules missing required rule signatures are rejected with full missing list
+
+- **Given**: A `ConstitutionalRules` document on an approved branch with a correct hash, but with one or more required rule signatures absent from `content`
+- **When**: `validate_constitutional_prompt` is called
+- **Then**: The call returns `Err(ConstitutionalError::MissingRules { missing })` where `missing` lists every absent `RequiredRule` variant — no absent variant is omitted
+- **And**: No prompt is assembled
+- **Traces to**: THREAT-001, THREAT-003
+
+### ASSERT-SEC-004: Injection detected in external content halts pipeline
+
+- **Given**: External content (issue body, repository file, or domain service response) that contains a known injection trigger phrase (e.g. "ignore all previous instructions")
+- **When**: `detect_injection` is called with that content
+- **Then**: The call returns `InjectionDetectionResult::InjectionDetected { source, offending_text, pattern }` where `pattern` identifies the highest-severity matching `InjectionPattern` class and `offending_text` is non-empty
+- **And**: `source` equals the `source_label` argument passed to `detect_injection`
+- **Traces to**: THREAT-001, THREAT-002, THREAT-006
+
+### ASSERT-SEC-005: Artifact matching a protected path violates scope regardless of approved patterns
+
+- **Given**: An `ApprovedScope` whose `artifact_patterns` include a pattern that would match an artifact path, but that artifact path also matches a `ProtectedPath` entry in `protected_paths`
+- **When**: `validate_scope` is called with that artifact
+- **Then**: The call returns `Err(violations)` where exactly one violation of kind `ProtectedPathViolation` is present for that artifact
+- **And**: No additional `UnauthorizedCapability` violation is produced for the same artifact
+- **Traces to**: THREAT-004, THREAT-006

@@ -1,0 +1,45 @@
+[package]
+name = "pipeline-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[dependencies.pipeline]
+path = ".."
+
+[[bin]]
+name = "fuzz_target_1"
+path = "fuzz_targets/fuzz_target_1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "detect_injection"
+path = "fuzz_targets/detect_injection.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_scope"
+path = "fuzz_targets/validate_scope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_tool_scope"
+path = "fuzz_targets/validate_tool_scope.rs"
+test = false
+doc = false
+bench = false

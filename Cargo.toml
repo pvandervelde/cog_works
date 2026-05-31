@@ -51,6 +51,15 @@ tracing-opentelemetry = "0.28"
 # Required to prevent timing-oracle attacks when comparing HMAC digests.
 subtle = "2"
 
+# Cryptographic hashing (used by pipeline/security.rs for constitutional rules hash verification)
+sha2 = { version = "0.10" }
+
+# Glob pattern matching (used by pipeline/security.rs for scope enforcement)
+globset = { version = "0.4" }
+
+# Property-based testing
+proptest = { version = "1" }
+
 # HTTP client (used by llm and extension-api over HTTP transport)
 reqwest = { version = "0.12", features = [
     "json",
@@ -68,6 +77,11 @@ queue-runtime = "0.2"
 
 # Template engine (used by HandlebarsTemplateEngine in the nodes crate)
 handlebars = "6"
+
+# Ordered map with insertion-order iteration (used by pipeline/security.rs for
+# deterministic tool-parameter scope validation; IndexMap preserves the parameter
+# order produced by the LLM, making audit log entries reproducible).
+indexmap = { version = "1", features = ["serde"] }
 
 # Internal workspace crates
 pipeline = { path = "crates/pipeline" }

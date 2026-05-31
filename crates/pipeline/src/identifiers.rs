@@ -200,11 +200,48 @@ string_id! {
     DomainServiceName
 }
 
-string_id! {
-    /// A file-system path relative to the repository root.
+/// A file-system path relative to the repository root.
+///
+/// Used to identify artefacts produced or consumed by pipeline nodes.
+/// Paths are normalized at construction time: leading `./` is stripped and
+/// any path component equal to `..` causes `new` to return `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ArtifactPath(String);
+
+impl ArtifactPath {
+    /// Creates a new `ArtifactPath`, returning `None` if the value is empty,
+    /// contains a `..` component, or cannot be normalized.
     ///
-    /// Used to identify artefacts produced or consumed by pipeline nodes.
-    ArtifactPath
+    /// The leading `./` prefix is stripped automatically so that `./src/lib.rs`
+    /// and `src/lib.rs` produce the same `ArtifactPath`.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Option<Self> {
+        let v: String = value.into();
+        if v.is_empty() {
+            return None;
+        }
+        // Reject traversal components.
+        if v.split('/').any(|seg| seg == "..") {
+            return None;
+        }
+        // Strip leading ./
+        let normalized = v.strip_prefix("./").map(String::from).unwrap_or(v);
+        if normalized.is_empty() {
+            return None;
+        }
+        Some(Self(normalized))
+    }
+
+    /// Returns the path as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ArtifactPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 
 string_id! {

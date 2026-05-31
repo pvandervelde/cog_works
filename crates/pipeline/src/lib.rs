@@ -126,10 +126,11 @@ pub use tools::{
 
 // Re-exports from security
 pub use security::{
-    ApprovedScope, ConstitutionalError, ConstitutionalRules, InjectionDetectionResult,
-    InjectionPattern, PromptAssembly, ProtectedPath, RequiredRule, ScopeViolation,
-    ScopeViolationKind, ToolParams, ToolScopeViolation, ValidatedPrompt, detect_injection,
-    is_protected, validate_constitutional_prompt, validate_scope, validate_tool_scope,
+    ApprovedBranches, ApprovedScope, ConstitutionalError, ConstitutionalRules,
+    InjectionDetectionResult, InjectionPattern, InvalidGlobPattern, PromptAssembly, ProtectedPath,
+    RequiredRule, ScopeViolation, ScopeViolationKind, ToolParams, ToolScopeViolation,
+    ValidatedPrompt, detect_injection, is_protected, validate_constitutional_prompt,
+    validate_protected_paths, validate_scope, validate_tool_scope,
 };
 
 // Re-exports from context
