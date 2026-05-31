@@ -41,9 +41,8 @@
 //! See `docs/spec/interfaces/security.md` for the full contract, threat model
 //! cross-references, and pattern examples.
 
-use std::collections::HashMap;
-
 use globset::{GlobBuilder, GlobSetBuilder};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -335,6 +334,60 @@ fn format_missing_rules(rules: &[RequiredRule]) -> String {
 
 // ---------------------------------------------------------------------------
 
+/// The set of repository branches from which constitutional rules may be loaded.
+///
+/// Passed to [`validate_constitutional_prompt`] to verify the rules were sourced
+/// from a code-reviewed branch. Defaults to `["main", "master"]` — the two
+/// standard Git default branch names. Operators using a non-standard default
+/// branch (e.g. `"develop"`, `"trunk"`) must construct an explicit list.
+///
+/// # Examples (pseudo-code)
+///
+/// ```text
+/// // Accept the default (main / master)
+/// let branches = ApprovedBranches::default();
+///
+/// // Accept a non-standard default branch
+/// let branches = ApprovedBranches::new(vec![
+///     BranchName::new("trunk").unwrap(),
+///     BranchName::new("main").unwrap(),
+/// ]);
+/// ```
+///
+/// See `docs/spec/interfaces/security.md` §`ApprovedBranches`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovedBranches(Vec<BranchName>);
+
+impl ApprovedBranches {
+    /// Creates an `ApprovedBranches` list from the provided branch names.
+    ///
+    /// An empty list means no branch is approved — every call to
+    /// [`validate_constitutional_prompt`] with any branch will return
+    /// [`ConstitutionalError::InvalidSourceBranch`].
+    #[must_use]
+    pub fn new(branches: Vec<BranchName>) -> Self {
+        Self(branches)
+    }
+
+    /// Returns `true` if `branch` is in the approved list.
+    #[must_use]
+    pub fn contains(&self, branch: &BranchName) -> bool {
+        self.0.iter().any(|b| b == branch)
+    }
+}
+
+impl Default for ApprovedBranches {
+    /// Returns the default approved branches: `"main"` and `"master"`.
+    fn default() -> Self {
+        Self(vec![
+            BranchName::new("main").expect("'main' is a valid branch name"),
+            BranchName::new("master").expect("'master' is a valid branch name"),
+        ])
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 /// Validates that the constitutional rules are complete and trustworthy, then
 /// assembles a [`ValidatedPrompt`] ready for submission to the LLM provider.
 ///
@@ -343,8 +396,7 @@ fn format_missing_rules(rules: &[RequiredRule]) -> String {
 ///
 /// # Steps
 ///
-/// 1. Verify `rules.source_branch` is on the approved-branch list (`"master"` or
-///    `"main"`; will be configurable in a later PR).
+/// 1. Verify `rules.source_branch` is in `approved_branches`.
 /// 2. Recompute the SHA-256 digest of `rules.content`; compare to `rules.source_hash`.
 /// 3. Scan `rules.content` for text signatures of every [`RequiredRule`] variant;
 ///    collect any that are absent.
@@ -372,10 +424,10 @@ fn format_missing_rules(rules: &[RequiredRule]) -> String {
 pub fn validate_constitutional_prompt(
     rules: &ConstitutionalRules,
     prompt: PromptAssembly,
+    approved_branches: &ApprovedBranches,
 ) -> Result<ValidatedPrompt, ConstitutionalError> {
     // Step 1: branch check
-    let branch_str = rules.source_branch.as_str();
-    if branch_str != "master" && branch_str != "main" {
+    if !approved_branches.contains(&rules.source_branch) {
         return Err(ConstitutionalError::InvalidSourceBranch {
             branch: rules.source_branch.clone(),
         });
@@ -696,10 +748,11 @@ pub struct ApprovedScope {
     /// Maximum number of new files the operation may create. `0` means no new
     /// files may be created.
     ///
-    /// **This field is NOT checked by [`validate_scope`].** It is the caller's
-    /// responsibility to separate new files from modified files and enforce this
-    /// limit before calling `validate_scope`. See the function documentation for
-    /// the expected pre-call workflow.
+    /// Enforced by [`validate_scope`]: pass the newly-created artifacts as the
+    /// `new_artifacts` argument. The function counts `new_artifacts.len()` against
+    /// this limit and emits an [`ScopeViolationKind::UnauthorizedCapability`]
+    /// violation if exceeded. The caller is responsible for determining which
+    /// artifacts are newly created before calling `validate_scope`.
     pub max_new_files: u32,
 }
 
@@ -747,7 +800,12 @@ pub struct ProtectedPath {
 ///
 /// # Arguments
 ///
-/// - `artifacts` — the artifact paths the operation intends to create or modify.
+/// - `artifacts` — all artifact paths the operation intends to create or modify.
+/// - `new_artifacts` — the subset of `artifacts` that are **newly created** files
+///   (i.e., not previously present in the repository). Used to enforce the
+///   [`ApprovedScope::max_new_files`] limit. Pass an empty slice if all changes
+///   are modifications to existing files, or if `max_new_files` is not relevant
+///   for this call.
 /// - `approved_scope` — scope boundaries approved for this operation.
 /// - `protected_paths` — global list of paths that must never be touched.
 ///
@@ -770,7 +828,7 @@ pub struct ProtectedPath {
 ///
 /// ```text
 /// let scope = ApprovedScope::from_scope_parameters(&profile.scope_parameters);
-/// match validate_scope(&proposed_paths, &scope, &config.protected_paths) {
+/// match validate_scope(&proposed_paths, &new_paths, &scope, &config.protected_paths) {
 ///     Ok(()) => { /* proceed */ }
 ///     Err(violations) => {
 ///         for v in &violations {
@@ -790,6 +848,7 @@ pub struct ProtectedPath {
 /// See `docs/spec/interfaces/security.md` §validate_scope.
 pub fn validate_scope(
     artifacts: &[ArtifactPath],
+    new_artifacts: &[ArtifactPath],
     approved_scope: &ApprovedScope,
     protected_paths: &[ProtectedPath],
 ) -> Result<(), Vec<ScopeViolation>> {
@@ -834,6 +893,19 @@ pub fn validate_scope(
             artifact_path: None,
             description: format!(
                 "Operation would modify {count} files, exceeding the limit of {max}."
+            ),
+        });
+    }
+
+    let new_count = new_artifacts.len();
+    if new_count > approved_scope.max_new_files as usize {
+        violations.push(ScopeViolation {
+            kind: ScopeViolationKind::UnauthorizedCapability,
+            artifact_path: None,
+            description: format!(
+                "Operation would create {new_count} new files, exceeding the \
+                 max_new_files limit of {}.",
+                approved_scope.max_new_files
             ),
         });
     }
@@ -934,11 +1006,19 @@ fn normalize_glob_pattern(pattern: &str) -> String {
 /// JSON (Extension API protocol), so `serde_json::Value` is the natural
 /// representation before type-specific validation.
 ///
+/// ## Ordering guarantee
+///
+/// `params` is an [`IndexMap`] that preserves **insertion order**. This means
+/// [`validate_tool_scope`] iterates parameters in the same order as they were
+/// inserted — matching the order the LLM produced them. This makes violation
+/// reports and audit log entries deterministic and reproducible across runs.
+///
 /// See `docs/spec/interfaces/security.md` §ToolParams.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolParams {
     /// Raw parameter map: parameter name → JSON value.
-    pub params: HashMap<String, serde_json::Value>,
+    /// Insertion order is preserved; iteration order equals insertion order.
+    pub params: IndexMap<String, serde_json::Value>,
 }
 
 impl ToolParams {
@@ -947,7 +1027,7 @@ impl ToolParams {
     #[must_use]
     pub fn empty() -> Self {
         Self {
-            params: HashMap::new(),
+            params: IndexMap::new(),
         }
     }
 }

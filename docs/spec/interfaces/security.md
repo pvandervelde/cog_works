@@ -41,6 +41,7 @@ See `docs/spec/security.md` for the full threat catalog.
 |-----------------|------|
 | `ArtifactPath`, `BranchName`, `ToolName` | `crates/pipeline/src/identifiers.rs` |
 | `ScopeParameters` | `crates/pipeline/src/knowledge.rs` |
+| `IndexMap` | `indexmap` crate (workspace dependency) |
 
 ---
 
@@ -183,20 +184,52 @@ pub enum ConstitutionalError {
 On any of these errors the pipeline must halt. Human investigation is required
 before resuming.
 
+### ApprovedBranches
+
+The set of repository branches from which constitutional rules may be loaded.
+
+```rust
+pub struct ApprovedBranches(Vec<BranchName>);
+
+impl ApprovedBranches {
+    pub fn new(branches: Vec<BranchName>) -> Self { ... }
+    pub fn contains(&self, branch: &BranchName) -> bool { ... }
+}
+
+impl Default for ApprovedBranches {
+    fn default() -> Self { /* ["main", "master"] */ }
+}
+```
+
+**Purpose**: Carries the operator-configured list of approved branch names.
+Passed to `validate_constitutional_prompt` as a separate parameter so that
+configuration is decoupled from the `ConstitutionalRules` content.
+
+| Constructor | Behaviour |
+|-------------|----------|
+| `ApprovedBranches::default()` | Accepts `"main"` and `"master"` |
+| `ApprovedBranches::new(branches)` | Accepts exactly the provided list |
+| `ApprovedBranches::new(vec![])` | Rejects every branch (no approvals) |
+
+**Security note**: An empty list (`ApprovedBranches::new(vec![])`) causes every
+call to `validate_constitutional_prompt` to return
+`ConstitutionalError::InvalidSourceBranch`, which halts the pipeline. This is
+the intended fail-safe — never configure an empty list in production.
+
 ### fn validate_constitutional_prompt
 
 ```rust
 pub fn validate_constitutional_prompt(
     rules: &ConstitutionalRules,
     prompt: PromptAssembly,
+    approved_branches: &ApprovedBranches,
 ) -> Result<ValidatedPrompt, ConstitutionalError>
 ```
 
 **Steps (in order)**:
 
-1. Verify `rules.source_branch` is on the approved-branch list. Currently:
-   `"master"` and `"main"` are accepted; the list will be configurable.
-   → `Err(ConstitutionalError::InvalidSourceBranch)` on mismatch.
+1. Verify `rules.source_branch` is in `approved_branches`.
+   → `Err(ConstitutionalError::InvalidSourceBranch)` if not found.
 
 2. Compute SHA-256 of `rules.content`; compare to `rules.source_hash`.
    → `Err(ConstitutionalError::HashMismatch)` on mismatch.
@@ -221,7 +254,7 @@ pub fn validate_constitutional_prompt(
 | | `validate_constitutional_prompt` | `assemble_constitutional_prompt` |
 |---|---|---|
 | Crate | `pipeline` | `nodes` |
-| Input | `ConstitutionalRules` + `PromptAssembly` | `ConstitutionalRules` + `system_prompt: &str` |
+| Input | `ConstitutionalRules` + `PromptAssembly` + `ApprovedBranches` | `ConstitutionalRules` + `system_prompt: &str` + `ApprovedBranches` |
 | Output | `Result<ValidatedPrompt, ConstitutionalError>` | `ConstitutionallyWrappedPrompt` |
 | Purpose | Validates rules are intact and complete | Validates (via calling `validate_constitutional_prompt`) **and** packages for LLM dispatch |
 
@@ -401,17 +434,31 @@ pub struct ProtectedPath {
 ```rust
 pub fn validate_scope(
     artifacts: &[ArtifactPath],
+    new_artifacts: &[ArtifactPath],
     approved_scope: &ApprovedScope,
     protected_paths: &[ProtectedPath],
 ) -> Result<(), Vec<ScopeViolation>>
 ```
+
+**Parameters**:
+
+- `artifacts` — all artifact paths the operation intends to create or modify
+  (new and modified combined).
+- `new_artifacts` — the subset of `artifacts` that are **newly created** files
+  (not previously present in the repository). Used exclusively for the
+  `max_new_files` check. Pass `&[]` when all changes are modifications to
+  existing files, or when `max_new_files` enforcement is not relevant.
+  The caller is responsible for determining which files are new before calling
+  `validate_scope` (typically by comparing against `CodeRepository::list_files`).
+- `approved_scope` — scope boundaries approved for this operation.
+- `protected_paths` — global list of paths that must never be touched.
 
 **Algorithm**:
 
 1. If `approved_scope.artifact_patterns` is empty: return
    `Err(vec![ScopeViolation { kind: ScopeUnderspecified, artifact_path: None, … }])`.
 
-2. For each artifact:
+2. For each artifact in `artifacts`:
    a. If `is_protected(artifact, protected_paths)` → add
       `ProtectedPathViolation` entry (with `artifact_path = Some(artifact)`).
    b. Else if the artifact matches none of `approved_scope.artifact_patterns` →
@@ -420,16 +467,17 @@ pub fn validate_scope(
 3. If `approved_scope.max_files = Some(n)` and `artifacts.len() > n as usize` →
    add one `UnauthorizedCapability` violation describing the file-count limit.
 
-4. Return `Ok(())` if violations is empty, else `Err(violations)`.
+4. If `new_artifacts.len() > approved_scope.max_new_files as usize` → add one
+   `UnauthorizedCapability` violation describing the new-file-count limit.
+
+5. Return `Ok(())` if violations is empty, else `Err(violations)`.
 
 **Protected-path violations take precedence**: an artifact already flagged as
 protected is not also flagged as unauthorised.
 
-**Caller responsibility**: The caller is responsible for separating new files
-from modified files when checking `max_new_files`. `validate_scope` receives
-the full list; the `max_new_files` check is on total `artifacts.len()` (against
-`max_files`). A dedicated pre-pass by the caller determines which paths are new
-before calling this function with new-only paths to check `max_new_files`.
+**Note on `max_new_files = 0`**: When the limit is `0`, passing any non-empty
+`new_artifacts` slice produces a violation. Passing `&[]` always passes the
+`max_new_files` check regardless of the configured limit.
 
 ### fn is_protected
 
@@ -452,13 +500,21 @@ load time.
 
 ```rust
 pub struct ToolParams {
-    pub params: HashMap<String, serde_json::Value>,
+    pub params: IndexMap<String, serde_json::Value>,
 }
 ```
 
 Untyped map of tool invocation parameters as provided by the LLM or skill
 sequencer before validation. `String` keys are parameter names;
 `serde_json::Value` values are the raw parameter values.
+
+**Ordering guarantee**: `params` is an `IndexMap` that preserves **insertion
+order**. `validate_tool_scope` iterates parameters in the same order as they
+were inserted, matching the order the LLM produced them. This makes violation
+reports and audit log entries deterministic and reproducible across runs.
+
+**Requires**: `indexmap` workspace dependency (`indexmap = { version = "1",
+features = ["serde"] }` in `[workspace.dependencies]`).
 
 Constructor: `ToolParams::empty()` — creates an empty map.
 

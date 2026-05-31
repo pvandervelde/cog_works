@@ -12,7 +12,7 @@
 //!   4: user_content
 
 use libfuzzer_sys::fuzz_target;
-use pipeline::{BranchName, ConstitutionalRules, PromptAssembly, validate_constitutional_prompt};
+use pipeline::{ApprovedBranches, BranchName, ConstitutionalRules, PromptAssembly, validate_constitutional_prompt};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(s) = std::str::from_utf8(data) else {
@@ -41,5 +41,5 @@ fuzz_target!(|data: &[u8]| {
     };
 
     // Must never panic regardless of input.
-    let _ = validate_constitutional_prompt(&rules, prompt);
+    let _ = validate_constitutional_prompt(&rules, prompt, &ApprovedBranches::default());
 });

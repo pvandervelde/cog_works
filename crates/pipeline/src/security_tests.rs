@@ -139,7 +139,11 @@ fn test_validate_constitutional_prompt_valid_master_branch_returns_validated_pro
     let user_content = "Task description.";
     let expected_assembly = format!("{}\n\n{}", rules.content, system_prompt);
 
-    let result = validate_constitutional_prompt(&rules, prompt(system_prompt, user_content));
+    let result = validate_constitutional_prompt(
+        &rules,
+        prompt(system_prompt, user_content),
+        &ApprovedBranches::default(),
+    );
 
     let validated = result.expect("valid rules on master should produce ValidatedPrompt");
     assert_eq!(validated.assembled_system_prompt(), expected_assembly);
@@ -152,7 +156,11 @@ fn test_validate_constitutional_prompt_valid_main_branch_returns_validated_promp
     let rules = make_valid_rules_on_branch("main", "");
     let system_prompt = "Generate code.";
 
-    let result = validate_constitutional_prompt(&rules, prompt(system_prompt, "user task"));
+    let result = validate_constitutional_prompt(
+        &rules,
+        prompt(system_prompt, "user task"),
+        &ApprovedBranches::default(),
+    );
 
     assert!(
         result.is_ok(),
@@ -168,7 +176,8 @@ fn test_validate_constitutional_prompt_valid_main_branch_returns_validated_promp
 fn test_validate_constitutional_prompt_feature_branch_returns_invalid_source_branch() {
     let rules = make_valid_rules_on_branch("feature/my-task-42", "");
 
-    let result = validate_constitutional_prompt(&rules, prompt("sys", "user"));
+    let result =
+        validate_constitutional_prompt(&rules, prompt("sys", "user"), &ApprovedBranches::default());
 
     assert!(
         matches!(result, Err(ConstitutionalError::InvalidSourceBranch { .. })),
@@ -190,7 +199,8 @@ fn test_validate_constitutional_prompt_hash_mismatch_returns_hash_mismatch() {
     // Tamper: modify content after hash was computed so they diverge.
     rules.content.push_str(" TAMPERED AFTER HASH");
 
-    let result = validate_constitutional_prompt(&rules, prompt("sys", "user"));
+    let result =
+        validate_constitutional_prompt(&rules, prompt("sys", "user"), &ApprovedBranches::default());
 
     assert!(
         matches!(result, Err(ConstitutionalError::HashMismatch { .. })),
@@ -205,7 +215,8 @@ fn test_validate_constitutional_prompt_one_missing_rule_returns_missing_rules() 
     // Omit SCOPE_BINDING — the only absent signature.
     let rules = make_rules_missing_sig("RULE: SCOPE_BINDING");
 
-    let result = validate_constitutional_prompt(&rules, prompt("sys", "user"));
+    let result =
+        validate_constitutional_prompt(&rules, prompt("sys", "user"), &ApprovedBranches::default());
 
     let err = result.expect_err("missing rule should return MissingRules");
     match err {
@@ -231,7 +242,8 @@ fn test_validate_constitutional_prompt_one_missing_rule_returns_missing_rules() 
 fn test_validate_constitutional_prompt_all_rules_missing_returns_all_five() {
     let rules = make_rules_no_sigs();
 
-    let result = validate_constitutional_prompt(&rules, prompt("sys", "user"));
+    let result =
+        validate_constitutional_prompt(&rules, prompt("sys", "user"), &ApprovedBranches::default());
 
     let err = result.expect_err("no rule signatures should return MissingRules");
     match err {
@@ -272,7 +284,8 @@ fn test_validate_constitutional_prompt_hash_checked_before_rules() {
         source_branch: BranchName::new("master").expect("test branch"),
     };
 
-    let result = validate_constitutional_prompt(&rules, prompt("sys", "user"));
+    let result =
+        validate_constitutional_prompt(&rules, prompt("sys", "user"), &ApprovedBranches::default());
 
     assert!(
         matches!(result, Err(ConstitutionalError::HashMismatch { .. })),
@@ -288,8 +301,12 @@ fn test_validate_constitutional_prompt_user_content_preserved() {
     let original_user_content =
         "Fix the authentication bug described in issue #42.\n\nContext: <code>fn login() {}</code>";
 
-    let validated = validate_constitutional_prompt(&rules, prompt("sys", original_user_content))
-        .expect("valid rules should succeed");
+    let validated = validate_constitutional_prompt(
+        &rules,
+        prompt("sys", original_user_content),
+        &ApprovedBranches::default(),
+    )
+    .expect("valid rules should succeed");
 
     assert_eq!(
         validated.user_content(),
@@ -304,8 +321,12 @@ fn test_validate_constitutional_prompt_empty_system_prompt_valid_assembly() {
     let rules = make_valid_rules("");
     let expected = format!("{}\n\n", rules.content);
 
-    let validated = validate_constitutional_prompt(&rules, prompt("", "user task"))
-        .expect("valid rules with empty system_prompt should succeed");
+    let validated = validate_constitutional_prompt(
+        &rules,
+        prompt("", "user task"),
+        &ApprovedBranches::default(),
+    )
+    .expect("valid rules with empty system_prompt should succeed");
 
     assert_eq!(
         validated.assembled_system_prompt(),
@@ -319,8 +340,9 @@ fn test_validate_constitutional_prompt_empty_system_prompt_valid_assembly() {
 fn test_validate_constitutional_prompt_rules_accessor_returns_original_rules() {
     let rules = make_valid_rules("rule extra");
 
-    let validated = validate_constitutional_prompt(&rules, prompt("sys", "user"))
-        .expect("valid rules should succeed");
+    let validated =
+        validate_constitutional_prompt(&rules, prompt("sys", "user"), &ApprovedBranches::default())
+            .expect("valid rules should succeed");
 
     assert_eq!(
         validated.rules().source_hash,
@@ -607,7 +629,7 @@ fn test_is_protected_no_match_returns_false() {
 #[test]
 fn test_validate_scope_empty_artifact_patterns_returns_scope_underspecified() {
     let scope = approved(&[]);
-    let result = validate_scope(&[], &scope, &[]);
+    let result = validate_scope(&[], &[], &scope, &[]);
 
     let violations = result.expect_err("empty patterns must produce a violation");
     assert_eq!(violations.len(), 1);
@@ -621,7 +643,7 @@ fn test_validate_scope_protected_path_returns_protected_path_violation() {
     let scope = approved(&["src/**"]);
     let prot = vec![protected("**/.cogworks/**")];
 
-    let result = validate_scope(&artifacts, &scope, &prot);
+    let result = validate_scope(&artifacts, &[], &scope, &prot);
 
     let violations = result.expect_err("protected path must produce a violation");
     assert!(
@@ -639,7 +661,7 @@ fn test_validate_scope_artifact_matching_no_allowed_returns_unauthorized() {
     let artifacts = vec![artifact("docs/README.md")];
     let scope = approved(&["src/**"]);
 
-    let result = validate_scope(&artifacts, &scope, &[]);
+    let result = validate_scope(&artifacts, &[], &scope, &[]);
 
     let violations = result.expect_err("out-of-scope artifact must produce a violation");
     assert!(
@@ -657,7 +679,7 @@ fn test_validate_scope_artifact_matching_allowed_returns_ok() {
     let artifacts = vec![artifact("src/main.rs"), artifact("src/lib.rs")];
     let scope = approved(&["src/**"]);
 
-    let result = validate_scope(&artifacts, &scope, &[]);
+    let result = validate_scope(&artifacts, &[], &scope, &[]);
 
     assert!(
         result.is_ok(),
@@ -676,7 +698,7 @@ fn test_validate_scope_collects_all_violations_for_multiple_artifacts() {
     let scope = approved(&["src/**"]);
     let prot = vec![protected("**/.cogworks/**")];
 
-    let result = validate_scope(&artifacts, &scope, &prot);
+    let result = validate_scope(&artifacts, &[], &scope, &prot);
 
     let violations = result.expect_err("two violations expected");
     assert_eq!(
@@ -705,7 +727,7 @@ fn test_validate_scope_protected_not_also_flagged_unauthorized() {
     let scope = approved(&["SECURITY.md", "*.md"]);
     let prot = vec![protected("SECURITY.md")];
 
-    let result = validate_scope(&artifacts, &scope, &prot);
+    let result = validate_scope(&artifacts, &[], &scope, &prot);
 
     let violations = result.expect_err("protected path must still be a violation");
     assert_eq!(
@@ -742,7 +764,7 @@ fn test_validate_scope_max_files_exceeded_adds_violation() {
         max_new_files: 0,
     };
 
-    let result = validate_scope(&artifacts, &scope, &[]);
+    let result = validate_scope(&artifacts, &[], &scope, &[]);
 
     let violations = result.expect_err("exceeding max_files must produce a violation");
     assert!(
@@ -758,7 +780,7 @@ fn test_validate_scope_max_files_exceeded_adds_violation() {
 #[test]
 fn test_validate_scope_empty_artifacts_returns_ok() {
     let scope = approved(&["src/**"]);
-    let result = validate_scope(&[], &scope, &[]);
+    let result = validate_scope(&[], &[], &scope, &[]);
     assert!(result.is_ok(), "no artifacts with valid scope must be Ok");
 }
 
@@ -770,7 +792,8 @@ fn test_validate_scope_violation_artifact_path_is_set() {
     let scope = approved(&["src/**"]);
     let prot = vec![protected("**/.cogworks/**")];
 
-    let violations = validate_scope(&artifacts, &scope, &prot).expect_err("expected violation");
+    let violations =
+        validate_scope(&artifacts, &[], &scope, &prot).expect_err("expected violation");
 
     let prot_violation = violations
         .iter()
@@ -788,7 +811,7 @@ fn test_validate_scope_violation_artifact_path_is_set() {
 fn test_validate_scope_underspecified_artifact_path_is_none() {
     let scope = approved(&[]); // empty patterns → ScopeUnderspecified
 
-    let violations = validate_scope(&[artifact("src/main.rs")], &scope, &[])
+    let violations = validate_scope(&[artifact("src/main.rs")], &[], &scope, &[])
         .expect_err("expected ScopeUnderspecified");
 
     let under = violations
@@ -818,7 +841,7 @@ fn test_validate_scope_never_panics_proptest() {
                 max_files: None,
                 max_new_files: 0,
             };
-            let _ = validate_scope(&artifacts, &scope, &[]);
+            let _ = validate_scope(&artifacts, &[], &scope, &[]);
         }
     );
 }
@@ -1247,6 +1270,6 @@ fn test_validate_scope_dot_slash_artifact_matches_approved() {
     // M-004: ./src/main.rs should be accepted when src/** is approved
     let artifacts = vec![ArtifactPath::new("./src/main.rs").expect("valid path")];
     let scope = approved(&["src/**"]);
-    let result = validate_scope(&artifacts, &scope, &[]);
+    let result = validate_scope(&artifacts, &[], &scope, &[]);
     assert!(result.is_ok(), "expected Ok(()), got {result:?}");
 }
