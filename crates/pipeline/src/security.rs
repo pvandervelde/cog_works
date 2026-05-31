@@ -802,8 +802,10 @@ pub fn validate_scope(
     }
 
     let allowed_set = build_glob_set(&approved_scope.artifact_patterns);
-    let protected_patterns: Vec<String> =
-        protected_paths.iter().map(|pp| pp.pattern.clone()).collect();
+    let protected_patterns: Vec<String> = protected_paths
+        .iter()
+        .map(|pp| pp.pattern.clone())
+        .collect();
     let protected_set = build_glob_set(&protected_patterns);
     let mut violations = Vec::new();
 
