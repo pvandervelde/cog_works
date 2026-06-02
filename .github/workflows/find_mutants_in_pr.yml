@@ -31,7 +31,7 @@ jobs:
         run: |
           git branch -av
           git diff origin/${{ github.base_ref }}.. | tee git.diff
-      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - uses: taiki-e/install-action@92f69c195229fe62d58b4d697ab4bc75def98e76 # v2
         name: Install cargo-mutants using install-action
         with:
