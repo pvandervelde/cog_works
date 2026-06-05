@@ -265,11 +265,15 @@ pub fn evaluate_edge_condition(
     output: &NodeOutput,
     llm_evaluated_results: &HashMap<EdgeId, bool>,
     evaluated_at: Timestamp,
-) -> (bool, EdgeEvaluationRecord)
+) -> (bool, Vec<EdgeEvaluationRecord>)
 ```
 
-**Purpose**: Evaluates a single edge condition and produces an audit record.
+**Purpose**: Evaluates a single edge condition and produces audit records.
 Pure synchronous function — no I/O.
+
+**Returns**: A `(bool, Vec<EdgeEvaluationRecord>)` tuple. The `Vec` contains one record for leaf
+conditions (`Deterministic`, `LlmEvaluated`) and a root record plus inner records for `Composite`
+conditions. The `Vec` is never empty — every call produces at least one record.
 
 **Parameters**:
 

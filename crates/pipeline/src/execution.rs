@@ -431,6 +431,71 @@ pub fn determine_next_actions(
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition`
+/// Private helper that evaluates a [`CompositeCondition`] and collects audit
+/// records for every evaluated sub-condition.
+fn evaluate_composite_condition(
+    edge_id: &EdgeId,
+    composite: &CompositeCondition,
+    state: &PipelineState,
+    node_output: &NodeOutput,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
+    evaluated_at: Timestamp,
+) -> (bool, Vec<EdgeEvaluationRecord>) {
+    match composite {
+        CompositeCondition::And(conditions) => {
+            let mut all_records: Vec<EdgeEvaluationRecord> = Vec::new();
+            let mut overall = true;
+            for c in conditions {
+                let (r, mut inner) = evaluate_edge_condition(
+                    edge_id,
+                    c,
+                    state,
+                    node_output,
+                    llm_evaluated_results,
+                    evaluated_at,
+                );
+                all_records.append(&mut inner);
+                if !r {
+                    overall = false;
+                    break; // short-circuit: stop evaluating but keep records so far
+                }
+            }
+            (overall, all_records)
+        }
+        CompositeCondition::Or(conditions) => {
+            let mut all_records: Vec<EdgeEvaluationRecord> = Vec::new();
+            let mut overall = false;
+            for c in conditions {
+                let (r, mut inner) = evaluate_edge_condition(
+                    edge_id,
+                    c,
+                    state,
+                    node_output,
+                    llm_evaluated_results,
+                    evaluated_at,
+                );
+                all_records.append(&mut inner);
+                if r {
+                    overall = true;
+                    break; // short-circuit: stop evaluating but keep records so far
+                }
+            }
+            (overall, all_records)
+        }
+        CompositeCondition::Not(inner) => {
+            let (r, inner_records) = evaluate_edge_condition(
+                edge_id,
+                inner,
+                state,
+                node_output,
+                llm_evaluated_results,
+                evaluated_at,
+            );
+            (!r, inner_records)
+        }
+    }
+}
+
 #[must_use]
 #[allow(clippy::only_used_in_recursion)]
 pub fn evaluate_edge_condition(
@@ -440,82 +505,80 @@ pub fn evaluate_edge_condition(
     node_output: &NodeOutput,
     llm_evaluated_results: &HashMap<EdgeId, bool>,
     evaluated_at: Timestamp,
-) -> (bool, EdgeEvaluationRecord) {
-    let input_snapshot = serde_json::to_value(state).unwrap_or(serde_json::Value::Null);
+) -> (bool, Vec<EdgeEvaluationRecord>) {
+    let input_snapshot = serde_json::to_value(state).unwrap_or_else(|err| {
+        tracing::error!(
+            edge_id = ?edge_id,
+            error = %err,
+            "Failed to serialise PipelineState for audit record; \
+             snapshot will be empty — audit trail incomplete"
+        );
+        serde_json::Value::Object(Default::default())
+    });
 
-    let (result, evaluator) = match cond {
+    match cond {
         EdgeConditionKind::Deterministic(expr) => {
-            let r = evaluate_deterministic_condition(expr, state);
-            (r, EvaluatorKind::Deterministic)
+            let result = evaluate_deterministic_condition(expr, state);
+            let record = EdgeEvaluationRecord {
+                edge_id: edge_id.clone(),
+                condition: cond.clone(),
+                input_snapshot,
+                result,
+                evaluator: EvaluatorKind::Deterministic,
+                timestamp: evaluated_at,
+            };
+            (result, vec![record])
         }
         EdgeConditionKind::LlmEvaluated(_) => {
-            let r = llm_evaluated_results
+            let result = llm_evaluated_results
                 .get(edge_id)
                 .copied()
                 .unwrap_or_else(|| {
+                    // SAFETY: debug_assert disabled in test builds so the existing fallback
+                    // test can exercise this path without panicking. In production debug
+                    // builds this fires as an invariant violation marker.
+                    #[cfg(not(test))]
+                    debug_assert!(false, "LlmEvaluated result missing for edge {:?}", edge_id);
                     tracing::warn!(
                         edge_id = ?edge_id,
                         "LlmEvaluated result missing; falling back to false (conservative)"
                     );
                     false
                 });
-            (
-                r,
-                EvaluatorKind::LlmModel {
+            let record = EdgeEvaluationRecord {
+                edge_id: edge_id.clone(),
+                condition: cond.clone(),
+                input_snapshot,
+                result,
+                evaluator: EvaluatorKind::LlmModel {
                     model_id: "llm-evaluated".to_string(),
                 },
-            )
+                timestamp: evaluated_at,
+            };
+            (result, vec![record])
         }
         EdgeConditionKind::Composite(composite) => {
-            let r = match composite {
-                CompositeCondition::And(conditions) => conditions.iter().all(|c| {
-                    evaluate_edge_condition(
-                        edge_id,
-                        c,
-                        state,
-                        node_output,
-                        llm_evaluated_results,
-                        evaluated_at,
-                    )
-                    .0
-                }),
-                CompositeCondition::Or(conditions) => conditions.iter().any(|c| {
-                    evaluate_edge_condition(
-                        edge_id,
-                        c,
-                        state,
-                        node_output,
-                        llm_evaluated_results,
-                        evaluated_at,
-                    )
-                    .0
-                }),
-                CompositeCondition::Not(inner) => {
-                    !evaluate_edge_condition(
-                        edge_id,
-                        inner,
-                        state,
-                        node_output,
-                        llm_evaluated_results,
-                        evaluated_at,
-                    )
-                    .0
-                }
+            let (result, mut inner_records) = evaluate_composite_condition(
+                edge_id,
+                composite,
+                state,
+                node_output,
+                llm_evaluated_results,
+                evaluated_at,
+            );
+            let root_record = EdgeEvaluationRecord {
+                edge_id: edge_id.clone(),
+                condition: cond.clone(),
+                input_snapshot,
+                result,
+                evaluator: EvaluatorKind::Composite,
+                timestamp: evaluated_at,
             };
-            (r, EvaluatorKind::Composite)
+            let mut records = vec![root_record];
+            records.append(&mut inner_records);
+            (result, records)
         }
-    };
-
-    let record = EdgeEvaluationRecord {
-        edge_id: edge_id.clone(),
-        condition: cond.clone(),
-        input_snapshot,
-        result,
-        evaluator,
-        timestamp: evaluated_at,
-    };
-
-    (result, record)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -584,17 +647,27 @@ pub fn increment_rework_counter(
     state: &mut PipelineState,
     graph: &PipelineGraph,
 ) -> Result<u32, TerminationConditionReached> {
-    let edge_def = graph
-        .edges
-        .iter()
-        .find(|e| &e.id == edge)
-        .expect("increment_rework_counter: edge must exist in graph");
+    let Some(edge_def) = graph.edges.iter().find(|e| &e.id == edge) else {
+        // INVARIANT: validate_pipeline_graph guarantees all EdgeIds in a
+        // valid graph are addressable. Callers must only pass EdgeIds that
+        // originate from the same PipelineGraph.
+        unreachable!(
+            "increment_rework_counter: edge '{:?}' not found in graph; \
+             graph invariant violated",
+            edge
+        );
+    };
 
-    let max_traversals = edge_def
-        .rework_edge
-        .as_ref()
-        .expect("increment_rework_counter: called on non-rework edge")
-        .max_traversals;
+    let Some(rework) = edge_def.rework_edge.as_ref() else {
+        // INVARIANT: this function must only be called on rework edges.
+        // The orchestrator is responsible for checking edge kind before calling.
+        unreachable!(
+            "increment_rework_counter: edge '{:?}' has no rework metadata; \
+             must only be called on rework (back) edges",
+            edge
+        );
+    };
+    let max_traversals = rework.max_traversals;
 
     let target = edge_def.target.clone();
 

@@ -306,8 +306,11 @@ mod evaluate_edge_condition_tests {
         let llm_results = HashMap::new();
         let ts = Timestamp::now();
 
-        let (result, record) =
+        let (result, records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
+        let record = records
+            .first()
+            .expect("must produce at least one audit record");
 
         assert!(result, "satisfied Deterministic condition must return true");
         assert!(
@@ -327,7 +330,7 @@ mod evaluate_edge_condition_tests {
         let llm_results = HashMap::new();
         let ts = Timestamp::now();
 
-        let (result, _record) =
+        let (result, _records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
 
         assert!(
@@ -350,8 +353,11 @@ mod evaluate_edge_condition_tests {
         llm_results.insert(eid("e-llm"), true);
         let ts = Timestamp::now();
 
-        let (result, record) =
+        let (result, records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
+        let record = records
+            .first()
+            .expect("must produce at least one audit record");
 
         assert!(
             result,
@@ -377,7 +383,7 @@ mod evaluate_edge_condition_tests {
         let llm_results: HashMap<EdgeId, bool> = HashMap::new(); // key absent
         let ts = Timestamp::now();
 
-        let (result, _record) =
+        let (result, _records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
 
         assert!(
@@ -404,7 +410,7 @@ mod evaluate_edge_condition_tests {
             EdgeConditionKind::Deterministic(completed_expr),
         ]));
 
-        let (result, _record) =
+        let (result, _records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
 
         assert!(
@@ -433,7 +439,7 @@ mod evaluate_edge_condition_tests {
             cond_false_node_b(),
         ]));
 
-        let (result, _record) =
+        let (result, _records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
 
         assert!(
@@ -462,7 +468,7 @@ mod evaluate_edge_condition_tests {
             ),
         ]));
 
-        let (result, _record) =
+        let (result, _records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
 
         assert!(
@@ -488,7 +494,7 @@ mod evaluate_edge_condition_tests {
             EdgeConditionKind::Deterministic(false_expr),
         ]));
 
-        let (result, _record) =
+        let (result, _records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
 
         assert!(
@@ -512,7 +518,7 @@ mod evaluate_edge_condition_tests {
             cond_true_when_node_a_completed(), // inner is true
         )));
 
-        let (result, _record) =
+        let (result, _records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
 
         assert!(
@@ -536,7 +542,7 @@ mod evaluate_edge_condition_tests {
             cond_false_when_node_a_not_completed(), // inner is false
         )));
 
-        let (result, _record) =
+        let (result, _records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
 
         assert!(
@@ -559,8 +565,11 @@ mod evaluate_edge_condition_tests {
         let expected_snapshot =
             serde_json::to_value(&state).expect("PipelineState must be serializable");
 
-        let (_result, record) =
+        let (_result, records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
+        let record = records
+            .first()
+            .expect("must produce at least one audit record");
 
         assert_eq!(
             record.input_snapshot, expected_snapshot,
@@ -579,8 +588,11 @@ mod evaluate_edge_condition_tests {
         let llm_results = HashMap::new();
         let ts = Timestamp::now();
 
-        let (_result, record) =
+        let (_result, records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
+        let record = records
+            .first()
+            .expect("must produce at least one audit record");
 
         assert_eq!(
             record.edge_id, edge_id,
@@ -603,12 +615,71 @@ mod evaluate_edge_condition_tests {
         let fixed_ts =
             Timestamp::from_utc(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap());
 
-        let (_result, record) =
+        let (_result, records) =
             evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, fixed_ts);
+        let record = records
+            .first()
+            .expect("must produce at least one audit record");
 
         assert_eq!(
             record.timestamp, fixed_ts,
             "EdgeEvaluationRecord.timestamp must equal the evaluated_at parameter, not a fresh now()"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_edge_condition_composite_and_returns_inner_records() {
+        // Composite And([false, unevaluated]) with short-circuit must still
+        // return a record for the first (false) inner condition.
+        // Audit constraint: every evaluated condition produces a record.
+        let edge_id = eid("e-and-records");
+        let state = state_with_active_node_a(); // node-a Active → first inner = false → short-circuit
+        let output = make_output();
+        let llm_results = HashMap::new();
+        let ts = Timestamp::now();
+        let false_expr = Expression::new("node_states.node-a.status == 'Completed'").expect("expr");
+        let true_expr = Expression::new("node_states.node-a.status == 'Completed'").expect("expr");
+
+        let cond = EdgeConditionKind::Composite(CompositeCondition::And(vec![
+            EdgeConditionKind::Deterministic(false_expr), // evaluates false → short-circuit
+            EdgeConditionKind::Deterministic(true_expr),  // never evaluated
+        ]));
+
+        let (result, records) =
+            evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
+
+        assert!(!result, "And([false, _]) must be false");
+        // Root composite record + 1 inner record (short-circuit stops after first)
+        assert!(
+            records.len() >= 2,
+            "must have root composite record plus at least one inner record; got {}",
+            records.len()
+        );
+    }
+
+    #[test]
+    fn test_evaluate_edge_condition_composite_not_returns_inner_record() {
+        // Composite Not must return the inner condition's record.
+        let edge_id = eid("e-not-records");
+        let state = state_with_completed_node_a();
+        let output = make_output();
+        let llm_results = HashMap::new();
+        let ts = Timestamp::now();
+
+        let cond = EdgeConditionKind::Composite(CompositeCondition::Not(Box::new(
+            cond_true_when_node_a_completed(),
+        )));
+
+        let (result, records) =
+            evaluate_edge_condition(&edge_id, &cond, &state, &output, &llm_results, ts);
+
+        assert!(!result, "Not(true) must be false");
+        // Root composite record + 1 inner record
+        assert_eq!(
+            records.len(),
+            2,
+            "Composite Not must produce root record + 1 inner record; got {}",
+            records.len()
         );
     }
 }
