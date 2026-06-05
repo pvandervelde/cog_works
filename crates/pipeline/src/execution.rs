@@ -31,7 +31,10 @@ use thiserror::Error;
 
 use crate::{
     errors::RetryPolicy,
-    graph::{EdgeConditionKind, EdgeEvaluationRecord, NodeStatus, PipelineGraph, PipelineState},
+    graph::{
+        CompositeCondition, EdgeConditionKind, EdgeEvaluationRecord, EvaluatorKind, NodeState,
+        NodeStatus, PipelineGraph, PipelineState, evaluate_deterministic_condition,
+    },
     identifiers::{EdgeId, NodeId, SubWorkItemId},
     types::{CostBudget, Timestamp, TokenCost},
 };
@@ -429,15 +432,90 @@ pub fn determine_next_actions(
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition`
 #[must_use]
+#[allow(clippy::only_used_in_recursion)]
 pub fn evaluate_edge_condition(
-    _edge_id: &EdgeId,
-    _cond: &EdgeConditionKind,
-    _state: &PipelineState,
-    _output: &NodeOutput,
-    _llm_evaluated_results: &HashMap<EdgeId, bool>,
-    _evaluated_at: Timestamp,
+    edge_id: &EdgeId,
+    cond: &EdgeConditionKind,
+    state: &PipelineState,
+    node_output: &NodeOutput,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
+    evaluated_at: Timestamp,
 ) -> (bool, EdgeEvaluationRecord) {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition")
+    let input_snapshot = serde_json::to_value(state).unwrap_or(serde_json::Value::Null);
+
+    let (result, evaluator) = match cond {
+        EdgeConditionKind::Deterministic(expr) => {
+            let r = evaluate_deterministic_condition(expr, state);
+            (r, EvaluatorKind::Deterministic)
+        }
+        EdgeConditionKind::LlmEvaluated(_) => {
+            let r = llm_evaluated_results
+                .get(edge_id)
+                .copied()
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        edge_id = ?edge_id,
+                        "LlmEvaluated result missing; falling back to false (conservative)"
+                    );
+                    false
+                });
+            (
+                r,
+                EvaluatorKind::LlmModel {
+                    model_id: "llm-evaluated".to_string(),
+                },
+            )
+        }
+        EdgeConditionKind::Composite(composite) => {
+            let r = match composite {
+                CompositeCondition::And(conditions) => conditions.iter().all(|c| {
+                    evaluate_edge_condition(
+                        edge_id,
+                        c,
+                        state,
+                        node_output,
+                        llm_evaluated_results,
+                        evaluated_at,
+                    )
+                    .0
+                }),
+                CompositeCondition::Or(conditions) => conditions.iter().any(|c| {
+                    evaluate_edge_condition(
+                        edge_id,
+                        c,
+                        state,
+                        node_output,
+                        llm_evaluated_results,
+                        evaluated_at,
+                    )
+                    .0
+                }),
+                CompositeCondition::Not(inner) => {
+                    !evaluate_edge_condition(
+                        edge_id,
+                        inner,
+                        state,
+                        node_output,
+                        llm_evaluated_results,
+                        evaluated_at,
+                    )
+                    .0
+                }
+            };
+            (r, EvaluatorKind::Composite)
+        }
+    };
+
+    let record = EdgeEvaluationRecord {
+        edge_id: edge_id.clone(),
+        condition: cond.clone(),
+        input_snapshot,
+        result,
+        evaluator,
+        timestamp: evaluated_at,
+    };
+
+    (result, record)
 }
 
 // ---------------------------------------------------------------------------
@@ -456,8 +534,24 @@ pub fn evaluate_edge_condition(
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §check_fan_in_ready`
 #[must_use]
-pub fn check_fan_in_ready(_node: &NodeId, _state: &PipelineState, _graph: &PipelineGraph) -> bool {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §check_fan_in_ready")
+pub fn check_fan_in_ready(node: &NodeId, state: &PipelineState, graph: &PipelineGraph) -> bool {
+    let forward_predecessors: Vec<&NodeId> = graph
+        .edges
+        .iter()
+        .filter(|e| &e.target == node && e.rework_edge.is_none())
+        .map(|e| &e.source)
+        .collect();
+
+    if forward_predecessors.is_empty() {
+        return true;
+    }
+
+    forward_predecessors.iter().all(|pred| {
+        state
+            .node_states
+            .get(*pred)
+            .is_some_and(|ns| ns.status == NodeStatus::Completed)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -486,11 +580,51 @@ pub fn check_fan_in_ready(_node: &NodeId, _state: &PipelineState, _graph: &Pipel
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §increment_rework_counter`
 pub fn increment_rework_counter(
-    _edge: &EdgeId,
-    _state: &mut PipelineState,
-    _graph: &PipelineGraph,
+    edge: &EdgeId,
+    state: &mut PipelineState,
+    graph: &PipelineGraph,
 ) -> Result<u32, TerminationConditionReached> {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §increment_rework_counter")
+    let edge_def = graph
+        .edges
+        .iter()
+        .find(|e| &e.id == edge)
+        .expect("increment_rework_counter: edge must exist in graph");
+
+    let max_traversals = edge_def
+        .rework_edge
+        .as_ref()
+        .expect("increment_rework_counter: called on non-rework edge")
+        .max_traversals;
+
+    let target = edge_def.target.clone();
+
+    let node_state = state
+        .node_states
+        .entry(target)
+        .or_insert_with(|| NodeState {
+            status: NodeStatus::Pending,
+            attempt_count: 0,
+            rework_count: 0,
+            current_error: None,
+            rework_edge_traversals: HashMap::new(),
+        });
+
+    let traversal_count = node_state
+        .rework_edge_traversals
+        .entry(edge.clone())
+        .or_insert(0);
+    *traversal_count += 1;
+    let new_count = *traversal_count;
+
+    if new_count <= max_traversals {
+        Ok(new_count)
+    } else {
+        Err(TerminationConditionReached {
+            edge_id: edge.clone(),
+            current_traversals: new_count,
+            max_traversals,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
