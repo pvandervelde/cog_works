@@ -522,3 +522,7 @@ pub fn topological_sort_sub_work_items(
 ) -> Result<Vec<SubWorkItemId>, DependencyError> {
     todo!("See docs/spec/interfaces/pipeline-execution.md §topological_sort_sub_work_items")
 }
+
+#[cfg(test)]
+#[path = "execution_tests.rs"]
+mod tests;
