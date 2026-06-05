@@ -496,6 +496,36 @@ fn evaluate_composite_condition(
     }
 }
 
+fn capture_state_snapshot(edge_id: &EdgeId, state: &PipelineState) -> serde_json::Value {
+    serde_json::to_value(state).unwrap_or_else(|err| {
+        tracing::error!(
+            edge_id = ?edge_id,
+            error = %err,
+            "Failed to serialise PipelineState for audit record; \
+             snapshot will be empty — audit trail incomplete"
+        );
+        serde_json::Value::Object(Default::default())
+    })
+}
+
+fn build_record(
+    edge_id: &EdgeId,
+    cond: &EdgeConditionKind,
+    input_snapshot: serde_json::Value,
+    result: bool,
+    evaluator: EvaluatorKind,
+    evaluated_at: Timestamp,
+) -> EdgeEvaluationRecord {
+    EdgeEvaluationRecord {
+        edge_id: edge_id.clone(),
+        condition: cond.clone(),
+        input_snapshot,
+        result,
+        evaluator,
+        timestamp: evaluated_at,
+    }
+}
+
 #[must_use]
 #[allow(clippy::only_used_in_recursion)]
 pub fn evaluate_edge_condition(
@@ -506,27 +536,19 @@ pub fn evaluate_edge_condition(
     llm_evaluated_results: &HashMap<EdgeId, bool>,
     evaluated_at: Timestamp,
 ) -> (bool, Vec<EdgeEvaluationRecord>) {
-    let input_snapshot = serde_json::to_value(state).unwrap_or_else(|err| {
-        tracing::error!(
-            edge_id = ?edge_id,
-            error = %err,
-            "Failed to serialise PipelineState for audit record; \
-             snapshot will be empty — audit trail incomplete"
-        );
-        serde_json::Value::Object(Default::default())
-    });
+    let input_snapshot = capture_state_snapshot(edge_id, state);
 
     match cond {
         EdgeConditionKind::Deterministic(expr) => {
             let result = evaluate_deterministic_condition(expr, state);
-            let record = EdgeEvaluationRecord {
-                edge_id: edge_id.clone(),
-                condition: cond.clone(),
+            let record = build_record(
+                edge_id,
+                cond,
                 input_snapshot,
                 result,
-                evaluator: EvaluatorKind::Deterministic,
-                timestamp: evaluated_at,
-            };
+                EvaluatorKind::Deterministic,
+                evaluated_at,
+            );
             (result, vec![record])
         }
         EdgeConditionKind::LlmEvaluated(_) => {
@@ -545,16 +567,16 @@ pub fn evaluate_edge_condition(
                     );
                     false
                 });
-            let record = EdgeEvaluationRecord {
-                edge_id: edge_id.clone(),
-                condition: cond.clone(),
+            let record = build_record(
+                edge_id,
+                cond,
                 input_snapshot,
                 result,
-                evaluator: EvaluatorKind::LlmModel {
+                EvaluatorKind::LlmModel {
                     model_id: "llm-evaluated".to_string(),
                 },
-                timestamp: evaluated_at,
-            };
+                evaluated_at,
+            );
             (result, vec![record])
         }
         EdgeConditionKind::Composite(composite) => {
@@ -566,14 +588,14 @@ pub fn evaluate_edge_condition(
                 llm_evaluated_results,
                 evaluated_at,
             );
-            let root_record = EdgeEvaluationRecord {
-                edge_id: edge_id.clone(),
-                condition: cond.clone(),
+            let root_record = build_record(
+                edge_id,
+                cond,
                 input_snapshot,
                 result,
-                evaluator: EvaluatorKind::Composite,
-                timestamp: evaluated_at,
-            };
+                EvaluatorKind::Composite,
+                evaluated_at,
+            );
             let mut records = vec![root_record];
             records.append(&mut inner_records);
             (result, records)
@@ -642,11 +664,7 @@ pub fn check_fan_in_ready(node: &NodeId, state: &PipelineState, graph: &Pipeline
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §increment_rework_counter`
-pub fn increment_rework_counter(
-    edge: &EdgeId,
-    state: &mut PipelineState,
-    graph: &PipelineGraph,
-) -> Result<u32, TerminationConditionReached> {
+fn resolve_rework_edge(edge: &EdgeId, graph: &PipelineGraph) -> (NodeId, u32) {
     let Some(edge_def) = graph.edges.iter().find(|e| &e.id == edge) else {
         // INVARIANT: validate_pipeline_graph guarantees all EdgeIds in a
         // valid graph are addressable. Callers must only pass EdgeIds that
@@ -667,9 +685,16 @@ pub fn increment_rework_counter(
             edge
         );
     };
-    let max_traversals = rework.max_traversals;
 
-    let target = edge_def.target.clone();
+    (edge_def.target.clone(), rework.max_traversals)
+}
+
+pub fn increment_rework_counter(
+    edge: &EdgeId,
+    state: &mut PipelineState,
+    graph: &PipelineGraph,
+) -> Result<u32, TerminationConditionReached> {
+    let (target, max_traversals) = resolve_rework_edge(edge, graph);
 
     let node_state = state
         .node_states
