@@ -386,51 +386,84 @@ pub fn determine_next_actions(
 
 // ---------------------------------------------------------------------------
 
-/// Evaluates a single edge condition against the current pipeline state and
-/// the producing node's output.
+// ---------------------------------------------------------------------------
+
+/// Evaluates an LLM-evaluated edge condition using a pre-resolved results map.
 ///
-/// Returns both the boolean result and a complete [`EdgeEvaluationRecord`]
-/// suitable for including in the audit trail and in the next
-/// [`crate::PipelineStateComment`].
+/// Returns `false` conservatively when the map does not contain an entry for
+/// `edge_id`, logs a warning, and fires a `debug_assert` in production builds
+/// to signal the missing pre-population (a caller contract violation).
+fn evaluate_llm_branch(
+    edge_id: &EdgeId,
+    cond: &EdgeConditionKind,
+    input_snapshot: serde_json::Value,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
+    evaluated_at: Timestamp,
+) -> (bool, Vec<EdgeEvaluationRecord>) {
+    let result = llm_evaluated_results
+        .get(edge_id)
+        .copied()
+        .unwrap_or_else(|| {
+            // SAFETY: debug_assert disabled in test builds so the existing fallback
+            // test can exercise this path without panicking. In production debug
+            // builds this fires as an invariant violation marker.
+            #[cfg(not(test))]
+            debug_assert!(false, "LlmEvaluated result missing for edge {:?}", edge_id);
+            tracing::warn!(
+                edge_id = ?edge_id,
+                "LlmEvaluated result missing; falling back to false (conservative)"
+            );
+            false
+        });
+    let record = build_record(
+        edge_id,
+        cond,
+        input_snapshot,
+        result,
+        EvaluatorKind::LlmModel {
+            model_id: "llm-evaluated".to_string(),
+        },
+        evaluated_at,
+    );
+    (result, vec![record])
+}
+
+/// Evaluates a list of conditions with short-circuit semantics.
 ///
-/// ## Condition Kinds
+/// - `short_circuit_value = false` → And semantics (return false on first false).
+/// - `short_circuit_value = true`  → Or semantics  (return true on first true).
 ///
-/// - [`EdgeConditionKind::Deterministic`]: delegates to
-///   [`crate::evaluate_deterministic_condition`]. Pure; always returns the
-///   same result for the same inputs.
-/// - [`EdgeConditionKind::LlmEvaluated`]: looks up the pre-resolved result
-///   in `llm_evaluated_results`. This map is populated by the `nodes` crate
-///   (PR 9) before calling this function: `LlmGateway::call` is invoked
-///   asynchronously for every `LlmEvaluated` condition on the outgoing edges
-///   of the completed node, and the `(EdgeId, bool)` results are collected
-///   into the map. The map entry **must** exist for every `LlmEvaluated`
-///   edge; a missing entry is treated as `false` (conservative fallback) and
-///   **must** be surfaced immediately via `debug_assert!(false, "LlmEvaluated
-///   result missing for edge {:?}", edge_id)` or an equivalent audit-log
-///   warning, to prevent silent pipeline stalls that are hard to debug.
-/// - [`EdgeConditionKind::Composite`]: recursively evaluates inner conditions.
-///
-/// ## Parameters
-///
-/// - `edge_id` — Required to populate `EdgeEvaluationRecord::edge_id`.
-/// - `llm_evaluated_results` — Pre-resolved LLM condition outcomes, keyed by
-///   [`EdgeId`]. Populated by the `nodes` crate before calling this function
-///   (see above). Empty for graphs with no `LlmEvaluated` edges.
-/// - `evaluated_at` — Wall-clock time of evaluation; passed in so the function
-///   remains pure and testable without `std::time` access.
-///
-/// ## Calling Convention (nodes crate)
-///
-/// ```text
-/// // 1. Collect all LlmEvaluated edges leaving the completed node
-/// // 2. For each, call LlmGateway::call to get a bool result (async)
-/// // 3. Build llm_evaluated_results: HashMap<EdgeId, bool>
-/// // 4. Call evaluate_edge_condition for every outgoing edge (sync)
-/// ```
-///
-/// # See also
-///
-/// `docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition`
+/// Evaluation stops at the first short-circuit match but all records up to
+/// and including the triggering condition are collected.
+fn evaluate_short_circuit_conditions(
+    edge_id: &EdgeId,
+    conditions: &[EdgeConditionKind],
+    state: &PipelineState,
+    node_output: &NodeOutput,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
+    evaluated_at: Timestamp,
+    short_circuit_value: bool,
+) -> (bool, Vec<EdgeEvaluationRecord>) {
+    let mut all_records: Vec<EdgeEvaluationRecord> = Vec::new();
+    let mut overall = !short_circuit_value; // identity: true for And, false for Or
+    for c in conditions {
+        let (r, mut inner) = evaluate_edge_condition(
+            edge_id,
+            c,
+            state,
+            node_output,
+            llm_evaluated_results,
+            evaluated_at,
+        );
+        all_records.append(&mut inner);
+        if r == short_circuit_value {
+            overall = short_circuit_value;
+            break;
+        }
+    }
+    (overall, all_records)
+}
+
 /// Private helper that evaluates a [`CompositeCondition`] and collects audit
 /// records for every evaluated sub-condition.
 fn evaluate_composite_condition(
@@ -442,46 +475,24 @@ fn evaluate_composite_condition(
     evaluated_at: Timestamp,
 ) -> (bool, Vec<EdgeEvaluationRecord>) {
     match composite {
-        CompositeCondition::And(conditions) => {
-            let mut all_records: Vec<EdgeEvaluationRecord> = Vec::new();
-            let mut overall = true;
-            for c in conditions {
-                let (r, mut inner) = evaluate_edge_condition(
-                    edge_id,
-                    c,
-                    state,
-                    node_output,
-                    llm_evaluated_results,
-                    evaluated_at,
-                );
-                all_records.append(&mut inner);
-                if !r {
-                    overall = false;
-                    break; // short-circuit: stop evaluating but keep records so far
-                }
-            }
-            (overall, all_records)
-        }
-        CompositeCondition::Or(conditions) => {
-            let mut all_records: Vec<EdgeEvaluationRecord> = Vec::new();
-            let mut overall = false;
-            for c in conditions {
-                let (r, mut inner) = evaluate_edge_condition(
-                    edge_id,
-                    c,
-                    state,
-                    node_output,
-                    llm_evaluated_results,
-                    evaluated_at,
-                );
-                all_records.append(&mut inner);
-                if r {
-                    overall = true;
-                    break; // short-circuit: stop evaluating but keep records so far
-                }
-            }
-            (overall, all_records)
-        }
+        CompositeCondition::And(conditions) => evaluate_short_circuit_conditions(
+            edge_id,
+            conditions,
+            state,
+            node_output,
+            llm_evaluated_results,
+            evaluated_at,
+            false, // short-circuit on false (And semantics)
+        ),
+        CompositeCondition::Or(conditions) => evaluate_short_circuit_conditions(
+            edge_id,
+            conditions,
+            state,
+            node_output,
+            llm_evaluated_results,
+            evaluated_at,
+            true, // short-circuit on true (Or semantics)
+        ),
         CompositeCondition::Not(inner) => {
             let (r, inner_records) = evaluate_edge_condition(
                 edge_id,
@@ -528,6 +539,51 @@ fn build_record(
 
 #[must_use]
 #[allow(clippy::only_used_in_recursion)]
+/// Evaluates a single edge condition against the current pipeline state and
+/// the producing node's output.
+///
+/// Returns both the boolean result and a complete [`EdgeEvaluationRecord`]
+/// suitable for including in the audit trail and in the next
+/// [`crate::PipelineStateComment`].
+///
+/// ## Condition Kinds
+///
+/// - [`EdgeConditionKind::Deterministic`]: delegates to
+///   [`crate::evaluate_deterministic_condition`]. Pure; always returns the
+///   same result for the same inputs.
+/// - [`EdgeConditionKind::LlmEvaluated`]: looks up the pre-resolved result
+///   in `llm_evaluated_results`. This map is populated by the `nodes` crate
+///   (PR 9) before calling this function: `LlmGateway::call` is invoked
+///   asynchronously for every `LlmEvaluated` condition on the outgoing edges
+///   of the completed node, and the `(EdgeId, bool)` results are collected
+///   into the map. The map entry **must** exist for every `LlmEvaluated`
+///   edge; a missing entry is treated as `false` (conservative fallback) and
+///   **must** be surfaced immediately via `debug_assert!(false, "LlmEvaluated
+///   result missing for edge {:?}", edge_id)` or an equivalent audit-log
+///   warning, to prevent silent pipeline stalls that are hard to debug.
+/// - [`EdgeConditionKind::Composite`]: recursively evaluates inner conditions.
+///
+/// ## Parameters
+///
+/// - `edge_id` — Required to populate `EdgeEvaluationRecord::edge_id`.
+/// - `llm_evaluated_results` — Pre-resolved LLM condition outcomes, keyed by
+///   [`EdgeId`]. Populated by the `nodes` crate before calling this function
+///   (see above). Empty for graphs with no `LlmEvaluated` edges.
+/// - `evaluated_at` — Wall-clock time of evaluation; passed in so the function
+///   remains pure and testable without `std::time` access.
+///
+/// ## Calling Convention (nodes crate)
+///
+/// ```text
+/// // 1. Collect all LlmEvaluated edges leaving the completed node
+/// // 2. For each, call LlmGateway::call to get a bool result (async)
+/// // 3. Build llm_evaluated_results: HashMap<EdgeId, bool>
+/// // 4. Call evaluate_edge_condition for every outgoing edge (sync)
+/// ```
+///
+/// # See also
+///
+/// `docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition`
 pub fn evaluate_edge_condition(
     edge_id: &EdgeId,
     cond: &EdgeConditionKind,
@@ -551,34 +607,13 @@ pub fn evaluate_edge_condition(
             );
             (result, vec![record])
         }
-        EdgeConditionKind::LlmEvaluated(_) => {
-            let result = llm_evaluated_results
-                .get(edge_id)
-                .copied()
-                .unwrap_or_else(|| {
-                    // SAFETY: debug_assert disabled in test builds so the existing fallback
-                    // test can exercise this path without panicking. In production debug
-                    // builds this fires as an invariant violation marker.
-                    #[cfg(not(test))]
-                    debug_assert!(false, "LlmEvaluated result missing for edge {:?}", edge_id);
-                    tracing::warn!(
-                        edge_id = ?edge_id,
-                        "LlmEvaluated result missing; falling back to false (conservative)"
-                    );
-                    false
-                });
-            let record = build_record(
-                edge_id,
-                cond,
-                input_snapshot,
-                result,
-                EvaluatorKind::LlmModel {
-                    model_id: "llm-evaluated".to_string(),
-                },
-                evaluated_at,
-            );
-            (result, vec![record])
-        }
+        EdgeConditionKind::LlmEvaluated(_) => evaluate_llm_branch(
+            edge_id,
+            cond,
+            input_snapshot,
+            llm_evaluated_results,
+            evaluated_at,
+        ),
         EdgeConditionKind::Composite(composite) => {
             let (result, mut inner_records) = evaluate_composite_condition(
                 edge_id,
