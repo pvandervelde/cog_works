@@ -160,3 +160,93 @@ See commit `d4bcef8` — 4 additional tests added to improve mutation coverage b
 - Concurrent invocation behaviour is not tested here — requires integration tests.
 - `validate_protected_paths` wiring into `PipelineConfigurationLoader` is not tested here — blocked
   on Task 16.0 (`PipelineConfigurationLoader` implementation).
+
+---
+
+## Module: `pipeline/execution.rs` — Task 3.0
+
+**Test file**: `crates/pipeline/src/execution_tests.rs`
+**Criticality**: domain-logic — mutation target 85%
+**Tiers**: 4 (mutation)
+
+### Functions in scope for Task 3.0
+
+- `check_fan_in_ready`
+- `evaluate_edge_condition`
+- `increment_rework_counter`
+
+### Adversarial Tests (Tier 2)
+
+#### `check_fan_in_ready` (5 tests)
+
+| Scenario | Test |
+|----------|------|
+| No incoming forward edges → true (no predecessors) | `test_check_fan_in_ready_no_predecessors_returns_true` |
+| All predecessors Completed → true | `test_check_fan_in_ready_all_completed_returns_true` |
+| One predecessor not Completed → false | `test_check_fan_in_ready_one_incomplete_returns_false` |
+| All predecessors Pending → false | `test_check_fan_in_ready_all_pending_returns_false` |
+| Rework edges excluded from predecessor check → true | `test_check_fan_in_ready_rework_edges_ignored` |
+
+#### `evaluate_edge_condition` (13 tests)
+
+| Scenario | Test |
+|----------|------|
+| Deterministic true → `(true, record)` | `test_evaluate_edge_condition_deterministic_true_produces_record` |
+| Deterministic false → `(false, record)` | `test_evaluate_edge_condition_deterministic_false_produces_record` |
+| LlmEvaluated present in map → map value returned | `test_evaluate_edge_condition_llm_evaluated_present_returns_value` |
+| LlmEvaluated absent from map → false (conservative fallback) | `test_evaluate_edge_condition_llm_evaluated_absent_returns_false` |
+| Composite And, all true → true | `test_evaluate_edge_condition_composite_and_all_true_returns_true` |
+| Composite And, one false → false | `test_evaluate_edge_condition_composite_and_one_false_returns_false` |
+| Composite Or, one true → true | `test_evaluate_edge_condition_composite_or_one_true_returns_true` |
+| Composite Or, all false → false | `test_evaluate_edge_condition_composite_or_all_false_returns_false` |
+| Composite Not, wrapping true → false | `test_evaluate_edge_condition_composite_not_inverts_true_to_false` |
+| Composite Not, wrapping false → true | `test_evaluate_edge_condition_composite_not_inverts_false_to_true` |
+| `record.input_snapshot` captures pipeline state | `test_evaluate_edge_condition_record_contains_input_snapshot` |
+| `record.edge_id` matches the supplied edge_id | `test_evaluate_edge_condition_record_contains_edge_id` |
+| `record.timestamp` matches `evaluated_at` | `test_evaluate_edge_condition_record_timestamp_matches_evaluated_at` |
+
+#### `increment_rework_counter` (6 tests)
+
+| Scenario | Test |
+|----------|------|
+| First traversal → Ok(1) | `test_increment_rework_counter_first_traversal_returns_one` |
+| Second traversal → Ok(2) (accumulates) | `test_increment_rework_counter_increments_existing_count` |
+| Traversal count equals max_traversals → Ok (at-limit is allowed) | `test_increment_rework_counter_at_limit_returns_ok` |
+| Traversal count exceeds max_traversals → Err | `test_increment_rework_counter_over_limit_returns_err` |
+| `TerminationConditionReached.edge_id` / `.current_traversals` / `.max_traversals` correct | `test_increment_rework_counter_err_contains_correct_fields` |
+| `rework_edge_traversals` in state updated after call | `test_increment_rework_counter_mutates_state` |
+
+### Tier 4 — Mutation Testing
+
+**Run**: `cargo mutants --package pipeline --file crates/pipeline/src/execution.rs --timeout 60`
+**Report**: `docs/spec/mutation-report-task3.0-4ad9cc7.json`
+**Date**: 2026-06-05
+
+| Module / Function | Viable Mutants | Caught | Missed | Score |
+|-------------------|---------------|--------|--------|-------|
+| `check_fan_in_ready` | 5 | 5 | 0 | **100%** |
+| `evaluate_edge_condition` | 1 | 1 | 0 | **100%** (2 unviable: `EdgeEvaluationRecord` non-Default) |
+| `increment_rework_counter` | 6 | 6 | 0 | **100%** |
+| `determine_next_actions` _(todo stub, out of scope)_ | 1 | 0 | 1 | N/A |
+| `topological_sort_sub_work_items` _(todo stub, out of scope)_ | 1 | 0 | 1 | N/A |
+| **Target functions total** | **12** | **12** | **0** | **100%** |
+| File total (all functions) | 14 | 12 | 2 | 85.7% |
+
+**Target met**: ✅ 100% kill rate on the three task-3.0 functions (domain-logic minimum: 85%).
+
+**Surviving mutants** (out of scope — cannot be killed without implementing the stubs):
+
+- `execution.rs:384`: `replace determine_next_actions -> Vec<NextAction> with vec![]`
+  — Base is `todo!()` (panics). No tests call this function. Blocked on Task N (implementation).
+- `execution.rs:657`: `replace topological_sort_sub_work_items -> Result<Vec<SubWorkItemId>, DependencyError> with Ok(vec![])`
+  — Base is `todo!()` (panics). No tests call this function. Blocked on its implementation task.
+
+**New kill tests added**: 0 — all 3 target functions achieved 100% kill rate with the existing 24-test suite.
+
+### Gaps / Known Limitations
+
+- `determine_next_actions` mutation survivor will be killed when that function is implemented (not Task 3.0).
+- `topological_sort_sub_work_items` mutation survivor will be killed when that function is implemented.
+- No fuzz targets for `check_fan_in_ready` / `evaluate_edge_condition` / `increment_rework_counter` —
+  these are pure functions over typed structs (not raw byte parsers); fuzz coverage is deferred.
+- No Kani proofs — functions are domain-logic tier (Tier 4 only); Tier 6 reserved for safety-critical paths.
