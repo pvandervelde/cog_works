@@ -421,7 +421,7 @@ fn evaluate_llm_branch(
         input_snapshot,
         result,
         EvaluatorKind::LlmModel {
-            model_id: "llm-evaluated".to_string(),
+            model_id: LLM_EVALUATED_MODEL_ID.to_string(),
         },
         evaluated_at,
     );
@@ -507,6 +507,16 @@ fn evaluate_composite_condition(
     }
 }
 
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/// Sentinel model ID used in audit records when an LlmEvaluated edge condition
+/// result is retrieved from the pre-populated `llm_evaluated_results` map.
+/// The actual model ID (e.g. `"claude-3-7-sonnet"`) will be populated by PR 9
+/// when the LLM evaluation infrastructure is integrated.
+const LLM_EVALUATED_MODEL_ID: &str = "llm-evaluated";
+
+// ─── Snapshot and record builders ────────────────────────────────────────────
+
 fn capture_state_snapshot(edge_id: &EdgeId, state: &PipelineState) -> serde_json::Value {
     serde_json::to_value(state).unwrap_or_else(|err| {
         tracing::error!(
@@ -566,6 +576,10 @@ fn build_record(
 /// ## Parameters
 ///
 /// - `edge_id` — Required to populate `EdgeEvaluationRecord::edge_id`.
+/// - `node_output` — The output of the node that produced this edge condition.
+///   Currently unused; reserved as a forward-compatibility placeholder for
+///   artifact-aware condition kinds in PR 9 (e.g. presence checks like
+///   `"artifact 'foo' is present"`). Callers must always provide this parameter.
 /// - `llm_evaluated_results` — Pre-resolved LLM condition outcomes, keyed by
 ///   [`EdgeId`]. Populated by the `nodes` crate before calling this function
 ///   (see above). Empty for graphs with no `LlmEvaluated` edges.
@@ -655,50 +669,28 @@ pub fn evaluate_edge_condition(
 /// `docs/spec/interfaces/pipeline-execution.md §check_fan_in_ready`
 #[must_use]
 pub fn check_fan_in_ready(node: &NodeId, state: &PipelineState, graph: &PipelineGraph) -> bool {
-    let forward_predecessors: Vec<&NodeId> = graph
+    graph
         .edges
         .iter()
         .filter(|e| &e.target == node && e.rework_edge.is_none())
         .map(|e| &e.source)
-        .collect();
-
-    if forward_predecessors.is_empty() {
-        return true;
-    }
-
-    forward_predecessors.iter().all(|pred| {
-        state
-            .node_states
-            .get(*pred)
-            .is_some_and(|ns| ns.status == NodeStatus::Completed)
-    })
+        .all(|pred| {
+            state
+                .node_states
+                .get(pred)
+                .is_some_and(|ns| ns.status == NodeStatus::Completed)
+        })
 }
 
 // ---------------------------------------------------------------------------
 
-/// Increments the traversal counter for the given rework edge in the current
-/// pipeline state.
+/// Resolves a rework edge to its target node and max-traversals limit.
 ///
-/// Returns the new traversal count on success. Returns
-/// [`TerminationConditionReached`] if the increment would cause the count to
-/// exceed the edge's `max_traversals` limit.
+/// # Panics
 ///
-/// ## Caller Responsibility
-///
-/// The caller must inspect [`crate::ReworkEdge::overflow_behaviour`] whenever
-/// this function returns `Err` and act accordingly:
-/// - [`crate::OverflowBehaviour::HaltWithError`] → emit `HaltWithError`.
-/// - [`crate::OverflowBehaviour::Escalate`] → emit `Escalate`.
-/// - [`crate::OverflowBehaviour::TakeEdge`] → activate the bypass edge instead.
-///
-/// # Errors
-///
-/// Returns [`TerminationConditionReached`] if incrementing would exceed the
-/// rework edge's `max_traversals` limit.
-///
-/// # See also
-///
-/// `docs/spec/interfaces/pipeline-execution.md §increment_rework_counter`
+/// Panics (via `unreachable!()`) if the edge is not found in the graph or
+/// if the edge does not have rework metadata. These are invariant violations
+/// that should never occur if the caller has validated the graph.
 fn resolve_rework_edge(edge: &EdgeId, graph: &PipelineGraph) -> (NodeId, u32) {
     let Some(edge_def) = graph.edges.iter().find(|e| &e.id == edge) else {
         // INVARIANT: validate_pipeline_graph guarantees all EdgeIds in a
@@ -724,6 +716,29 @@ fn resolve_rework_edge(edge: &EdgeId, graph: &PipelineGraph) -> (NodeId, u32) {
     (edge_def.target.clone(), rework.max_traversals)
 }
 
+/// Increments the traversal counter for the given rework edge in the current
+/// pipeline state.
+///
+/// Returns the new traversal count on success. Returns
+/// [`TerminationConditionReached`] if the increment would cause the count to
+/// exceed the edge's `max_traversals` limit.
+///
+/// ## Caller Responsibility
+///
+/// The caller must inspect [`crate::ReworkEdge::overflow_behaviour`] whenever
+/// this function returns `Err` and act accordingly:
+/// - [`crate::OverflowBehaviour::HaltWithError`] → emit `HaltWithError`.
+/// - [`crate::OverflowBehaviour::Escalate`] → emit `Escalate`.
+/// - [`crate::OverflowBehaviour::TakeEdge`] → activate the bypass edge instead.
+///
+/// # Errors
+///
+/// Returns [`TerminationConditionReached`] if incrementing would exceed the
+/// rework edge's `max_traversals` limit.
+///
+/// # See also
+///
+/// `docs/spec/interfaces/pipeline-execution.md §increment_rework_counter`
 pub fn increment_rework_counter(
     edge: &EdgeId,
     state: &mut PipelineState,
