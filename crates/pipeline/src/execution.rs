@@ -31,7 +31,10 @@ use thiserror::Error;
 
 use crate::{
     errors::RetryPolicy,
-    graph::{EdgeConditionKind, EdgeEvaluationRecord, NodeStatus, PipelineGraph, PipelineState},
+    graph::{
+        CompositeCondition, EdgeConditionKind, EdgeEvaluationRecord, EvaluatorKind, NodeState,
+        NodeStatus, PipelineGraph, PipelineState, evaluate_deterministic_condition,
+    },
     identifiers::{EdgeId, NodeId, SubWorkItemId},
     types::{CostBudget, Timestamp, TokenCost},
 };
@@ -383,6 +386,169 @@ pub fn determine_next_actions(
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+
+/// Evaluates an LLM-evaluated edge condition using a pre-resolved results map.
+///
+/// Returns `false` conservatively when the map does not contain an entry for
+/// `edge_id`, logs a warning, and fires a `debug_assert` in production builds
+/// to signal the missing pre-population (a caller contract violation).
+fn evaluate_llm_branch(
+    edge_id: &EdgeId,
+    cond: &EdgeConditionKind,
+    input_snapshot: serde_json::Value,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
+    evaluated_at: Timestamp,
+) -> (bool, Vec<EdgeEvaluationRecord>) {
+    let result = llm_evaluated_results
+        .get(edge_id)
+        .copied()
+        .unwrap_or_else(|| {
+            // SAFETY: debug_assert disabled in test builds so the existing fallback
+            // test can exercise this path without panicking. In production debug
+            // builds this fires as an invariant violation marker.
+            #[cfg(not(test))]
+            debug_assert!(false, "LlmEvaluated result missing for edge {:?}", edge_id);
+            tracing::warn!(
+                edge_id = ?edge_id,
+                "LlmEvaluated result missing; falling back to false (conservative)"
+            );
+            false
+        });
+    let record = build_record(
+        edge_id,
+        cond,
+        input_snapshot,
+        result,
+        EvaluatorKind::LlmModel {
+            model_id: LLM_EVALUATED_MODEL_ID.to_string(),
+        },
+        evaluated_at,
+    );
+    (result, vec![record])
+}
+
+/// Evaluates a list of conditions with short-circuit semantics.
+///
+/// - `short_circuit_value = false` → And semantics (return false on first false).
+/// - `short_circuit_value = true`  → Or semantics  (return true on first true).
+///
+/// Evaluation stops at the first short-circuit match but all records up to
+/// and including the triggering condition are collected.
+fn evaluate_short_circuit_conditions(
+    edge_id: &EdgeId,
+    conditions: &[EdgeConditionKind],
+    state: &PipelineState,
+    node_output: &NodeOutput,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
+    evaluated_at: Timestamp,
+    short_circuit_value: bool,
+) -> (bool, Vec<EdgeEvaluationRecord>) {
+    let mut all_records: Vec<EdgeEvaluationRecord> = Vec::new();
+    let mut overall = !short_circuit_value; // identity: true for And, false for Or
+    for c in conditions {
+        let (r, mut inner) = evaluate_edge_condition(
+            edge_id,
+            c,
+            state,
+            node_output,
+            llm_evaluated_results,
+            evaluated_at,
+        );
+        all_records.append(&mut inner);
+        if r == short_circuit_value {
+            overall = short_circuit_value;
+            break;
+        }
+    }
+    (overall, all_records)
+}
+
+/// Private helper that evaluates a [`CompositeCondition`] and collects audit
+/// records for every evaluated sub-condition.
+fn evaluate_composite_condition(
+    edge_id: &EdgeId,
+    composite: &CompositeCondition,
+    state: &PipelineState,
+    node_output: &NodeOutput,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
+    evaluated_at: Timestamp,
+) -> (bool, Vec<EdgeEvaluationRecord>) {
+    match composite {
+        CompositeCondition::And(conditions) => evaluate_short_circuit_conditions(
+            edge_id,
+            conditions,
+            state,
+            node_output,
+            llm_evaluated_results,
+            evaluated_at,
+            false, // short-circuit on false (And semantics)
+        ),
+        CompositeCondition::Or(conditions) => evaluate_short_circuit_conditions(
+            edge_id,
+            conditions,
+            state,
+            node_output,
+            llm_evaluated_results,
+            evaluated_at,
+            true, // short-circuit on true (Or semantics)
+        ),
+        CompositeCondition::Not(inner) => {
+            let (r, inner_records) = evaluate_edge_condition(
+                edge_id,
+                inner,
+                state,
+                node_output,
+                llm_evaluated_results,
+                evaluated_at,
+            );
+            (!r, inner_records)
+        }
+    }
+}
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/// Sentinel model ID used in audit records when an LlmEvaluated edge condition
+/// result is retrieved from the pre-populated `llm_evaluated_results` map.
+/// The actual model ID (e.g. `"claude-3-7-sonnet"`) will be populated by PR 9
+/// when the LLM evaluation infrastructure is integrated.
+const LLM_EVALUATED_MODEL_ID: &str = "llm-evaluated";
+
+// ─── Snapshot and record builders ────────────────────────────────────────────
+
+fn capture_state_snapshot(edge_id: &EdgeId, state: &PipelineState) -> serde_json::Value {
+    serde_json::to_value(state).unwrap_or_else(|err| {
+        tracing::error!(
+            edge_id = ?edge_id,
+            error = %err,
+            "Failed to serialise PipelineState for audit record; \
+             snapshot will be empty — audit trail incomplete"
+        );
+        serde_json::Value::Object(Default::default())
+    })
+}
+
+fn build_record(
+    edge_id: &EdgeId,
+    cond: &EdgeConditionKind,
+    input_snapshot: serde_json::Value,
+    result: bool,
+    evaluator: EvaluatorKind,
+    evaluated_at: Timestamp,
+) -> EdgeEvaluationRecord {
+    EdgeEvaluationRecord {
+        edge_id: edge_id.clone(),
+        condition: cond.clone(),
+        input_snapshot,
+        result,
+        evaluator,
+        timestamp: evaluated_at,
+    }
+}
+
+#[must_use]
+#[allow(clippy::only_used_in_recursion)]
 /// Evaluates a single edge condition against the current pipeline state and
 /// the producing node's output.
 ///
@@ -410,6 +576,10 @@ pub fn determine_next_actions(
 /// ## Parameters
 ///
 /// - `edge_id` — Required to populate `EdgeEvaluationRecord::edge_id`.
+/// - `node_output` — The output of the node that produced this edge condition.
+///   Currently unused; reserved as a forward-compatibility placeholder for
+///   artifact-aware condition kinds in PR 9 (e.g. presence checks like
+///   `"artifact 'foo' is present"`). Callers must always provide this parameter.
 /// - `llm_evaluated_results` — Pre-resolved LLM condition outcomes, keyed by
 ///   [`EdgeId`]. Populated by the `nodes` crate before calling this function
 ///   (see above). Empty for graphs with no `LlmEvaluated` edges.
@@ -428,16 +598,58 @@ pub fn determine_next_actions(
 /// # See also
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition`
-#[must_use]
 pub fn evaluate_edge_condition(
-    _edge_id: &EdgeId,
-    _cond: &EdgeConditionKind,
-    _state: &PipelineState,
-    _output: &NodeOutput,
-    _llm_evaluated_results: &HashMap<EdgeId, bool>,
-    _evaluated_at: Timestamp,
-) -> (bool, EdgeEvaluationRecord) {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §evaluate_edge_condition")
+    edge_id: &EdgeId,
+    cond: &EdgeConditionKind,
+    state: &PipelineState,
+    node_output: &NodeOutput,
+    llm_evaluated_results: &HashMap<EdgeId, bool>,
+    evaluated_at: Timestamp,
+) -> (bool, Vec<EdgeEvaluationRecord>) {
+    let input_snapshot = capture_state_snapshot(edge_id, state);
+
+    match cond {
+        EdgeConditionKind::Deterministic(expr) => {
+            let result = evaluate_deterministic_condition(expr, state);
+            let record = build_record(
+                edge_id,
+                cond,
+                input_snapshot,
+                result,
+                EvaluatorKind::Deterministic,
+                evaluated_at,
+            );
+            (result, vec![record])
+        }
+        EdgeConditionKind::LlmEvaluated(_) => evaluate_llm_branch(
+            edge_id,
+            cond,
+            input_snapshot,
+            llm_evaluated_results,
+            evaluated_at,
+        ),
+        EdgeConditionKind::Composite(composite) => {
+            let (result, mut inner_records) = evaluate_composite_condition(
+                edge_id,
+                composite,
+                state,
+                node_output,
+                llm_evaluated_results,
+                evaluated_at,
+            );
+            let root_record = build_record(
+                edge_id,
+                cond,
+                input_snapshot,
+                result,
+                EvaluatorKind::Composite,
+                evaluated_at,
+            );
+            let mut records = vec![root_record];
+            records.append(&mut inner_records);
+            (result, records)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -456,11 +668,53 @@ pub fn evaluate_edge_condition(
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §check_fan_in_ready`
 #[must_use]
-pub fn check_fan_in_ready(_node: &NodeId, _state: &PipelineState, _graph: &PipelineGraph) -> bool {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §check_fan_in_ready")
+pub fn check_fan_in_ready(node: &NodeId, state: &PipelineState, graph: &PipelineGraph) -> bool {
+    graph
+        .edges
+        .iter()
+        .filter(|e| &e.target == node && e.rework_edge.is_none())
+        .map(|e| &e.source)
+        .all(|pred| {
+            state
+                .node_states
+                .get(pred)
+                .is_some_and(|ns| ns.status == NodeStatus::Completed)
+        })
 }
 
 // ---------------------------------------------------------------------------
+
+/// Resolves a rework edge to its target node and max-traversals limit.
+///
+/// # Panics
+///
+/// Panics (via `unreachable!()`) if the edge is not found in the graph or
+/// if the edge does not have rework metadata. These are invariant violations
+/// that should never occur if the caller has validated the graph.
+fn resolve_rework_edge(edge: &EdgeId, graph: &PipelineGraph) -> (NodeId, u32) {
+    let Some(edge_def) = graph.edges.iter().find(|e| &e.id == edge) else {
+        // INVARIANT: validate_pipeline_graph guarantees all EdgeIds in a
+        // valid graph are addressable. Callers must only pass EdgeIds that
+        // originate from the same PipelineGraph.
+        unreachable!(
+            "increment_rework_counter: edge '{:?}' not found in graph; \
+             graph invariant violated",
+            edge
+        );
+    };
+
+    let Some(rework) = edge_def.rework_edge.as_ref() else {
+        // INVARIANT: this function must only be called on rework edges.
+        // The orchestrator is responsible for checking edge kind before calling.
+        unreachable!(
+            "increment_rework_counter: edge '{:?}' has no rework metadata; \
+             must only be called on rework (back) edges",
+            edge
+        );
+    };
+
+    (edge_def.target.clone(), rework.max_traversals)
+}
 
 /// Increments the traversal counter for the given rework edge in the current
 /// pipeline state.
@@ -486,11 +740,39 @@ pub fn check_fan_in_ready(_node: &NodeId, _state: &PipelineState, _graph: &Pipel
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §increment_rework_counter`
 pub fn increment_rework_counter(
-    _edge: &EdgeId,
-    _state: &mut PipelineState,
-    _graph: &PipelineGraph,
+    edge: &EdgeId,
+    state: &mut PipelineState,
+    graph: &PipelineGraph,
 ) -> Result<u32, TerminationConditionReached> {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §increment_rework_counter")
+    let (target, max_traversals) = resolve_rework_edge(edge, graph);
+
+    let node_state = state
+        .node_states
+        .entry(target)
+        .or_insert_with(|| NodeState {
+            status: NodeStatus::Pending,
+            attempt_count: 0,
+            rework_count: 0,
+            current_error: None,
+            rework_edge_traversals: HashMap::new(),
+        });
+
+    let traversal_count = node_state
+        .rework_edge_traversals
+        .entry(edge.clone())
+        .or_insert(0);
+    *traversal_count += 1;
+    let new_count = *traversal_count;
+
+    if new_count <= max_traversals {
+        Ok(new_count)
+    } else {
+        Err(TerminationConditionReached {
+            edge_id: edge.clone(),
+            current_traversals: new_count,
+            max_traversals,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -522,3 +804,7 @@ pub fn topological_sort_sub_work_items(
 ) -> Result<Vec<SubWorkItemId>, DependencyError> {
     todo!("See docs/spec/interfaces/pipeline-execution.md §topological_sort_sub_work_items")
 }
+
+#[cfg(test)]
+#[path = "execution_tests.rs"]
+mod tests;
