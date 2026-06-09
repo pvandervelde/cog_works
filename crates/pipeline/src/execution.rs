@@ -32,8 +32,9 @@ use thiserror::Error;
 use crate::{
     errors::RetryPolicy,
     graph::{
-        CompositeCondition, EdgeConditionKind, EdgeEvaluationRecord, EvaluatorKind, NodeState,
-        NodeStatus, PipelineGraph, PipelineState, evaluate_deterministic_condition,
+        CompositeCondition, EdgeConditionKind, EdgeEvaluationRecord, EvaluatorKind, NodeGate,
+        NodeState, NodeStatus, PipelineGraph, PipelineState, compute_eligible_nodes,
+        evaluate_deterministic_condition,
     },
     identifiers::{EdgeId, NodeId, SubWorkItemId},
     types::{CostBudget, Timestamp, TokenCost},
@@ -377,12 +378,104 @@ pub struct SubWorkItem {
 /// `docs/spec/interfaces/pipeline-execution.md §determine_next_actions`
 #[must_use]
 pub fn determine_next_actions(
-    _state: &PipelineState,
-    _graph: &PipelineGraph,
-    _gate_config: &GateConfig,
-    _now: Timestamp,
+    state: &PipelineState,
+    graph: &PipelineGraph,
+    gate_config: &GateConfig,
+    now: Timestamp,
 ) -> Vec<NextAction> {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §determine_next_actions")
+    if let Some(halt) = check_active_timeouts(state, graph, now) {
+        return vec![halt];
+    }
+    let eligible = compute_eligible_nodes(state, graph);
+    if eligible.is_empty() {
+        let any_active = state
+            .node_states
+            .values()
+            .any(|s| s.status == NodeStatus::Active);
+        return if any_active {
+            vec![NextAction::Wait]
+        } else {
+            vec![]
+        };
+    }
+    classify_eligible_nodes(eligible, state, graph, gate_config)
+}
+
+fn check_active_timeouts(
+    state: &PipelineState,
+    graph: &PipelineGraph,
+    now: Timestamp,
+) -> Option<NextAction> {
+    for (node_id, node_state) in &state.node_states {
+        if node_state.status != NodeStatus::Active {
+            continue;
+        }
+        let Some(activated_at) = node_state.activated_at else {
+            continue;
+        };
+        let timeout_secs = graph
+            .nodes
+            .iter()
+            .find(|n| &n.id == node_id)
+            .and_then(|n| n.timeout)
+            .or(graph.settings.default_timeout)
+            .map(|t| t.0);
+        let Some(timeout_secs) = timeout_secs else {
+            continue;
+        };
+        let elapsed = now.as_datetime() - activated_at.as_datetime();
+        if elapsed > chrono::Duration::seconds(timeout_secs as i64) {
+            return Some(NextAction::HaltWithError(PipelineError::NodeFailed {
+                node_id: node_id.clone(),
+                error: format!("Node '{node_id}' timed out after {timeout_secs} seconds"),
+                retry_policy: RetryPolicy::NonRetryable,
+            }));
+        }
+    }
+    None
+}
+
+fn classify_eligible_nodes(
+    eligible: Vec<NodeId>,
+    state: &PipelineState,
+    graph: &PipelineGraph,
+    gate_config: &GateConfig,
+) -> Vec<NextAction> {
+    let mut execute_set: Vec<NodeId> = Vec::new();
+    let mut any_waiting = false;
+    for node_id in eligible {
+        if !check_fan_in_ready(&node_id, state, graph) {
+            any_waiting = true;
+            continue;
+        }
+        let gate = graph.nodes.iter().find(|n| n.id == node_id).map(|n| n.gate);
+        match gate {
+            Some(NodeGate::AutoProceed) | None => execute_set.push(node_id),
+            Some(NodeGate::HumanGated) => match gate_config.gated_nodes.get(&node_id) {
+                None | Some(GateStatus::AwaitingApproval) => any_waiting = true,
+                Some(GateStatus::Approved { .. }) => execute_set.push(node_id),
+                Some(GateStatus::Rejected { reason, .. }) => {
+                    let ns = state.node_states.get(&node_id);
+                    return vec![NextAction::Escalate(EscalationReason {
+                        description: format!("Node rejected: {reason}"),
+                        node_id,
+                        attempt_count: ns.map_or(0, |s| s.attempt_count),
+                        rework_count: ns.map_or(0, |s| s.rework_count),
+                        cost_spent: TokenCost::zero(),
+                    })];
+                }
+            },
+        }
+    }
+    if execute_set.len() > 1 {
+        vec![NextAction::ExecuteParallel(execute_set)]
+    } else if let Some(id) = execute_set.into_iter().next() {
+        vec![NextAction::ExecuteNode(id)]
+    } else if any_waiting {
+        vec![NextAction::Wait]
+    } else {
+        vec![]
+    }
 }
 
 // ---------------------------------------------------------------------------
