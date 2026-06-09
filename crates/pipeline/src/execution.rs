@@ -380,6 +380,7 @@ pub fn determine_next_actions(
     _state: &PipelineState,
     _graph: &PipelineGraph,
     _gate_config: &GateConfig,
+    _now: Timestamp,
 ) -> Vec<NextAction> {
     todo!("See docs/spec/interfaces/pipeline-execution.md §determine_next_actions")
 }
@@ -755,6 +756,7 @@ pub fn increment_rework_counter(
             rework_count: 0,
             current_error: None,
             rework_edge_traversals: HashMap::new(),
+            activated_at: None,
         });
 
     let traversal_count = node_state

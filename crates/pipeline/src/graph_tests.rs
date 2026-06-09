@@ -94,6 +94,7 @@ fn make_node_state(status: NodeStatus) -> NodeState {
         rework_count: 0,
         current_error: None,
         rework_edge_traversals: HashMap::new(),
+        activated_at: None,
     }
 }
 

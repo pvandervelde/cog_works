@@ -301,6 +301,7 @@ Per-node mutable runtime state.
 | `rework_count` | `u32` | Number of rework-feedback re-executions |
 | `current_error` | `Option<String>` | Last failure message |
 | `rework_edge_traversals` | `HashMap<EdgeId, u32>` | Traversal count per rework edge |
+| `activated_at` | `Option<Timestamp>` | Wall-clock time when this node transitioned to `Active`; `None` if not yet activated. Set by orchestrator on first execution. Used by `determine_next_actions` for pure timeout detection. |
 
 ---
 
