@@ -343,7 +343,8 @@ pub struct SubWorkItem {
 ///    - [`NodeGate::HumanGated`]: consult `gate_config.gated_nodes` for this node.
 ///      Not present → `Wait`. `Approved` → include in execute set. `Rejected` → `Escalate`.
 ///    - [`NodeGate::AutoProceed`]: include in execute set directly.
-/// 4. Fan-in nodes are only included if [`check_fan_in_ready`] returns `true`.
+/// 4. Fan-in readiness is guaranteed by [`compute_eligible_nodes`] (all non-rework predecessors
+///    must be Completed for a node to be eligible); no additional check needed here.
 /// 5. Multiple eligible nodes → `ExecuteParallel`; single → `ExecuteNode`.
 /// 6. No eligible nodes and none active → all nodes completed → return empty vec.
 ///
@@ -406,6 +407,9 @@ fn check_active_timeouts(
     graph: &PipelineGraph,
     now: Timestamp,
 ) -> Option<NextAction> {
+    // Collect all timed-out nodes first, then sort by activated_at to ensure deterministic
+    // reporting: always report the first-activated violator (for audit trail consistency).
+    let mut timed_out = Vec::new();
     for (node_id, node_state) in &state.node_states {
         if node_state.status != NodeStatus::Active {
             continue;
@@ -424,10 +428,27 @@ fn check_active_timeouts(
             continue;
         };
         let elapsed = now.as_datetime() - activated_at.as_datetime();
-        if elapsed > chrono::Duration::seconds(timeout_secs as i64) {
+        // Use i64::try_from to handle values > i64::MAX safely; clamp to i64::MAX as a
+        // practical upper bound for timeout durations (292 billion years).
+        let timeout_i64 = i64::try_from(timeout_secs).unwrap_or(i64::MAX);
+        if elapsed > chrono::Duration::seconds(timeout_i64) {
+            timed_out.push((node_id.clone(), activated_at));
+        }
+    }
+    // Sort by activation time (earliest first) to ensure deterministic reporting.
+    if !timed_out.is_empty() {
+        timed_out.sort_by_key(|(_, activated_at)| *activated_at);
+        let (node_id, _) = timed_out.into_iter().next().unwrap();
+        // Re-lookup the node to get its timeout value for the error message.
+        if let Some(node_def) = graph.nodes.iter().find(|n| n.id == node_id) {
+            let timeout_secs = node_def
+                .timeout
+                .or(graph.settings.default_timeout)
+                .map(|t| t.0)
+                .unwrap_or(0);
             return Some(NextAction::HaltWithError(PipelineError::NodeFailed {
-                node_id: node_id.clone(),
-                error: format!("Node '{node_id}' timed out after {timeout_secs} seconds"),
+                node_id,
+                error: format!("Node timed out after {timeout_secs} seconds"),
                 retry_policy: RetryPolicy::NonRetryable,
             }));
         }
@@ -444,10 +465,6 @@ fn classify_eligible_nodes(
     let mut execute_set: Vec<NodeId> = Vec::new();
     let mut any_waiting = false;
     for node_id in eligible {
-        if !check_fan_in_ready(&node_id, state, graph) {
-            any_waiting = true;
-            continue;
-        }
         let gate = graph.nodes.iter().find(|n| n.id == node_id).map(|n| n.gate);
         match gate {
             Some(NodeGate::AutoProceed) | None => execute_set.push(node_id),
@@ -455,12 +472,18 @@ fn classify_eligible_nodes(
                 None | Some(GateStatus::AwaitingApproval) => any_waiting = true,
                 Some(GateStatus::Approved { .. }) => execute_set.push(node_id),
                 Some(GateStatus::Rejected { reason, .. }) => {
+                    // Rejection takes priority: discard any queued auto-proceed/approved nodes
+                    // and return escalation immediately. The rejection reason is human-entered
+                    // and treated as untrusted input — the caller (orchestrator) must sanitise
+                    // before writing to logs or unrendered formats.
                     let ns = state.node_states.get(&node_id);
                     return vec![NextAction::Escalate(EscalationReason {
                         description: format!("Node rejected: {reason}"),
                         node_id,
                         attempt_count: ns.map_or(0, |s| s.attempt_count),
                         rework_count: ns.map_or(0, |s| s.rework_count),
+                        // cost_spent is intentionally zero; per-node cost tracking is deferred
+                        // to a future iteration when NodeState gains a cost field.
                         cost_spent: TokenCost::zero(),
                     })];
                 }
@@ -477,8 +500,6 @@ fn classify_eligible_nodes(
         vec![]
     }
 }
-
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 

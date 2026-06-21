@@ -1341,4 +1341,45 @@ mod determine_next_actions_tests {
             "NodeFailed.node_id must identify the timed-out node"
         );
     }
+
+    #[test]
+    fn test_determine_next_actions_multiple_timed_out_nodes_reports_first_activated() {
+        // ASSERT: When multiple nodes timeout simultaneously, the implementation
+        // deterministically reports the first-activated node (earliest activated_at).
+        // This ensures consistent audit trails and predictable test behaviour.
+        let graph = make_graph(
+            vec![
+                make_node_with_timeout("slow-a", 5),
+                make_node_with_timeout("slow-b", 5),
+                make_node_with_timeout("slow-c", 5),
+            ],
+            vec![],
+        );
+        let mut state = make_state();
+        // Activate nodes in reverse order: c, b, a
+        // Verify we report 'a' (the earliest-activated) despite iteration order
+        state
+            .node_states
+            .insert(nid("slow-c"), make_active_state_at(t0_plus(2)));
+        state
+            .node_states
+            .insert(nid("slow-b"), make_active_state_at(t0_plus(1)));
+        state
+            .node_states
+            .insert(nid("slow-a"), make_active_state_at(t0())); // earliest
+        let gate = GateConfig::default();
+        let now = t0_plus(10); // all three are timed out (10 > 5)
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        let node_id = match &result[0] {
+            NextAction::HaltWithError(PipelineError::NodeFailed { node_id, .. }) => node_id.clone(),
+            other => panic!("expected HaltWithError(NodeFailed), got {other:?}"),
+        };
+        assert_eq!(
+            node_id,
+            nid("slow-a"),
+            "When multiple nodes timeout, must report first-activated (slow-a at t0) for deterministic audit trail"
+        );
+    }
 }

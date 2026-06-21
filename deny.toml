@@ -31,6 +31,14 @@ ignore = [
     # logger implementation, so the UB preconditions are not met.
     # Revisit when azure_core drops http-types or http-types upgrades rand.
     { id = "RUSTSEC-2026-0097" },
+    # RUSTSEC-2026-0174: http-types Authorization/WwwAuthenticate can violate ASCII invariants
+    # Source: http-types 2.12.0 <- azure_core 0.21.0 <- azure_messaging_servicebus 0.21.0 <- queue-runtime 0.2.0
+    # http-types is unmaintained; no fix is available. CogWorks does not construct
+    # Authorization or WwwAuthenticate headers directly; the affected code paths are
+    # only reachable through azure_core's internal Service Bus authentication which
+    # uses ASCII-safe credential values. Risk: low.
+    # Revisit when azure_messaging_servicebus drops http-types.
+    { id = "RUSTSEC-2026-0174" },
 ]
 
 [licenses]
