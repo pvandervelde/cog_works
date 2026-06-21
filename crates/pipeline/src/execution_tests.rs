@@ -1382,4 +1382,36 @@ mod determine_next_actions_tests {
             "When multiple nodes timeout, must report first-activated (slow-a at t0) for deterministic audit trail"
         );
     }
+
+    #[test]
+    fn test_determine_next_actions_active_node_absent_from_graph_with_default_timeout_halts() {
+        // ASSERT: If a node is Active in state but absent from graph.nodes, and the pipeline
+        // has a default_timeout, the timeout is still detected and HaltWithError is returned.
+        // Previously the second graph.nodes lookup silently returned None and swallowed the
+        // timeout. The fix stores timeout_secs in the timed_out vec to avoid re-lookup.
+        // A stub that relies on re-lookup would return [] or [Wait] instead.
+        let graph_without_node = {
+            // Graph has no node definition for "ghost" — simulates state/graph inconsistency.
+            let mut g = make_graph(vec![], vec![]);
+            g.settings.default_timeout = Some(TimeoutSeconds(10));
+            g
+        };
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("ghost"), make_active_state_at(t0()));
+        let gate = GateConfig::default();
+        let now = t0_plus(11); // elapsed > default_timeout
+
+        let result = determine_next_actions(&state, &graph_without_node, &gate, now);
+
+        assert!(
+            matches!(
+                result.first(),
+                Some(NextAction::HaltWithError(PipelineError::NodeFailed { .. }))
+            ),
+            "Active node absent from graph with elapsed > default_timeout must still halt; \
+             timeout must not be swallowed by a failed re-lookup"
+        );
+    }
 }

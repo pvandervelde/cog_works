@@ -432,26 +432,21 @@ fn check_active_timeouts(
         // practical upper bound for timeout durations (292 billion years).
         let timeout_i64 = i64::try_from(timeout_secs).unwrap_or(i64::MAX);
         if elapsed > chrono::Duration::seconds(timeout_i64) {
-            timed_out.push((node_id.clone(), activated_at));
+            // Store timeout_secs alongside the node so the error message does not
+            // require a second graph lookup (which could silently return None if
+            // state/graph are inconsistent, swallowing a confirmed timeout).
+            timed_out.push((node_id.clone(), activated_at, timeout_secs));
         }
     }
     // Sort by activation time (earliest first) to ensure deterministic reporting.
     if !timed_out.is_empty() {
-        timed_out.sort_by_key(|(_, activated_at)| *activated_at);
-        let (node_id, _) = timed_out.into_iter().next().unwrap();
-        // Re-lookup the node to get its timeout value for the error message.
-        if let Some(node_def) = graph.nodes.iter().find(|n| n.id == node_id) {
-            let timeout_secs = node_def
-                .timeout
-                .or(graph.settings.default_timeout)
-                .map(|t| t.0)
-                .unwrap_or(0);
-            return Some(NextAction::HaltWithError(PipelineError::NodeFailed {
-                node_id,
-                error: format!("Node timed out after {timeout_secs} seconds"),
-                retry_policy: RetryPolicy::NonRetryable,
-            }));
-        }
+        timed_out.sort_by_key(|(_, activated_at, _)| *activated_at);
+        let (node_id, _, timeout_secs) = timed_out.into_iter().next().unwrap();
+        return Some(NextAction::HaltWithError(PipelineError::NodeFailed {
+            node_id,
+            error: format!("Node timed out after {timeout_secs} seconds"),
+            retry_policy: RetryPolicy::NonRetryable,
+        }));
     }
     None
 }
@@ -778,6 +773,13 @@ pub fn evaluate_edge_condition(
 ///
 /// Returns `true` when every incoming forward edge's source node is
 /// [`NodeStatus::Completed`] in `state`.
+///
+/// # Note
+///
+/// Within [`determine_next_actions`], fan-in readiness is already guaranteed by
+/// [`compute_eligible_nodes`] (all non-rework predecessors must be `Completed` before a node
+/// becomes eligible). This function is exposed for direct callers such as orchestrator
+/// pre-flight checks that need to verify fan-in readiness independently.
 ///
 /// # See also
 ///
