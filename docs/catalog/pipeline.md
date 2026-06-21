@@ -48,6 +48,7 @@ Core orchestration domain — domain concepts, newtype identifiers, shared primi
 | `CycleError` | struct | `crates/pipeline/src/graph.rs:584` | struct in crates/pipeline/src/graph.rs | core, pipeline |
 | `DeclaredNodeInputs` | struct | `crates/pipeline/src/alignment.rs:225` | struct in crates/pipeline/src/alignment.rs | core, pipeline |
 | `DependencyError` | enum | `crates/pipeline/src/execution.rs:264` | enum in crates/pipeline/src/execution.rs | core, pipeline |
+| `determine_next_actions` | fn | `crates/pipeline/src/execution.rs:380` | Pure state-machine dispatcher: given current pipeline state, graph, gate config, and current time, returns the next set of actions (Execute, ExecuteParallel, Wait, Escalate, or HaltWithError). Entry point for the execution loop. | execution, state-machine, pipeline |
 | `DependencyGraph` | struct | `crates/pipeline/src/domain_services.rs:165` | struct in crates/pipeline/src/domain_services.rs | core, pipeline |
 | `DependencyResult` | struct | `crates/pipeline/src/domain_services.rs:128` | struct in crates/pipeline/src/domain_services.rs | core, pipeline |
 | `Diagnostic` | struct | `crates/pipeline/src/types.rs:288` | struct in crates/pipeline/src/types.rs | core, pipeline |

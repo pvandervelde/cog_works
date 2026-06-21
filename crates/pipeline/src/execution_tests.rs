@@ -32,7 +32,7 @@ use crate::{
     graph::{
         CompositeCondition, EdgeDefinition, EvaluatorKind, Expression, NaturalLanguageCondition,
         NodeDefinition, NodeGate, NodeState, NodeType, OverflowBehaviour, PipelineSettings,
-        PipelineToolProfileConfig, ReworkEdge, ReworkSemantics, ValidationKind,
+        PipelineToolProfileConfig, ReworkEdge, ReworkSemantics, TimeoutSeconds, ValidationKind,
     },
     identifiers::{PipelineRunId, ProfileName},
 };
@@ -65,6 +65,7 @@ fn make_node_state(status: NodeStatus) -> NodeState {
         rework_count: 0,
         current_error: None,
         rework_edge_traversals: HashMap::new(),
+        activated_at: None,
     }
 }
 
@@ -814,6 +815,603 @@ mod increment_rework_counter_tests {
         assert_eq!(
             count, 1,
             "rework_edge_traversals must reflect the incremented count"
+        );
+    }
+}
+
+// ─── determine_next_actions ───────────────────────────────────────────────────
+
+mod determine_next_actions_tests {
+    use super::*;
+    use crate::types::Timestamp;
+
+    /// A fixed "now" timestamp used as the baseline in timeout tests.
+    fn t0() -> Timestamp {
+        Timestamp::from_utc(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap())
+    }
+
+    /// A timestamp `secs` seconds AFTER `t0()`.
+    fn t0_plus(secs: i64) -> Timestamp {
+        Timestamp::from_utc(chrono::DateTime::from_timestamp(1_700_000_000 + secs, 0).unwrap())
+    }
+
+    /// Build a minimal graph with a single AutoProceed node and no edges.
+    fn single_node_graph(id: &str) -> PipelineGraph {
+        make_graph(vec![make_node(id)], vec![])
+    }
+
+    /// Build a graph with a single HumanGated node and no edges.
+    fn single_gated_node_graph(id: &str) -> PipelineGraph {
+        let mut node = make_node(id);
+        node.gate = NodeGate::HumanGated;
+        make_graph(vec![node], vec![])
+    }
+
+    /// Build a node with a specific timeout.
+    fn make_node_with_timeout(id: &str, timeout_secs: u64) -> NodeDefinition {
+        let mut n = make_node(id);
+        n.timeout = Some(TimeoutSeconds(timeout_secs));
+        n
+    }
+
+    /// Build a NodeState with `activated_at` set to a specific timestamp.
+    fn make_active_state_at(activated_at: Timestamp) -> NodeState {
+        NodeState {
+            status: NodeStatus::Active,
+            attempt_count: 1,
+            rework_count: 0,
+            current_error: None,
+            rework_edge_traversals: HashMap::new(),
+            activated_at: Some(activated_at),
+        }
+    }
+
+    // ── Specification Tests (Tier 1) ─────────────────────────────────────────
+
+    #[test]
+    fn test_determine_next_actions_all_completed_returns_empty_vec() {
+        // ASSERT: no eligible nodes and no active nodes → [] (run complete).
+        // Vec-contents contract row: "No eligible + no active → []".
+        // A stub returning [Wait] or [ExecuteNode] for a completed pipeline would fail.
+        let graph = single_node_graph("a");
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("a"), make_node_state(NodeStatus::Completed));
+        let gate = GateConfig::default();
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert!(
+            result.is_empty(),
+            "all nodes Completed and none Active → must return empty vec (run complete)"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_single_autoproceed_eligible_returns_execute_node() {
+        // ASSERT: single AutoProceed eligible node → [ExecuteNode(id)].
+        // A stub always returning [] would fail.
+        let graph = single_node_graph("a");
+        let state = make_state(); // "a" is Pending → eligible
+        let gate = GateConfig::default();
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert_eq!(result.len(), 1, "must return exactly one action");
+        assert!(
+            matches!(&result[0], NextAction::ExecuteNode(id) if *id == nid("a")),
+            "single eligible AutoProceed node must produce ExecuteNode(a)"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_multiple_autoproceed_eligible_returns_execute_parallel() {
+        // ASSERT: multiple AutoProceed eligible nodes → [ExecuteParallel(ids)].
+        // A stub returning [ExecuteNode] for multi-eligible would fail.
+        let graph = make_graph(vec![make_node("a"), make_node("b")], vec![]);
+        let state = make_state(); // both Pending → both eligible
+        let gate = GateConfig::default();
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert_eq!(result.len(), 1, "must return exactly one action");
+        let ids = match &result[0] {
+            NextAction::ExecuteParallel(ids) => ids.clone(),
+            other => panic!("expected ExecuteParallel, got {other:?}"),
+        };
+        assert!(
+            ids.contains(&nid("a")),
+            "ExecuteParallel must include node a"
+        );
+        assert!(
+            ids.contains(&nid("b")),
+            "ExecuteParallel must include node b"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_human_gated_not_in_config_returns_wait() {
+        // ASSERT: HumanGated eligible node absent from gate_config → [Wait].
+        // A stub that ignores gate and proceeds would fail.
+        let graph = single_gated_node_graph("gate-node");
+        let state = make_state(); // gate-node is Pending → eligible
+        let gate = GateConfig::default(); // empty — gate-node not present
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert_eq!(result.len(), 1, "must return exactly one action");
+        assert!(
+            matches!(&result[0], NextAction::Wait),
+            "HumanGated node not in gate_config must return [Wait]"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_human_gated_approved_returns_execute_node() {
+        // ASSERT: HumanGated eligible node with Approved status → [ExecuteNode].
+        // A stub that always returns Wait for HumanGated would fail.
+        let graph = single_gated_node_graph("gate-node");
+        let state = make_state();
+        let mut gate = GateConfig::default();
+        gate.gated_nodes.insert(
+            nid("gate-node"),
+            GateStatus::Approved {
+                approved_by: "reviewer".to_string(),
+            },
+        );
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert_eq!(result.len(), 1, "must return exactly one action");
+        assert!(
+            matches!(&result[0], NextAction::ExecuteNode(id) if *id == nid("gate-node")),
+            "HumanGated node with Approved status must produce ExecuteNode"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_human_gated_rejected_returns_escalate() {
+        // ASSERT: HumanGated eligible node with Rejected status → [Escalate].
+        // A stub that returns Wait or ExecuteNode for Rejected would fail.
+        let graph = single_gated_node_graph("gate-node");
+        let state = make_state();
+        let mut gate = GateConfig::default();
+        gate.gated_nodes.insert(
+            nid("gate-node"),
+            GateStatus::Rejected {
+                rejected_by: "reviewer".to_string(),
+                reason: "quality insufficient".to_string(),
+            },
+        );
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert_eq!(result.len(), 1, "must return exactly one action");
+        assert!(
+            matches!(&result[0], NextAction::Escalate(_)),
+            "HumanGated node with Rejected status must produce [Escalate]"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_escalate_carries_rejected_node_id() {
+        // ASSERT: Escalate reason must reference the rejected node.
+        // A stub populating EscalationReason with a wrong node_id would fail.
+        let graph = single_gated_node_graph("gate-node");
+        let state = make_state();
+        let mut gate = GateConfig::default();
+        gate.gated_nodes.insert(
+            nid("gate-node"),
+            GateStatus::Rejected {
+                rejected_by: "reviewer".to_string(),
+                reason: "quality insufficient".to_string(),
+            },
+        );
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        let reason = match &result[0] {
+            NextAction::Escalate(r) => r,
+            other => panic!("expected Escalate, got {other:?}"),
+        };
+        assert_eq!(
+            reason.node_id,
+            nid("gate-node"),
+            "EscalationReason.node_id must match the rejected node"
+        );
+    }
+
+    // ── Timeout Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_determine_next_actions_active_node_timeout_elapsed_returns_halt() {
+        // ASSERT: Active node activated_at t0, timeout 10s, now = t0+11 → [HaltWithError].
+        // A stub that never checks timeout would fail.
+        let timeout_secs = 10u64;
+        let graph = make_graph(vec![make_node_with_timeout("timed", timeout_secs)], vec![]);
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("timed"), make_active_state_at(t0()));
+        let gate = GateConfig::default();
+        let now = t0_plus(timeout_secs as i64 + 1); // elapsed > timeout
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert_eq!(result.len(), 1, "must return exactly one action");
+        assert!(
+            matches!(
+                &result[0],
+                NextAction::HaltWithError(PipelineError::NodeFailed { .. })
+            ),
+            "elapsed timeout must produce HaltWithError(NodeFailed)"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_active_node_at_timeout_boundary_returns_halt() {
+        // ASSERT: now - activated_at == timeout exactly → still a timeout (> is wrong; rule is >).
+        // Timeout detection rule: now - activated_at > timeout → halt. At boundary (==) → no halt.
+        // This test verifies the boundary is EXCLUSIVE (>) not inclusive (>=).
+        let timeout_secs = 10u64;
+        let graph = make_graph(vec![make_node_with_timeout("timed", timeout_secs)], vec![]);
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("timed"), make_active_state_at(t0()));
+        let gate = GateConfig::default();
+        let now = t0_plus(timeout_secs as i64); // elapsed == timeout exactly
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        // Spec rule: now - activated_at > timeout → HaltWithError.
+        // At the boundary (==), it's NOT greater → should NOT halt.
+        assert!(
+            !matches!(&result.first(), Some(NextAction::HaltWithError(_))),
+            "elapsed == timeout (boundary) must NOT produce HaltWithError; rule is strictly >"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_active_node_no_timeout_configured_no_halt() {
+        // ASSERT: Active node with no node-level timeout and no pipeline default → no timeout halt.
+        // A stub that halts unconditionally for Active nodes would fail.
+        let graph = make_graph(vec![make_node("running")], vec![]); // no timeout
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("running"), make_active_state_at(t0()));
+        let gate = GateConfig::default();
+        let now = t0_plus(99999); // far future — still no timeout
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert!(
+            !result
+                .iter()
+                .any(|a| matches!(a, NextAction::HaltWithError(_))),
+            "Active node with None timeout must never produce HaltWithError"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_active_node_no_activated_at_no_halt() {
+        // ASSERT: Active node with activated_at = None → no timeout check → no halt.
+        // A stub that halts when activated_at is None would fail.
+        let graph = make_graph(vec![make_node_with_timeout("running", 5)], vec![]);
+        let mut state = make_state();
+        // activated_at is None — timeout cannot be computed
+        state
+            .node_states
+            .insert(nid("running"), make_node_state(NodeStatus::Active));
+        let gate = GateConfig::default();
+        let now = t0_plus(99999);
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert!(
+            !result
+                .iter()
+                .any(|a| matches!(a, NextAction::HaltWithError(_))),
+            "Active node with activated_at = None must not trigger timeout halt"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_node_timeout_overrides_pipeline_default() {
+        // ASSERT: Node-level timeout takes precedence over the pipeline default.
+        // Pipeline default = 100s, node-level = 5s; elapsed = 6s → halt uses node timeout.
+        // A stub using only pipeline default would fail to halt here.
+        let mut node = make_node("n");
+        node.timeout = Some(TimeoutSeconds(5)); // node-level: 5s
+        let mut graph = make_graph(vec![node], vec![]);
+        graph.settings.default_timeout = Some(TimeoutSeconds(100)); // pipeline default: 100s
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("n"), make_active_state_at(t0()));
+        let gate = GateConfig::default();
+        let now = t0_plus(6); // 6s elapsed; > 5s (node) but < 100s (pipeline)
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert!(
+            matches!(
+                result.first(),
+                Some(NextAction::HaltWithError(PipelineError::NodeFailed { .. }))
+            ),
+            "node-level timeout (5s) must override pipeline default (100s); 6s elapsed must halt"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_pipeline_default_timeout_applies_when_no_node_timeout() {
+        // ASSERT: Pipeline-level default_timeout applies when node has no timeout set.
+        // A stub ignoring pipeline default would fail to halt here.
+        let graph_with_default = {
+            let node = make_node("n"); // no node-level timeout
+            let mut g = make_graph(vec![node], vec![]);
+            g.settings.default_timeout = Some(TimeoutSeconds(10));
+            g
+        };
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("n"), make_active_state_at(t0()));
+        let gate = GateConfig::default();
+        let now = t0_plus(11); // elapsed > pipeline default
+
+        let result = determine_next_actions(&state, &graph_with_default, &gate, now);
+
+        assert!(
+            matches!(
+                result.first(),
+                Some(NextAction::HaltWithError(PipelineError::NodeFailed { .. }))
+            ),
+            "pipeline default_timeout must apply when node has no timeout; elapsed 11s > 10s"
+        );
+    }
+
+    // ── Fan-in Tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_determine_next_actions_fan_in_predecessor_not_completed_excluded() {
+        // ASSERT: Fan-in node with an incomplete predecessor → excluded from execute set → [Wait].
+        // Graph: a → c, b → c. b is Active (not Completed). c must not be executed.
+        // A stub that ignores fan-in would include c and return ExecuteNode(c).
+        let nodes = vec![make_node("a"), make_node("b"), make_node("c")];
+        let edges = vec![make_edge("e1", "a", "c"), make_edge("e2", "b", "c")];
+        let graph = make_graph(nodes, edges);
+        let mut state = make_state();
+        // a is Completed, b is Active — c is eligible topologically but fan-in not ready
+        state
+            .node_states
+            .insert(nid("a"), make_node_state(NodeStatus::Completed));
+        state
+            .node_states
+            .insert(nid("b"), make_node_state(NodeStatus::Active));
+        let gate = GateConfig::default();
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        // c must NOT be in any execute action
+        for action in &result {
+            match action {
+                NextAction::ExecuteNode(id) => {
+                    assert_ne!(
+                        *id,
+                        nid("c"),
+                        "fan-in node c must not be executed when b is Active"
+                    );
+                }
+                NextAction::ExecuteParallel(ids) => {
+                    assert!(
+                        !ids.contains(&nid("c")),
+                        "fan-in node c must not be in ExecuteParallel when b is Active"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn test_determine_next_actions_fan_in_all_predecessors_completed_included() {
+        // ASSERT: Fan-in node with all predecessors Completed → included in execute set.
+        // Graph: a → c, b → c. Both a and b Completed → c must execute.
+        // A stub that always excludes fan-in nodes would fail.
+        let nodes = vec![make_node("a"), make_node("b"), make_node("c")];
+        let edges = vec![make_edge("e1", "a", "c"), make_edge("e2", "b", "c")];
+        let graph = make_graph(nodes, edges);
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("a"), make_node_state(NodeStatus::Completed));
+        state
+            .node_states
+            .insert(nid("b"), make_node_state(NodeStatus::Completed));
+        let gate = GateConfig::default();
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        let executes_c = result.iter().any(|a| match a {
+            NextAction::ExecuteNode(id) => *id == nid("c"),
+            NextAction::ExecuteParallel(ids) => ids.contains(&nid("c")),
+            _ => false,
+        });
+        assert!(
+            executes_c,
+            "fan-in node c must be in execute set when all predecessors are Completed"
+        );
+    }
+
+    // ── Mix Tests ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_determine_next_actions_mix_auto_and_gated_returns_only_execute_no_wait() {
+        // ASSERT: Mix of AutoProceed eligible + HumanGated-waiting → only execute actions.
+        // Wait must NOT be co-returned when execute actions exist.
+        // Graph: two independent nodes: "auto" (AutoProceed) and "gated" (HumanGated, no gate entry).
+        let auto_node = make_node("auto"); // AutoProceed
+        let mut gated_node = make_node("gated");
+        gated_node.gate = NodeGate::HumanGated;
+        let graph = make_graph(vec![auto_node, gated_node], vec![]);
+        let state = make_state(); // both Pending → both eligible
+        let gate = GateConfig::default(); // "gated" not approved yet
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        let has_wait = result.iter().any(|a| matches!(a, NextAction::Wait));
+        let has_execute = result.iter().any(|a| {
+            matches!(a, NextAction::ExecuteNode(id) if *id == nid("auto"))
+                || matches!(a, NextAction::ExecuteParallel(ids) if ids.contains(&nid("auto")))
+        });
+
+        assert!(
+            !has_wait,
+            "Wait must NOT be co-returned when auto-proceed execute actions are present"
+        );
+        assert!(
+            has_execute,
+            "AutoProceed eligible node must be included in execute set"
+        );
+    }
+
+    // ── No-Eligible, Active-Running Tests ────────────────────────────────────
+
+    #[test]
+    fn test_determine_next_actions_no_eligible_active_nodes_returns_wait() {
+        // ASSERT: No eligible nodes (all downstream blocked) but active nodes exist → [Wait].
+        // Spec step 7: "No eligible and no active → []". Implicit: active but no eligible → [Wait].
+        // A stub returning [] when active nodes exist would fail.
+        let nodes = vec![make_node("a"), make_node("b")];
+        let edges = vec![make_edge("e1", "a", "b")];
+        let graph = make_graph(nodes, edges);
+        let mut state = make_state();
+        // a is Active; b has unmet predecessor (a not Completed) → no eligible nodes
+        state
+            .node_states
+            .insert(nid("a"), make_node_state(NodeStatus::Active));
+        let gate = GateConfig::default();
+        let now = t0();
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        assert_eq!(result.len(), 1, "must return exactly one action");
+        assert!(
+            matches!(&result[0], NextAction::Wait),
+            "no eligible nodes with active nodes running must return [Wait]"
+        );
+    }
+
+    // ── Halt Contains NodeFailed Variant ─────────────────────────────────────
+
+    #[test]
+    fn test_determine_next_actions_halt_error_carries_timed_out_node_id() {
+        // ASSERT: HaltWithError(NodeFailed) must reference the timed-out node.
+        // A stub populating NodeFailed with a wrong node_id would fail.
+        let graph = make_graph(vec![make_node_with_timeout("slow", 5)], vec![]);
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("slow"), make_active_state_at(t0()));
+        let gate = GateConfig::default();
+        let now = t0_plus(10);
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        let node_id = match &result[0] {
+            NextAction::HaltWithError(PipelineError::NodeFailed { node_id, .. }) => node_id.clone(),
+            other => panic!("expected HaltWithError(NodeFailed), got {other:?}"),
+        };
+        assert_eq!(
+            node_id,
+            nid("slow"),
+            "NodeFailed.node_id must identify the timed-out node"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_multiple_timed_out_nodes_reports_first_activated() {
+        // ASSERT: When multiple nodes timeout simultaneously, the implementation
+        // deterministically reports the first-activated node (earliest activated_at).
+        // This ensures consistent audit trails and predictable test behaviour.
+        let graph = make_graph(
+            vec![
+                make_node_with_timeout("slow-a", 5),
+                make_node_with_timeout("slow-b", 5),
+                make_node_with_timeout("slow-c", 5),
+            ],
+            vec![],
+        );
+        let mut state = make_state();
+        // Activate nodes in reverse order: c, b, a
+        // Verify we report 'a' (the earliest-activated) despite iteration order
+        state
+            .node_states
+            .insert(nid("slow-c"), make_active_state_at(t0_plus(2)));
+        state
+            .node_states
+            .insert(nid("slow-b"), make_active_state_at(t0_plus(1)));
+        state
+            .node_states
+            .insert(nid("slow-a"), make_active_state_at(t0())); // earliest
+        let gate = GateConfig::default();
+        let now = t0_plus(10); // all three are timed out (10 > 5)
+
+        let result = determine_next_actions(&state, &graph, &gate, now);
+
+        let node_id = match &result[0] {
+            NextAction::HaltWithError(PipelineError::NodeFailed { node_id, .. }) => node_id.clone(),
+            other => panic!("expected HaltWithError(NodeFailed), got {other:?}"),
+        };
+        assert_eq!(
+            node_id,
+            nid("slow-a"),
+            "When multiple nodes timeout, must report first-activated (slow-a at t0) for deterministic audit trail"
+        );
+    }
+
+    #[test]
+    fn test_determine_next_actions_active_node_absent_from_graph_with_default_timeout_halts() {
+        // ASSERT: If a node is Active in state but absent from graph.nodes, and the pipeline
+        // has a default_timeout, the timeout is still detected and HaltWithError is returned.
+        // Previously the second graph.nodes lookup silently returned None and swallowed the
+        // timeout. The fix stores timeout_secs in the timed_out vec to avoid re-lookup.
+        // A stub that relies on re-lookup would return [] or [Wait] instead.
+        let graph_without_node = {
+            // Graph has no node definition for "ghost" — simulates state/graph inconsistency.
+            let mut g = make_graph(vec![], vec![]);
+            g.settings.default_timeout = Some(TimeoutSeconds(10));
+            g
+        };
+        let mut state = make_state();
+        state
+            .node_states
+            .insert(nid("ghost"), make_active_state_at(t0()));
+        let gate = GateConfig::default();
+        let now = t0_plus(11); // elapsed > default_timeout
+
+        let result = determine_next_actions(&state, &graph_without_node, &gate, now);
+
+        assert!(
+            matches!(
+                result.first(),
+                Some(NextAction::HaltWithError(PipelineError::NodeFailed { .. }))
+            ),
+            "Active node absent from graph with elapsed > default_timeout must still halt; \
+             timeout must not be swallowed by a failed re-lookup"
         );
     }
 }

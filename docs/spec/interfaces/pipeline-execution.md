@@ -231,15 +231,24 @@ pub fn determine_next_actions(
     state: &PipelineState,
     graph: &PipelineGraph,
     gate_config: &GateConfig,
+    now: Timestamp,
 ) -> Vec<NextAction>
 ```
 
 **Purpose**: Central state machine dispatch. Determines what the execution engine
 should do next for an active pipeline run.
 
+**Parameters**:
+- `state` — Current runtime state of the pipeline run.
+- `graph` — Validated pipeline graph (nodes, edges, settings).
+- `gate_config` — Current human-gate approval/rejection status for gated nodes.
+- `now` — Current wall-clock time, passed in so the function remains pure and testable.
+
 **Algorithm**:
 
-1. Check all `Active` nodes for elapsed timeouts → `HaltWithError` if any timed out.
+1. Check all `Active` nodes for elapsed timeouts → `HaltWithError(NodeFailed)` if any timed out.
+   Timeout = node-level `timeout` if set, otherwise `graph.settings.default_timeout`.
+   Detection rule: `now - activated_at > timeout`. If both are `None` → no timeout check.
 2. Call `compute_eligible_nodes(state, graph)` to find nodes ready to start.
 3. For each eligible node, check its gate configuration:
    - `HumanGated`: consult `gate_config.gated_nodes` for this node.
@@ -250,6 +259,7 @@ should do next for an active pipeline run.
    (`Wait` is **not** co-returned when there are also nodes to execute.)
 6. If execute set is empty and all eligible were waiting on gates: `[Wait]`.
 7. No eligible and no active → return `[]` (run complete).
+   Implicit: no eligible but active nodes exist → return `[Wait]`.
 
 **Return**: See Vec contents contract table in the `NextAction` type section above.
 

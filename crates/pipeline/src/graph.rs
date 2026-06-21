@@ -356,6 +356,14 @@ pub struct NodeState {
     /// Keys are [`EdgeId`]s of rework edges connected to this node.
     /// Values are the number of times each has been traversed in this run.
     pub rework_edge_traversals: HashMap<EdgeId, u32>,
+    /// Wall-clock time at which this node transitioned to [`NodeStatus::Active`].
+    ///
+    /// Set by the orchestrator when the node first starts executing. Used by
+    /// [`crate::determine_next_actions`] to detect elapsed timeouts without
+    /// requiring any I/O inside that pure function.
+    ///
+    /// `None` means the node has not yet been activated in this run.
+    pub activated_at: Option<crate::Timestamp>,
 }
 
 /// Human-gate status for a specific node within an active pipeline run.
