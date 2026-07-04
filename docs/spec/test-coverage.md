@@ -250,3 +250,61 @@ See commit `d4bcef8` — 4 additional tests added to improve mutation coverage b
 - No fuzz targets for `check_fan_in_ready` / `evaluate_edge_condition` / `increment_rework_counter` —
   these are pure functions over typed structs (not raw byte parsers); fuzz coverage is deferred.
 - No Kani proofs — functions are domain-logic tier (Tier 4 only); Tier 6 reserved for safety-critical paths.
+
+---
+
+## Module: `pipeline/budget.rs` + `pipeline/execution.rs` — Task 5.0
+
+**Test files**: `crates/pipeline/src/budget_tests.rs`, `crates/pipeline/src/execution_tests.rs`
+**Criticality**: domain-logic — mutation target 70%
+**Tiers**: 4 (mutation)
+
+### Functions in scope for Task 5.0
+
+- `acquire_budget` (`budget.rs`)
+- `topological_sort_sub_work_items` (`execution.rs`)
+
+### Mutation Audit Report (Tier 4) — post-kill
+
+**Scope**: `crates/pipeline/src/budget.rs` + `crates/pipeline/src/execution.rs`
+**Tool**: cargo-mutants 25.0.0
+
+| File | Caught | Missed (pre-kill) | Missed (post-kill) | Score |
+|------|--------|-------------------|--------------------|-------|
+| `budget.rs` | 5 (of file total) | 0 | 0 | 100% |
+| `execution.rs` | 47 (of file total) | 2 | 0 | 100% |
+| **Combined totals** | **52** | **2** | **0** | **100%** |
+| Unviable | 18 | — | — | — |
+
+**Target met**: ✅ 100% kill rate (domain-logic minimum: 70%).
+
+### Surviving Mutants Found and Killed
+
+#### Survivor 1 — `execution.rs:992:42 replace > with <`
+
+- **Mutation**: `*deg > 0` → `*deg < 0` in in-degree filter when collecting cycle members
+- **Why it survived**: in_degree values are always ≥ 0; `< 0` returns an empty list. Tests only
+  checked that `CyclicDependency` variant was returned, not the `cycle` field contents.
+- **Kill test**: `test_topological_sort_sub_work_items_two_node_cycle_reports_cycle_members`
+- **Resolution**: ✅ killed
+
+#### Survivor 2 — `execution.rs:992:42 replace > with ==`
+
+- **Mutation**: `*deg > 0` → `*deg == 0` — picks zero-degree nodes (resolved nodes) instead of
+  stuck nodes with remaining in-degree, producing the wrong set in the cycle field.
+- **Why it survived**: same as above — `cycle` field not asserted.
+- **Kill test**: `test_topological_sort_sub_work_items_three_node_cycle_reports_all_cycle_members`
+- **Resolution**: ✅ killed
+
+### New Kill Tests Added: 2
+
+| Test | File | Kills |
+|------|------|-------|
+| `test_topological_sort_sub_work_items_two_node_cycle_reports_cycle_members` | `execution_tests.rs` | Survivor 1 |
+| `test_topological_sort_sub_work_items_three_node_cycle_reports_all_cycle_members` | `execution_tests.rs` | Survivor 2 |
+
+### Gaps / Known Limitations
+
+- No fuzz targets — `acquire_budget` and `topological_sort_sub_work_items` are typed-struct
+  functions, not raw-byte parsers; fuzz coverage is deferred to Tier 5 scope expansion.
+- No Kani proofs — domain-logic tier (Tier 4 only).
