@@ -1567,6 +1567,56 @@ mod topo_sort_tests {
         );
     }
 
+    /// Kill test: two-node cycle must report BOTH nodes in the `cycle` field,
+    /// not an empty list (guards `*deg > 0` filter against `< 0` or `== 0`
+    /// mutations that would empty the reported cycle).
+    #[test]
+    fn test_topological_sort_sub_work_items_two_node_cycle_reports_cycle_members() {
+        let items = vec![item(1, &[2]), item(2, &[1])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+        match err {
+            DependencyError::CyclicDependency { cycle } => {
+                assert_eq!(
+                    cycle.len(),
+                    2,
+                    "cycle field must contain exactly the two stuck nodes"
+                );
+                assert!(
+                    cycle.contains(&sid(1)),
+                    "node 1 must appear in the reported cycle"
+                );
+                assert!(
+                    cycle.contains(&sid(2)),
+                    "node 2 must appear in the reported cycle"
+                );
+            }
+            other => panic!("expected CyclicDependency, got {other:?}"),
+        }
+    }
+
+    /// Kill test: three-node cycle must report all three nodes in the `cycle`
+    /// field — guards against mutations that swap `> 0` to `== 0` (picks
+    /// zero-degree nodes instead) or `< 0` (returns empty list).
+    #[test]
+    fn test_topological_sort_sub_work_items_three_node_cycle_reports_all_cycle_members() {
+        // 1→3, 2→1, 3→2  ⟹  cycle: 1,2,3
+        let items = vec![item(1, &[3]), item(2, &[1]), item(3, &[2])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+        match err {
+            DependencyError::CyclicDependency { cycle } => {
+                assert_eq!(
+                    cycle.len(),
+                    3,
+                    "cycle field must contain exactly the three stuck nodes"
+                );
+                assert!(cycle.contains(&sid(1)), "node 1 must appear in cycle");
+                assert!(cycle.contains(&sid(2)), "node 2 must appear in cycle");
+                assert!(cycle.contains(&sid(3)), "node 3 must appear in cycle");
+            }
+            other => panic!("expected CyclicDependency, got {other:?}"),
+        }
+    }
+
     /// Two independent chains ([1→2] and [3→4]) — all four items must appear
     /// in a valid topological order: 1 before 2, and 3 before 4.
     #[test]
