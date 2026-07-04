@@ -918,9 +918,87 @@ pub fn increment_rework_counter(
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §topological_sort_sub_work_items`
 pub fn topological_sort_sub_work_items(
-    _items: &[SubWorkItem],
+    items: &[SubWorkItem],
 ) -> Result<Vec<SubWorkItemId>, DependencyError> {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §topological_sort_sub_work_items")
+    use std::collections::{HashMap, VecDeque};
+
+    if items.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Build a set of known IDs for unknown-dependency validation.
+    let known: std::collections::HashSet<SubWorkItemId> = items.iter().map(|i| i.id).collect();
+
+    // Validate all edges before touching the graph structure.
+    for item in items {
+        for dep in &item.depends_on {
+            if !known.contains(dep) {
+                return Err(DependencyError::UnknownDependency {
+                    item_id: item.id,
+                    unknown_dep: *dep,
+                });
+            }
+        }
+    }
+
+    // Kahn's algorithm: in-degree map + adjacency list.
+    let mut in_degree: HashMap<SubWorkItemId, usize> = items.iter().map(|i| (i.id, 0)).collect();
+    // adjacency: dep → list of items that depend on dep
+    let mut adj: HashMap<SubWorkItemId, Vec<SubWorkItemId>> = HashMap::new();
+
+    for item in items {
+        for dep in &item.depends_on {
+            adj.entry(*dep).or_default().push(item.id);
+            *in_degree.entry(item.id).or_insert(0) += 1;
+        }
+    }
+
+    // Seed queue with all zero-in-degree nodes (deterministic order by id).
+    let mut queue: VecDeque<SubWorkItemId> = {
+        let mut roots: Vec<SubWorkItemId> = in_degree
+            .iter()
+            .filter(|&(_, deg)| *deg == 0)
+            .map(|(&id, _)| id)
+            .collect();
+        roots.sort_by_key(|id| id.as_u64());
+        VecDeque::from(roots)
+    };
+
+    let mut order: Vec<SubWorkItemId> = Vec::with_capacity(items.len());
+
+    while let Some(id) = queue.pop_front() {
+        order.push(id);
+        if let Some(dependents) = adj.get(&id) {
+            let mut next_batch: Vec<SubWorkItemId> = Vec::new();
+            for dep in dependents {
+                let deg = in_degree.get_mut(dep).expect("all ids are in in_degree");
+                *deg -= 1;
+                if *deg == 0 {
+                    next_batch.push(*dep);
+                }
+            }
+            next_batch.sort_by_key(|id| id.as_u64());
+            for id in next_batch {
+                queue.push_back(id);
+            }
+        }
+    }
+
+    if order.len() != items.len() {
+        // Cycle detected: find it by collecting unresolved nodes.
+        let in_cycle: Vec<SubWorkItemId> = {
+            let mut remaining: Vec<SubWorkItemId> = in_degree
+                .iter()
+                .filter(|&(_, deg)| *deg > 0)
+                .map(|(&id, _)| id)
+                .collect();
+            remaining.sort_by_key(|id| id.as_u64());
+            remaining
+        };
+        return Err(DependencyError::CyclicDependency { cycle: in_cycle });
+    }
+
+    Ok(order)
 }
 
 #[cfg(test)]
