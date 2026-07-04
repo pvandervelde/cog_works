@@ -81,7 +81,7 @@ handlebars = "6"
 # Ordered map with insertion-order iteration (used by pipeline/security.rs for
 # deterministic tool-parameter scope validation; IndexMap preserves the parameter
 # order produced by the LLM, making audit log entries reproducible).
-indexmap = { version = "1", features = ["serde"] }
+indexmap = { version = "2", features = ["serde"] }
 
 # Internal workspace crates
 pipeline = { path = "crates/pipeline" }
