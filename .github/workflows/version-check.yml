@@ -96,14 +96,14 @@ jobs:
 
             - name: Set up Rust toolchain
               if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
-              uses: dtolnay/rust-toolchain@stable
+              uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
             - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
               if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
 
             - name: Install cargo binstall
               if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
-              uses: cargo-bins/cargo-binstall@main
+              uses: cargo-bins/cargo-binstall@44018a4d9c280bea4bd3f908fabe5a0909f89f92 # main
 
             - name: Install tools
               if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
