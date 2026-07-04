@@ -195,3 +195,7 @@ pub fn acquire_budget(
 ) -> BudgetAcquisition {
     todo!("See docs/spec/interfaces/pipeline-execution.md §acquire_budget")
 }
+
+#[cfg(test)]
+#[path = "budget_tests.rs"]
+mod tests;
