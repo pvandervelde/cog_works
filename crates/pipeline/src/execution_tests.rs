@@ -1617,6 +1617,33 @@ mod topo_sort_tests {
         }
     }
 
+    /// Regression: downstream nodes must NOT be reported as cycle members.
+    ///
+    /// Shape: 1↔2 (cycle), 3 depends on 2 (downstream of cycle).
+    /// `cycle` must contain only {1,2}, not 3.
+    #[test]
+    fn test_topological_sort_sub_work_items_downstream_of_cycle_excluded_from_cycle_members() {
+        let items = vec![item(1, &[2]), item(2, &[1]), item(3, &[2])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+
+        match err {
+            DependencyError::CyclicDependency { cycle } => {
+                assert_eq!(
+                    cycle.len(),
+                    2,
+                    "only strict cycle members should be reported"
+                );
+                assert!(cycle.contains(&sid(1)), "node 1 is in the cycle");
+                assert!(cycle.contains(&sid(2)), "node 2 is in the cycle");
+                assert!(
+                    !cycle.contains(&sid(3)),
+                    "node 3 is downstream of the cycle and must not be reported as a cycle member"
+                );
+            }
+            other => panic!("expected CyclicDependency, got {other:?}"),
+        }
+    }
+
     /// Two independent chains ([1→2] and [3→4]) — all four items must appear
     /// in a valid topological order: 1 before 2, and 3 before 4.
     #[test]

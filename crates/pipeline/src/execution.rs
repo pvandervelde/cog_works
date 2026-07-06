@@ -971,10 +971,11 @@ pub fn topological_sort_sub_work_items(
         if let Some(dependents) = adj.get(&id) {
             let mut next_batch: Vec<SubWorkItemId> = Vec::new();
             for dep in dependents {
-                let deg = in_degree.get_mut(dep).expect("all ids are in in_degree");
-                *deg -= 1;
-                if *deg == 0 {
-                    next_batch.push(*dep);
+                if let Some(deg) = in_degree.get_mut(dep) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        next_batch.push(*dep);
+                    }
                 }
             }
             next_batch.sort_by_key(|id| id.as_u64());
@@ -985,17 +986,97 @@ pub fn topological_sort_sub_work_items(
     }
 
     if order.len() != items.len() {
-        // Cycle detected: find it by collecting unresolved nodes.
-        let in_cycle: Vec<SubWorkItemId> = {
-            let mut remaining: Vec<SubWorkItemId> = in_degree
-                .iter()
-                .filter(|&(_, deg)| *deg > 0)
-                .map(|(&id, _)| id)
-                .collect();
-            remaining.sort_by_key(|id| id.as_u64());
-            remaining
+        // Cycle detected. Report strict cycle membership only (nodes in SCCs of size > 1,
+        // or self-loop nodes), excluding downstream unresolved nodes.
+        let mut out_edges: HashMap<SubWorkItemId, Vec<SubWorkItemId>> =
+            items.iter().map(|i| (i.id, i.depends_on.clone())).collect();
+        for edges in out_edges.values_mut() {
+            edges.sort_by_key(|id| id.as_u64());
+        }
+
+        struct TarjanContext<'a> {
+            out_edges: &'a HashMap<SubWorkItemId, Vec<SubWorkItemId>>,
+            index: usize,
+            stack: Vec<SubWorkItemId>,
+            on_stack: std::collections::HashSet<SubWorkItemId>,
+            indices: HashMap<SubWorkItemId, usize>,
+            lowlink: HashMap<SubWorkItemId, usize>,
+            cycle_members: std::collections::HashSet<SubWorkItemId>,
+        }
+
+        impl TarjanContext<'_> {
+            fn strongconnect(&mut self, v: SubWorkItemId) {
+                self.indices.insert(v, self.index);
+                self.lowlink.insert(v, self.index);
+                self.index += 1;
+                self.stack.push(v);
+                self.on_stack.insert(v);
+
+                if let Some(neighbors) = self.out_edges.get(&v) {
+                    for &w in neighbors {
+                        if !self.indices.contains_key(&w) {
+                            self.strongconnect(w);
+                            if let (Some(v_low), Some(w_low)) =
+                                (self.lowlink.get(&v).copied(), self.lowlink.get(&w).copied())
+                            {
+                                self.lowlink.insert(v, v_low.min(w_low));
+                            }
+                        } else if self.on_stack.contains(&w)
+                            && let (Some(v_low), Some(w_idx)) =
+                                (self.lowlink.get(&v).copied(), self.indices.get(&w).copied())
+                        {
+                            self.lowlink.insert(v, v_low.min(w_idx));
+                        }
+                    }
+                }
+
+                if self.indices.get(&v) == self.lowlink.get(&v) {
+                    let mut scc: Vec<SubWorkItemId> = Vec::new();
+                    while let Some(w) = self.stack.pop() {
+                        self.on_stack.remove(&w);
+                        scc.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+
+                    if scc.len() > 1 {
+                        for node in scc {
+                            self.cycle_members.insert(node);
+                        }
+                    } else if let Some(&only) = scc.first()
+                        && self
+                            .out_edges
+                            .get(&only)
+                            .is_some_and(|neighbors| neighbors.contains(&only))
+                    {
+                        self.cycle_members.insert(only);
+                    }
+                }
+            }
+        }
+
+        let mut tarjan = TarjanContext {
+            out_edges: &out_edges,
+            index: 0,
+            stack: Vec::new(),
+            on_stack: std::collections::HashSet::new(),
+            indices: HashMap::new(),
+            lowlink: HashMap::new(),
+            cycle_members: std::collections::HashSet::new(),
         };
-        return Err(DependencyError::CyclicDependency { cycle: in_cycle });
+
+        let mut nodes: Vec<SubWorkItemId> = items.iter().map(|i| i.id).collect();
+        nodes.sort_by_key(|id| id.as_u64());
+        for node in nodes {
+            if !tarjan.indices.contains_key(&node) {
+                tarjan.strongconnect(node);
+            }
+        }
+
+        let mut cycle: Vec<SubWorkItemId> = tarjan.cycle_members.into_iter().collect();
+        cycle.sort_by_key(|id| id.as_u64());
+        return Err(DependencyError::CyclicDependency { cycle });
     }
 
     Ok(order)
