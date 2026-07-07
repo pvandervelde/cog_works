@@ -47,6 +47,7 @@ Core orchestration domain — domain concepts, newtype identifiers, shared primi
 | `CostSnapshot` | struct | `crates/pipeline/src/audit.rs:102` | struct in crates/pipeline/src/audit.rs | core, pipeline |
 | `CycleError` | struct | `crates/pipeline/src/graph.rs:584` | struct in crates/pipeline/src/graph.rs | core, pipeline |
 | `DeclaredNodeInputs` | struct | `crates/pipeline/src/alignment.rs:225` | struct in crates/pipeline/src/alignment.rs | core, pipeline |
+| `acquire_budget` | fn | `crates/pipeline/src/budget.rs` | Pure budget gate: returns `BudgetAcquisition::Approved{remaining}` if `accumulated + estimated < limit` (strict), or `Denied(report())` otherwise. Caller must hold a mutex around the call + accumulator update for parallel-node safety. Lazy `report` closure avoids Vec allocations on the hot-path. | budget, execution, pipeline |
 | `DependencyError` | enum | `crates/pipeline/src/execution.rs:264` | enum in crates/pipeline/src/execution.rs | core, pipeline |
 | `determine_next_actions` | fn | `crates/pipeline/src/execution.rs:380` | Pure state-machine dispatcher: given current pipeline state, graph, gate config, and current time, returns the next set of actions (Execute, ExecuteParallel, Wait, Escalate, or HaltWithError). Entry point for the execution loop. | execution, state-machine, pipeline |
 | `DependencyGraph` | struct | `crates/pipeline/src/domain_services.rs:165` | struct in crates/pipeline/src/domain_services.rs | core, pipeline |
@@ -177,6 +178,7 @@ Core orchestration domain — domain concepts, newtype identifiers, shared primi
 | `StructuredResponse` | struct | `crates/pipeline/src/tools.rs:232` | struct in crates/pipeline/src/tools.rs | core, pipeline |
 | `SubIssue` | struct | `crates/pipeline/src/github.rs:377` | struct in crates/pipeline/src/github.rs | core, pipeline |
 | `SubWorkItem` | struct | `crates/pipeline/src/execution.rs:307` | struct in crates/pipeline/src/execution.rs | core, pipeline |
+| `topological_sort_sub_work_items` | fn | `crates/pipeline/src/execution.rs:920` | Kahn's BFS topological sort over `SubWorkItem` dependency edges. Validates unknown deps first, then returns sources-first ordering. Returns `DependencyError::UnknownDependency` or `CyclicDependency` on invalid graphs. Deterministic: items at the same level are sorted by `SubWorkItemId::as_u64()`. | topo-sort, execution, pipeline |
 | `SubWorkItemCostEntry` | struct | `crates/pipeline/src/budget.rs:65` | struct in crates/pipeline/src/budget.rs | core, pipeline |
 | `SummaryCache` | trait | `crates/pipeline/src/knowledge.rs:149` | trait in crates/pipeline/src/knowledge.rs | core, pipeline, trait |
 | `SummaryLevel` | enum | `crates/pipeline/src/knowledge.rs:58` | enum in crates/pipeline/src/knowledge.rs | core, pipeline |

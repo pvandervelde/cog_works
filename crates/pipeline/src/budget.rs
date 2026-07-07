@@ -188,10 +188,24 @@ pub enum BudgetAcquisition {
 /// `docs/spec/interfaces/pipeline-execution.md §acquire_budget`
 #[must_use]
 pub fn acquire_budget(
-    _accumulated: &TokenCost,
-    _estimated: &TokenCost,
-    _limit: &CostBudget,
-    _report: impl FnOnce() -> CostReport,
+    accumulated: &TokenCost,
+    estimated: &TokenCost,
+    limit: &CostBudget,
+    report: impl FnOnce() -> CostReport,
 ) -> BudgetAcquisition {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §acquire_budget")
+    let total = accumulated.as_f64() + estimated.as_f64();
+    if total < limit.as_f64() {
+        // total < limit.as_f64() (strict), so remaining_f64 > 0 and finite.
+        // CostBudget::new requires > 0, which holds. The fallback to *limit
+        // is unreachable in practice but avoids an unwrap() in production.
+        let remaining_f64 = limit.as_f64() - total;
+        let remaining = CostBudget::new(remaining_f64).unwrap_or(*limit);
+        BudgetAcquisition::Approved { remaining }
+    } else {
+        BudgetAcquisition::Denied(report())
+    }
 }
+
+#[cfg(test)]
+#[path = "budget_tests.rs"]
+mod tests;

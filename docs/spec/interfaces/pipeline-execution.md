@@ -222,6 +222,10 @@ CyclicDependency  { cycle: Vec<SubWorkItemId> }
 UnknownDependency { item_id: SubWorkItemId, unknown_dep: SubWorkItemId }
 ```
 
+`CyclicDependency.cycle` contains only strict cycle members (nodes that are part of
+at least one directed cycle). Nodes that are merely downstream of a cycle are not
+included.
+
 ---
 
 ### Function: `determine_next_actions`

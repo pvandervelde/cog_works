@@ -19,4 +19,18 @@ ignore = [
     #              replacement crate (e.g. rsa 0.10) is released.
     #              Track via: https://github.com/RustCrypto/RSA/issues/19
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0194: quick-xml quadratic runtime on duplicate attribute names
+    # Severity: high (CVSS 7.5)
+    # Affected path: quick-xml 0.39.4 <- queue-runtime 0.2.0 <- listener <- cli
+    # Status: queue-runtime currently pins quick-xml ^0.39; no compatible fix in our
+    #         direct dependency graph without an upstream queue-runtime release.
+    # Risk acceptance: listener parses Azure Service Bus payloads only; this path is
+    #                  not exposed to arbitrary internet XML documents in production.
+    # Remediation: remove this ignore once queue-runtime upgrades to quick-xml >= 0.41.0.
+    "RUSTSEC-2026-0194",
+    # RUSTSEC-2026-0195: quick-xml NsReader unbounded namespace allocation DoS
+    # Severity: high (CVSS 7.5)
+    # Affected path: quick-xml 0.39.4 <- queue-runtime 0.2.0 <- listener <- cli
+    # Status/risk/remediation: same as RUSTSEC-2026-0194 above.
+    "RUSTSEC-2026-0195",
 ]

@@ -1415,3 +1415,265 @@ mod determine_next_actions_tests {
         );
     }
 }
+
+// =============================================================================
+// Topological sort tests
+// =============================================================================
+
+mod topo_sort_tests {
+    //! Adversarial test suite for `topological_sort_sub_work_items`.
+    //!
+    //! ## Phase: RED
+    //!
+    //! All tests compile but will **panic** at runtime because the target
+    //! function is a `todo!()` stub.
+    //!
+    //! ## Tiers
+    //!
+    //! Tier 1 (Specification): 6 tests — empty input, single item, linear chain,
+    //!   diamond, unknown dependency, two-node cycle.
+    //! Tier 2 (Adversarial/Boundary): 4 tests — self-referential, three-node cycle,
+    //!   two independent chains, multiple roots.
+
+    #![allow(clippy::expect_used)]
+    #![allow(clippy::unwrap_used)]
+
+    use crate::{
+        execution::{DependencyError, SubWorkItem, topological_sort_sub_work_items},
+        identifiers::SubWorkItemId,
+    };
+
+    fn sid(n: u64) -> SubWorkItemId {
+        SubWorkItemId::new(n)
+    }
+
+    fn item(id: u64, deps: &[u64]) -> SubWorkItem {
+        SubWorkItem {
+            id: sid(id),
+            description: format!("item-{id}"),
+            depends_on: deps.iter().copied().map(sid).collect(),
+        }
+    }
+
+    // ─── Tier 1: Specification Tests ─────────────────────────────────────────
+
+    /// Empty input returns empty output — no panic, no error.
+    #[test]
+    fn test_topological_sort_sub_work_items_empty_input_returns_empty() {
+        let result = topological_sort_sub_work_items(&[]);
+        assert!(result.is_ok(), "empty input must not return an error");
+        assert!(
+            result.unwrap().is_empty(),
+            "empty input must return empty vec"
+        );
+    }
+
+    /// Single item with no dependencies is returned as the sole element.
+    #[test]
+    fn test_topological_sort_sub_work_items_single_item_no_deps_returns_item() {
+        let items = vec![item(1, &[])];
+        let result = topological_sort_sub_work_items(&items).unwrap();
+        assert_eq!(result, vec![sid(1)]);
+    }
+
+    /// Linear chain A→B→C (each depends on the previous) must produce order [A, B, C].
+    /// Sources (no deps) come first; sinks (all deps resolved) come last.
+    #[test]
+    fn test_topological_sort_sub_work_items_linear_chain_returns_sources_first() {
+        // 1 has no deps, 2 depends on 1, 3 depends on 2
+        let items = vec![item(1, &[]), item(2, &[1]), item(3, &[2])];
+        let order = topological_sort_sub_work_items(&items).unwrap();
+
+        // Validate topological ordering: for each item, all its deps appear before it.
+        let pos = |id: u64| order.iter().position(|x| *x == sid(id)).unwrap();
+        assert!(pos(1) < pos(2), "item 1 must come before item 2");
+        assert!(pos(2) < pos(3), "item 2 must come before item 3");
+    }
+
+    /// Diamond: 1 has no deps; 2 and 3 depend on 1; 4 depends on 2 and 3.
+    /// Valid orderings: [1,2,3,4] or [1,3,2,4]. Must validate partial order.
+    #[test]
+    fn test_topological_sort_sub_work_items_diamond_returns_valid_partial_order() {
+        let items = vec![item(1, &[]), item(2, &[1]), item(3, &[1]), item(4, &[2, 3])];
+        let order = topological_sort_sub_work_items(&items).unwrap();
+        assert_eq!(order.len(), 4, "all 4 items must be in the result");
+
+        let pos = |id: u64| order.iter().position(|x| *x == sid(id)).unwrap();
+        assert!(pos(1) < pos(2), "1 must precede 2");
+        assert!(pos(1) < pos(3), "1 must precede 3");
+        assert!(pos(2) < pos(4), "2 must precede 4");
+        assert!(pos(3) < pos(4), "3 must precede 4");
+    }
+
+    /// A `depends_on` referencing an ID not present in `items` must return
+    /// `DependencyError::UnknownDependency` with the correct `item_id` and
+    /// `unknown_dep` fields.
+    #[test]
+    fn test_topological_sort_sub_work_items_unknown_dep_returns_error_with_correct_ids() {
+        // item 1 depends on item 99 which does not exist
+        let items = vec![item(1, &[99])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+
+        match err {
+            DependencyError::UnknownDependency {
+                item_id,
+                unknown_dep,
+            } => {
+                assert_eq!(item_id, sid(1), "item_id must be 1");
+                assert_eq!(unknown_dep, sid(99), "unknown_dep must be 99");
+            }
+            DependencyError::CyclicDependency { .. } => {
+                panic!("expected UnknownDependency, got CyclicDependency");
+            }
+        }
+    }
+
+    /// Two-node cycle (1 depends on 2, 2 depends on 1) must return
+    /// `DependencyError::CyclicDependency`.
+    #[test]
+    fn test_topological_sort_sub_work_items_two_node_cycle_returns_cyclic_error() {
+        let items = vec![item(1, &[2]), item(2, &[1])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+
+        assert!(
+            matches!(err, DependencyError::CyclicDependency { .. }),
+            "two-node mutual dependency must yield CyclicDependency"
+        );
+    }
+
+    // ─── Tier 2: Adversarial / Edge-Case Tests ────────────────────────────────
+
+    /// Self-referential item (depends on itself) must yield a cycle or unknown-dep
+    /// error — it must NOT silently succeed or panic.
+    #[test]
+    fn test_topological_sort_sub_work_items_self_reference_returns_error() {
+        let items = vec![item(7, &[7])];
+        let result = topological_sort_sub_work_items(&items);
+        assert!(
+            result.is_err(),
+            "a self-referential dependency must return an error"
+        );
+    }
+
+    /// Three-node cycle A→B→C→A must yield `CyclicDependency`.
+    #[test]
+    fn test_topological_sort_sub_work_items_three_node_cycle_returns_cyclic_error() {
+        let items = vec![item(1, &[3]), item(2, &[1]), item(3, &[2])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+
+        assert!(
+            matches!(err, DependencyError::CyclicDependency { .. }),
+            "three-node cycle must yield CyclicDependency"
+        );
+    }
+
+    /// Kill test: two-node cycle must report BOTH nodes in the `cycle` field,
+    /// not an empty list (guards `*deg > 0` filter against `< 0` or `== 0`
+    /// mutations that would empty the reported cycle).
+    #[test]
+    fn test_topological_sort_sub_work_items_two_node_cycle_reports_cycle_members() {
+        let items = vec![item(1, &[2]), item(2, &[1])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+        match err {
+            DependencyError::CyclicDependency { cycle } => {
+                assert_eq!(
+                    cycle.len(),
+                    2,
+                    "cycle field must contain exactly the two stuck nodes"
+                );
+                assert!(
+                    cycle.contains(&sid(1)),
+                    "node 1 must appear in the reported cycle"
+                );
+                assert!(
+                    cycle.contains(&sid(2)),
+                    "node 2 must appear in the reported cycle"
+                );
+            }
+            other => panic!("expected CyclicDependency, got {other:?}"),
+        }
+    }
+
+    /// Kill test: three-node cycle must report all three nodes in the `cycle`
+    /// field — guards against mutations that swap `> 0` to `== 0` (picks
+    /// zero-degree nodes instead) or `< 0` (returns empty list).
+    #[test]
+    fn test_topological_sort_sub_work_items_three_node_cycle_reports_all_cycle_members() {
+        // 1→3, 2→1, 3→2  ⟹  cycle: 1,2,3
+        let items = vec![item(1, &[3]), item(2, &[1]), item(3, &[2])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+        match err {
+            DependencyError::CyclicDependency { cycle } => {
+                assert_eq!(
+                    cycle.len(),
+                    3,
+                    "cycle field must contain exactly the three stuck nodes"
+                );
+                assert!(cycle.contains(&sid(1)), "node 1 must appear in cycle");
+                assert!(cycle.contains(&sid(2)), "node 2 must appear in cycle");
+                assert!(cycle.contains(&sid(3)), "node 3 must appear in cycle");
+            }
+            other => panic!("expected CyclicDependency, got {other:?}"),
+        }
+    }
+
+    /// Regression: downstream nodes must NOT be reported as cycle members.
+    ///
+    /// Shape: 1↔2 (cycle), 3 depends on 2 (downstream of cycle).
+    /// `cycle` must contain only {1,2}, not 3.
+    #[test]
+    fn test_topological_sort_sub_work_items_downstream_of_cycle_excluded_from_cycle_members() {
+        let items = vec![item(1, &[2]), item(2, &[1]), item(3, &[2])];
+        let err = topological_sort_sub_work_items(&items).unwrap_err();
+
+        match err {
+            DependencyError::CyclicDependency { cycle } => {
+                assert_eq!(
+                    cycle.len(),
+                    2,
+                    "only strict cycle members should be reported"
+                );
+                assert!(cycle.contains(&sid(1)), "node 1 is in the cycle");
+                assert!(cycle.contains(&sid(2)), "node 2 is in the cycle");
+                assert!(
+                    !cycle.contains(&sid(3)),
+                    "node 3 is downstream of the cycle and must not be reported as a cycle member"
+                );
+            }
+            other => panic!("expected CyclicDependency, got {other:?}"),
+        }
+    }
+
+    /// Two independent chains ([1→2] and [3→4]) — all four items must appear
+    /// in a valid topological order: 1 before 2, and 3 before 4.
+    #[test]
+    fn test_topological_sort_sub_work_items_two_independent_chains_both_ordered() {
+        let items = vec![item(1, &[]), item(2, &[1]), item(3, &[]), item(4, &[3])];
+        let order = topological_sort_sub_work_items(&items).unwrap();
+        assert_eq!(order.len(), 4);
+
+        let pos = |id: u64| order.iter().position(|x| *x == sid(id)).unwrap();
+        assert!(pos(1) < pos(2), "1 must precede 2 in chain 1");
+        assert!(pos(3) < pos(4), "3 must precede 4 in chain 2");
+    }
+
+    /// Multiple independent roots (no dependencies) — result must contain all
+    /// roots and no item appears before its dependencies.
+    #[test]
+    fn test_topological_sort_sub_work_items_multiple_roots_all_appear_before_dependents() {
+        // Items 1, 2, 3 have no deps; item 4 depends on all three.
+        let items = vec![
+            item(1, &[]),
+            item(2, &[]),
+            item(3, &[]),
+            item(4, &[1, 2, 3]),
+        ];
+        let order = topological_sort_sub_work_items(&items).unwrap();
+        assert_eq!(order.len(), 4);
+
+        let pos = |id: u64| order.iter().position(|x| *x == sid(id)).unwrap();
+        assert!(pos(1) < pos(4), "root 1 must precede 4");
+        assert!(pos(2) < pos(4), "root 2 must precede 4");
+        assert!(pos(3) < pos(4), "root 3 must precede 4");
+    }
+}
