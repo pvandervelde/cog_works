@@ -189,7 +189,7 @@ fn loaded_packs_from(packs: Vec<ContextPack>) -> LoadedContextPacks {
         .iter()
         .flat_map(|p| p.required_artifacts.iter().cloned())
         .collect();
-    required_artifacts.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    required_artifacts.sort();
     required_artifacts.dedup();
     LoadedContextPacks {
         matched_packs: packs,
@@ -375,7 +375,7 @@ fn test_select_context_packs_multiple_matching_packs_all_ids_returned() {
     ];
 
     let mut result = select_context_packs(&classification, &labels, &packs);
-    result.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    result.sort();
 
     assert_eq!(result.len(), 2);
     assert!(result.contains(&pack_id("rust-pack")));
@@ -475,7 +475,7 @@ proptest! {
         let result = select_context_packs(&classification, &labels, &packs);
 
         let mut sorted = result.clone();
-        sorted.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        sorted.sort();
         sorted.dedup();
         prop_assert_eq!(
             result.len(),
@@ -659,7 +659,7 @@ proptest! {
         let result = merge_pack_guidance(&packs);
 
         let mut sorted = result.required_artifacts.clone();
-        sorted.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        sorted.sort();
         let dup_count = sorted.windows(2).filter(|w| w[0] == w[1]).count();
         prop_assert_eq!(dup_count, 0, "merged artifacts must never contain duplicates");
     }

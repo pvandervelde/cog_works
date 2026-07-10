@@ -22,7 +22,7 @@ macro_rules! string_id {
         $name:ident
     ) => {
         $(#[$attr])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         pub struct $name(String);
 
         impl $name {
@@ -205,7 +205,7 @@ string_id! {
 /// Used to identify artefacts produced or consumed by pipeline nodes.
 /// Paths are normalized at construction time: leading `./` is stripped and
 /// any path component equal to `..` causes `new` to return `None`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ArtifactPath(String);
 
 impl ArtifactPath {

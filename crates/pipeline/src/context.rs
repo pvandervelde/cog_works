@@ -452,7 +452,7 @@ pub fn merge_pack_guidance(packs: &[ContextPack]) -> MergedGuidance {
         .iter()
         .flat_map(|p| p.required_artifacts.iter().cloned())
         .collect();
-    required_artifacts.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    required_artifacts.sort();
     required_artifacts.dedup();
     MergedGuidance {
         safe_patterns,
@@ -750,7 +750,7 @@ fn collect_unique_artifact_paths(
         .chain(req.affected_modules.iter())
         .cloned()
         .collect();
-    paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    paths.sort();
     paths.dedup();
     paths
 }
