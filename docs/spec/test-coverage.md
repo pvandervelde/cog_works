@@ -308,3 +308,135 @@ See commit `d4bcef8` — 4 additional tests added to improve mutation coverage b
 - No fuzz targets — `acquire_budget` and `topological_sort_sub_work_items` are typed-struct
   functions, not raw-byte parsers; fuzz coverage is deferred to Tier 5 scope expansion.
 - No Kani proofs — domain-logic tier (Tier 4 only).
+
+---
+
+## Module: `pipeline/context.rs` — Task #43
+
+**Test file**: `crates/pipeline/src/context_tests.rs`
+**Criticality**: Domain-logic with a **hard safety constraint** on `enforce_scenario_holdout` (ASSERT-SCEN-002).
+**Tiers**: 1 (specification) + 2 (adversarial) + 3 (property-based)
+**Status**: RED — all five functions have `todo!()` stubs; tests compile and will fail until implementation is written.
+
+### Functions in scope
+
+1. `select_context_packs` — glob trigger matching with OR semantics
+2. `merge_pack_guidance` — union-merge with required-artifact deduplication
+3. `enforce_scenario_holdout` — **HARD SAFETY CONSTRAINT** path-prefix filter
+4. `apply_priority_truncation` — priority sort, greedy fill, single-item overflow
+5. `assemble_context` — orchestration of all steps above (async)
+
+### Specification Tests (Tier 1)
+
+| Assertion | Test |
+|-----------|------|
+| ASSERT-SCEN-002: scenario files excluded from code-gen context | `test_enforce_scenario_holdout_item_rooted_under_holdout_dir_is_removed`, `test_assemble_context_scenario_holdout_enforced_excludes_scenario_files` |
+| ASSERT-CODE-006: truncation by priority, current interface never removed first | `test_apply_priority_truncation_higher_priority_item_always_included_before_lower`, `test_apply_priority_truncation_single_item_exceeding_budget_still_included` |
+| ASSERT-CODE-007: dependency outputs included | `test_assemble_context_cache_hit_for_affected_module_produces_context_item`, `test_assemble_context_required_artifacts_from_packs_included_in_context` |
+
+### Adversarial Tests (Tier 2)
+
+#### `select_context_packs` (11 tests)
+
+| Scenario | Test |
+|----------|------|
+| Label pattern glob match → pack selected | `test_select_context_packs_matching_label_pattern_returns_pack_id` |
+| Component tag pattern glob match → pack selected | `test_select_context_packs_matching_component_tag_pattern_returns_pack_id` |
+| `requires_safety_critical=true`, `safety_affecting=true` → selected | `test_select_context_packs_safety_critical_pack_selected_when_safety_affecting_true` |
+| No trigger match → empty vec | `test_select_context_packs_no_trigger_match_returns_empty_vec` |
+| OR semantics: label matches, component doesn't → still selected | `test_select_context_packs_or_semantics_label_match_when_component_doesnt` |
+| `requires_safety_critical=true`, `safety_affecting=false` → not selected | `test_select_context_packs_requires_safety_critical_not_selected_when_not_safety_affecting` |
+| Empty `available` slice → empty | `test_select_context_packs_empty_available_returns_empty_vec` |
+| Multiple packs match → all returned | `test_select_context_packs_multiple_matching_packs_all_ids_returned` |
+| Empty labels slice doesn't block component match | `test_select_context_packs_empty_labels_slice_still_matches_component_tag` |
+| `**` glob matches deeply nested path | `test_select_context_packs_glob_double_star_matches_deeply_nested_path` |
+| All-empty trigger fields never fire | `test_select_context_packs_pack_with_all_empty_trigger_fields_never_matches` |
+| Multiple trigger fields match same pack → appears once | `test_select_context_packs_same_pack_appears_at_most_once_when_multiple_fields_match` |
+
+#### `merge_pack_guidance` (7 tests)
+
+| Scenario | Test |
+|----------|------|
+| Empty slice → empty `MergedGuidance` | `test_merge_pack_guidance_empty_slice_returns_empty_merged_guidance` |
+| Single pack → its fields verbatim | `test_merge_pack_guidance_single_pack_returns_all_its_fields_verbatim` |
+| Two packs: safe_patterns union | `test_merge_pack_guidance_two_packs_safe_patterns_union_merged` |
+| Two packs: anti_patterns union | `test_merge_pack_guidance_two_packs_anti_patterns_union_merged` |
+| Duplicate required artifact → deduplicated to one | `test_merge_pack_guidance_duplicate_required_artifact_path_deduplicated` |
+| Distinct required artifacts → all present | `test_merge_pack_guidance_distinct_required_artifacts_all_present` |
+| Three packs with shared + unique artifacts → deduped correctly | `test_merge_pack_guidance_three_packs_shared_artifact_deduped_unique_artifacts_present` |
+
+#### `enforce_scenario_holdout` (8 tests — HARD SAFETY CONSTRAINT)
+
+| Scenario | Test |
+|----------|------|
+| Item under holdout dir → removed | `test_enforce_scenario_holdout_item_rooted_under_holdout_dir_is_removed` |
+| Item outside all holdout dirs → kept | `test_enforce_scenario_holdout_item_outside_all_holdout_dirs_is_kept` |
+| `source_path=None` → never removed | `test_enforce_scenario_holdout_source_path_none_item_is_never_removed` |
+| Empty holdout dirs → nothing removed | `test_enforce_scenario_holdout_empty_holdout_dirs_removes_nothing` |
+| Empty item list → empty result | `test_enforce_scenario_holdout_empty_item_list_returns_empty` |
+| Deeply nested path under holdout → removed | `test_enforce_scenario_holdout_deeply_nested_path_under_holdout_dir_is_removed` |
+| Multiple holdout dirs → removes from all | `test_enforce_scenario_holdout_multiple_holdout_dirs_removes_from_all` |
+| Sibling directory (e.g. `spec/scenarios-alt`) → NOT removed | `test_enforce_scenario_holdout_sibling_directory_not_removed` |
+| Mixed None + path items → only holdout paths filtered | `test_enforce_scenario_holdout_mixed_none_and_path_items_only_holdout_paths_filtered` |
+
+#### `apply_priority_truncation` (10 tests)
+
+| Scenario | Test |
+|----------|------|
+| All items fit budget → all included, `truncation_applied=false` | `test_apply_priority_truncation_all_items_fit_budget_all_included_no_truncation` |
+| Priority sort: `CurrentInterfaceDefinition` < `CodingStandards` < `TransitiveDependency` | `test_apply_priority_truncation_items_sorted_by_priority_highest_first` |
+| Budget exceeded → lowest priority dropped, `truncation_applied=true` | `test_apply_priority_truncation_lowest_priority_item_dropped_when_budget_exceeded` |
+| Single item > budget → still included, `truncation_applied=true` | `test_apply_priority_truncation_single_item_exceeding_budget_still_included` |
+| Empty input → empty package, `truncation_applied=false` | `test_apply_priority_truncation_empty_input_returns_empty_package_no_truncation` |
+| `total_token_count` = sum of included items | `test_apply_priority_truncation_total_token_count_equals_sum_of_included_items` |
+| `total_token_count` excludes dropped items | `test_apply_priority_truncation_total_token_count_excludes_dropped_items` |
+| Same-priority tier: alphabetical by source_path | `test_apply_priority_truncation_same_priority_items_sorted_alphabetically_by_source_path` |
+| Exactly at budget → all included, no truncation | `test_apply_priority_truncation_exactly_at_budget_includes_all_no_truncation` |
+| One token over budget → last item dropped | `test_apply_priority_truncation_one_token_over_budget_drops_last_item` |
+| Greedy fill: partial lower tier included | `test_apply_priority_truncation_greedy_fill_includes_partial_lower_priority_tier` |
+| High priority beats low with same token size | `test_apply_priority_truncation_higher_priority_item_always_included_before_lower` |
+
+#### `assemble_context` (9 async tests)
+
+| Scenario | Test |
+|----------|------|
+| Cache hit → item in context | `test_assemble_context_cache_hit_for_affected_module_produces_context_item` |
+| Interface entries → `CurrentInterfaceDefinition` items | `test_assemble_context_interface_entries_included_as_current_interface_def_priority` |
+| Non-empty pack guidance → `ContextPackKnowledge` item | `test_assemble_context_non_empty_pack_guidance_included_as_context_pack_knowledge` |
+| Cache error → `assembly_errors` non-empty, `truncation_applied=true` | `test_assemble_context_cache_error_records_assembly_error_and_sets_truncation` |
+| One error, one hit → error recorded + good item present | `test_assemble_context_cache_error_on_one_artifact_does_not_fail_whole_assembly` |
+| Scenario holdout enforced — scenario file excluded (ASSERT-SCEN-002) | `test_assemble_context_scenario_holdout_enforced_excludes_scenario_files` |
+| Required artifact from pack → appears in context | `test_assemble_context_required_artifacts_from_packs_included_in_context` |
+| Same path in affected_modules AND required_artifacts → one item only | `test_assemble_context_same_path_in_affected_modules_and_required_artifacts_produces_one_item` |
+| Three cache errors → three entries in `assembly_errors` | `test_assemble_context_multiple_cache_errors_all_recorded_in_assembly_errors` |
+
+### Property Tests (Tier 3 — proptest)
+
+| Invariant | Test |
+|-----------|------|
+| `select_context_packs` result length ≤ available packs | `test_select_context_packs_result_length_never_exceeds_available_packs` |
+| `select_context_packs` result contains no duplicate IDs | `test_select_context_packs_result_contains_no_duplicate_pack_ids` |
+| `merge_pack_guidance` required_artifacts never contains duplicates | `test_merge_pack_guidance_required_artifacts_never_contains_duplicates` |
+| `merge_pack_guidance` all patterns from all packs present | `test_merge_pack_guidance_all_patterns_from_all_packs_present` |
+| `enforce_scenario_holdout` None-source items always preserved | `test_enforce_scenario_holdout_none_source_path_items_always_preserved` |
+| `enforce_scenario_holdout` holdout-path items always removed | `test_enforce_scenario_holdout_holdout_path_items_always_removed` |
+| `enforce_scenario_holdout` non-holdout path items always preserved | `test_enforce_scenario_holdout_non_holdout_path_items_always_preserved` |
+| `apply_priority_truncation` total = sum of retained items | `test_apply_priority_truncation_total_count_equals_sum_of_retained_items` |
+| `apply_priority_truncation` never exceeds budget (no overflow) | `test_apply_priority_truncation_total_never_exceeds_budget_without_overflow` |
+| `apply_priority_truncation` output always in priority order | `test_apply_priority_truncation_output_always_ordered_by_priority` |
+| `assemble_context` scenario files never in output (ASSERT-SCEN-002 exhaustive) | `test_assemble_context_scenario_files_never_appear_in_output` |
+
+### Spec Gaps / Known Limitations
+
+- **`enforce_scenario_holdout` prefix semantics ambiguity**: the spec says "prefix match on path
+  string" but also "rooted under any holdout_dir". A raw string prefix of `spec/scenarios` would
+  also match `spec/scenarios-alt/foo.md` (a sibling directory). The tests assume **directory-prefix
+  semantics** (holdout matches paths starting with `{dir}/` or equal to `dir`). The architect
+  should clarify this in `docs/spec/interfaces/context.md`.
+- `assemble_context` cache-miss (`Ok(None)`) behaviour is not explicitly specified — the spec only
+  specifies `Err` → skip + record. The tests assume `Ok(None)` is silently skipped without an error.
+  This should be confirmed in the spec.
+- No test for `assemble_context` with `NodeType::Deterministic` — the impl may vary summary level
+  by node type; tests currently use `NodeType::Llm` only.
+- Mutation coverage audit is blocked on implementation (cannot run `cargo mutants` against `todo!()`).
+
