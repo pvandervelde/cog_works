@@ -52,7 +52,7 @@ use crate::{
 /// The category of work the pipeline has been asked to perform, as determined
 /// by the Intake node's classification step.
 ///
-/// See `docs/spec/interfaces/context.md` §TaskType.
+/// See `docs/spec/interfaces/context.md` §`TaskType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaskType {
     /// Implementing new functionality.
@@ -84,7 +84,7 @@ pub enum TaskType {
 /// (`apply_safety_override`, `check_scope_threshold`) are defined in
 /// `classification.rs` (PR 7).
 ///
-/// See `docs/spec/interfaces/context.md` §ClassificationResult.
+/// See `docs/spec/interfaces/context.md` §`ClassificationResult`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassificationResult {
     /// What category of work this is.
@@ -115,7 +115,7 @@ pub struct ClassificationResult {
 /// first when the token budget is exhausted. `Ord` is derived by declaration
 /// order (smallest = most important).
 ///
-/// See `docs/spec/interfaces/context.md` §ContextPriority.
+/// See `docs/spec/interfaces/context.md` §`ContextPriority`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ContextPriority {
     /// Interface definitions for the artifact(s) the current node operates on.
@@ -138,7 +138,7 @@ pub enum ContextPriority {
 
 /// A single unit of knowledge included in a node's context window.
 ///
-/// See `docs/spec/interfaces/context.md` §ContextItem.
+/// See `docs/spec/interfaces/context.md` §`ContextItem`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextItem {
     /// The verbatim text delivered to the LLM at this position in the context.
@@ -173,7 +173,7 @@ pub struct ContextItem {
 ///
 /// Produced by [`assemble_context`] and [`apply_priority_truncation`].
 ///
-/// See `docs/spec/interfaces/context.md` §ContextPackage.
+/// See `docs/spec/interfaces/context.md` §`ContextPackage`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextPackage {
     /// Context items, ordered high-priority first.
@@ -218,7 +218,7 @@ pub struct ContextPackage {
 /// `assemble_context` must call `enforce_scenario_holdout` first and unwrap
 /// the result via [`HoldoutFilteredItems::into_inner`].
 ///
-/// See `docs/spec/interfaces/context.md` §HoldoutFilteredItems.
+/// See `docs/spec/interfaces/context.md` §`HoldoutFilteredItems`.
 #[derive(Debug, Clone)]
 pub struct HoldoutFilteredItems(Vec<ContextItem>);
 
@@ -237,7 +237,7 @@ impl HoldoutFilteredItems {
 /// Pack selection uses OR semantics across fields: the pack is selected if **any**
 /// matching criterion evaluates to `true`.
 ///
-/// See `docs/spec/interfaces/context.md` §ContextPackTrigger.
+/// See `docs/spec/interfaces/context.md` §`ContextPackTrigger`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextPackTrigger {
     /// Glob patterns matched against GitHub label strings on the work item.
@@ -268,7 +268,7 @@ pub struct ContextPackTrigger {
 /// domain. Multiple packs may be active for a single run; their guidance is
 /// merged by [`merge_pack_guidance`].
 ///
-/// See `docs/spec/interfaces/context.md` §ContextPack.
+/// See `docs/spec/interfaces/context.md` §`ContextPack`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextPack {
     /// The pack identifier, matching its directory name in
@@ -313,7 +313,7 @@ pub struct ContextPack {
 /// `safe_patterns` and `anti_patterns` are union-merged across all active packs.
 /// `required_artifacts` are union-merged with deduplication by path.
 ///
-/// See `docs/spec/interfaces/context.md` §MergedGuidance.
+/// See `docs/spec/interfaces/context.md` §`MergedGuidance`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MergedGuidance {
     /// Union of `safe_patterns` from all matched packs.
@@ -330,7 +330,7 @@ pub struct MergedGuidance {
 ///
 /// Passed to [`assemble_context`] to inject pack knowledge and required artifacts.
 ///
-/// See `docs/spec/interfaces/context.md` §LoadedContextPacks.
+/// See `docs/spec/interfaces/context.md` §`LoadedContextPacks`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedContextPacks {
     /// All packs selected for this run. May be empty.
@@ -353,7 +353,7 @@ pub struct LoadedContextPacks {
 /// Constructed by node orchestration code in `nodes` and passed to
 /// [`assemble_context`].
 ///
-/// See `docs/spec/interfaces/context.md` §ContextAssemblyRequest.
+/// See `docs/spec/interfaces/context.md` §`ContextAssemblyRequest`.
 #[derive(Debug, Clone)]
 pub struct ContextAssemblyRequest {
     /// The type of node being executed, used to select appropriate detail levels.
@@ -409,7 +409,7 @@ pub struct ContextAssemblyRequest {
 ///
 /// **Infallible. Pure.**
 ///
-/// See `docs/spec/interfaces/context.md` §select_context_packs.
+/// See `docs/spec/interfaces/context.md` §`select_context_packs`.
 #[must_use]
 pub fn select_context_packs(
     classification: &ClassificationResult,
@@ -437,7 +437,7 @@ pub fn select_context_packs(
 ///
 /// **Infallible. Pure.**
 ///
-/// See `docs/spec/interfaces/context.md` §merge_pack_guidance.
+/// See `docs/spec/interfaces/context.md` §`merge_pack_guidance`.
 #[must_use]
 pub fn merge_pack_guidance(packs: &[ContextPack]) -> MergedGuidance {
     let safe_patterns = packs
@@ -492,7 +492,7 @@ pub fn merge_pack_guidance(packs: &[ContextPack]) -> MergedGuidance {
 /// artifact is **skipped** (not returned as an error). The resulting package
 /// has `truncation_applied = true` to signal incomplete data.
 ///
-/// See `docs/spec/interfaces/context.md` §assemble_context.
+/// See `docs/spec/interfaces/context.md` §`assemble_context`.
 pub async fn assemble_context(
     req: &ContextAssemblyRequest,
     summaries: &dyn SummaryCache,
@@ -566,7 +566,7 @@ pub async fn assemble_context(
 ///
 /// **Infallible. Pure.**
 ///
-/// See `docs/spec/interfaces/context.md` §apply_priority_truncation.
+/// See `docs/spec/interfaces/context.md` §`apply_priority_truncation`.
 #[must_use]
 pub fn apply_priority_truncation(
     items: HoldoutFilteredItems,
@@ -617,7 +617,7 @@ pub fn apply_priority_truncation(
 ///
 /// **Infallible. Pure.**
 ///
-/// See `docs/spec/interfaces/context.md` §enforce_scenario_holdout.
+/// See `docs/spec/interfaces/context.md` §`enforce_scenario_holdout`.
 #[must_use]
 pub fn enforce_scenario_holdout(
     items: Vec<ContextItem>,
