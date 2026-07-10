@@ -527,3 +527,7 @@ pub fn enforce_scenario_holdout(
 ) -> HoldoutFilteredItems {
     todo!("See docs/spec/interfaces/context.md §enforce_scenario_holdout")
 }
+
+#[cfg(test)]
+#[path = "context_tests.rs"]
+mod tests;
