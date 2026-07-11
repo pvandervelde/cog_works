@@ -38,18 +38,18 @@ use async_trait::async_trait;
 use proptest::prelude::*;
 
 use super::{
+    ClassificationResult, ContextAssemblyRequest, ContextItem, ContextPack, ContextPackTrigger,
+    ContextPriority, HoldoutFilteredItems, LoadedContextPacks, MergedGuidance, TaskType,
     apply_priority_truncation, assemble_context, enforce_scenario_holdout, merge_pack_guidance,
-    select_context_packs, ClassificationResult, ContextAssemblyRequest, ContextItem,
-    ContextPack, ContextPackTrigger, ContextPriority, HoldoutFilteredItems,
-    LoadedContextPacks, MergedGuidance, TaskType,
+    select_context_packs,
 };
 use crate::{
+    DomainServiceName,
     domain_services::InterfaceDefinition,
     graph::NodeType,
     identifiers::{ArtifactPath, CommitSha, ContextPackId, InterfaceId},
     knowledge::{CacheError, PyramidSummary, SummaryCache, SummaryLevel},
     types::{ApiVersion, SatisfactionScore, TokenCount},
-    DomainServiceName,
 };
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -321,7 +321,12 @@ fn test_select_context_packs_safety_critical_pack_selected_when_safety_affecting
 fn test_select_context_packs_no_trigger_match_returns_empty_vec() {
     let classification = make_classification(false, &["src/main.rs"]);
     let labels = vec!["documentation".to_string()];
-    let packs = vec![make_pack("security", &["security-*"], &["crates/security/**"], false)];
+    let packs = vec![make_pack(
+        "security",
+        &["security-*"],
+        &["crates/security/**"],
+        false,
+    )];
 
     let result = select_context_packs(&classification, &labels, &packs);
 
@@ -336,7 +341,12 @@ fn test_select_context_packs_or_semantics_label_match_when_component_doesnt() {
     // affected_modules has no component_tag match.
     let classification = make_classification(false, &["src/unrelated.rs"]);
     let labels = vec!["my-security-label".to_string()];
-    let packs = vec![make_pack("sec", &["*security*"], &["crates/security/**"], false)];
+    let packs = vec![make_pack(
+        "sec",
+        &["*security*"],
+        &["crates/security/**"],
+        false,
+    )];
 
     let result = select_context_packs(&classification, &labels, &packs);
 
@@ -395,8 +405,7 @@ fn test_select_context_packs_empty_labels_slice_still_matches_component_tag() {
 
 #[test]
 fn test_select_context_packs_glob_double_star_matches_deeply_nested_path() {
-    let classification =
-        make_classification(false, &["crates/pipeline/src/deep/nested/module.rs"]);
+    let classification = make_classification(false, &["crates/pipeline/src/deep/nested/module.rs"]);
     let packs = vec![make_pack("all-crates", &[], &["crates/**"], false)];
 
     let result = select_context_packs(&classification, &[], &packs);
@@ -430,7 +439,12 @@ fn test_select_context_packs_same_pack_appears_at_most_once_when_multiple_fields
     // A pack that matches via BOTH label AND component tag must appear only once.
     let classification = make_classification(true, &["src/lib.rs"]);
     let labels = vec!["label-match".to_string()];
-    let packs = vec![make_pack("triple-match", &["label-match"], &["src/**"], true)];
+    let packs = vec![make_pack(
+        "triple-match",
+        &["label-match"],
+        &["src/**"],
+        true,
+    )];
 
     let result = select_context_packs(&classification, &labels, &packs);
 
@@ -746,10 +760,7 @@ fn test_enforce_scenario_holdout_source_path_none_item_is_never_removed() {
         200,
         None,
     )];
-    let holdout_dirs = vec![
-        artifact("spec/scenarios"),
-        artifact("tests/scenarios"),
-    ];
+    let holdout_dirs = vec![artifact("spec/scenarios"), artifact("tests/scenarios")];
 
     let result = enforce_scenario_holdout(items, &holdout_dirs);
 
@@ -769,7 +780,12 @@ fn test_enforce_scenario_holdout_empty_holdout_dirs_removes_nothing() {
             50,
             Some("spec/scenarios/foo.md"),
         ),
-        make_item("item-b", ContextPriority::CodingStandards, 50, Some("src/lib.rs")),
+        make_item(
+            "item-b",
+            ContextPriority::CodingStandards,
+            50,
+            Some("src/lib.rs"),
+        ),
     ];
 
     let result = enforce_scenario_holdout(items, &[]);
@@ -868,7 +884,12 @@ fn test_enforce_scenario_holdout_sibling_directory_not_removed() {
 #[test]
 fn test_enforce_scenario_holdout_mixed_none_and_path_items_only_holdout_paths_filtered() {
     let items = vec![
-        make_item("synthesised", ContextPriority::ContextPackKnowledge, 100, None),
+        make_item(
+            "synthesised",
+            ContextPriority::ContextPackKnowledge,
+            100,
+            None,
+        ),
         make_item(
             "scenario",
             ContextPriority::TransitiveDependency,
@@ -983,7 +1004,12 @@ proptest! {
 #[test]
 fn test_apply_priority_truncation_all_items_fit_budget_all_included_no_truncation() {
     let items = HoldoutFilteredItems(vec![
-        make_item("high-prio", ContextPriority::CurrentInterfaceDefinition, 100, None),
+        make_item(
+            "high-prio",
+            ContextPriority::CurrentInterfaceDefinition,
+            100,
+            None,
+        ),
         make_item("low-prio", ContextPriority::TransitiveDependency, 50, None),
     ]);
 
@@ -996,9 +1022,19 @@ fn test_apply_priority_truncation_all_items_fit_budget_all_included_no_truncatio
 #[test]
 fn test_apply_priority_truncation_items_sorted_by_priority_highest_first() {
     let items = HoldoutFilteredItems(vec![
-        make_item("transitive", ContextPriority::TransitiveDependency, 10, None),
+        make_item(
+            "transitive",
+            ContextPriority::TransitiveDependency,
+            10,
+            None,
+        ),
         make_item("coding-std", ContextPriority::CodingStandards, 10, None),
-        make_item("interface", ContextPriority::CurrentInterfaceDefinition, 10, None),
+        make_item(
+            "interface",
+            ContextPriority::CurrentInterfaceDefinition,
+            10,
+            None,
+        ),
     ]);
 
     let result = apply_priority_truncation(items, tokens(1000));
@@ -1013,7 +1049,12 @@ fn test_apply_priority_truncation_lowest_priority_item_dropped_when_budget_excee
     // Budget: 150. Both items are 100 tokens. High-prio fits; low-prio dropped.
     let items = HoldoutFilteredItems(vec![
         make_item("low-prio", ContextPriority::TransitiveDependency, 100, None),
-        make_item("high-prio", ContextPriority::CurrentInterfaceDefinition, 100, None),
+        make_item(
+            "high-prio",
+            ContextPriority::CurrentInterfaceDefinition,
+            100,
+            None,
+        ),
     ]);
 
     let result = apply_priority_truncation(items, tokens(150));
@@ -1071,7 +1112,12 @@ fn test_apply_priority_truncation_total_token_count_equals_sum_of_included_items
 #[test]
 fn test_apply_priority_truncation_total_token_count_excludes_dropped_items() {
     let items = HoldoutFilteredItems(vec![
-        make_item("kept", ContextPriority::CurrentInterfaceDefinition, 80, None),
+        make_item(
+            "kept",
+            ContextPriority::CurrentInterfaceDefinition,
+            80,
+            None,
+        ),
         make_item("dropped", ContextPriority::TransitiveDependency, 80, None),
     ]);
 
@@ -1087,9 +1133,24 @@ fn test_apply_priority_truncation_total_token_count_excludes_dropped_items() {
 #[test]
 fn test_apply_priority_truncation_same_priority_items_sorted_alphabetically_by_source_path() {
     let items = HoldoutFilteredItems(vec![
-        make_item("c-content", ContextPriority::CodingStandards, 10, Some("src/z_module.rs")),
-        make_item("a-content", ContextPriority::CodingStandards, 10, Some("src/a_module.rs")),
-        make_item("b-content", ContextPriority::CodingStandards, 10, Some("src/m_module.rs")),
+        make_item(
+            "c-content",
+            ContextPriority::CodingStandards,
+            10,
+            Some("src/z_module.rs"),
+        ),
+        make_item(
+            "a-content",
+            ContextPriority::CodingStandards,
+            10,
+            Some("src/a_module.rs"),
+        ),
+        make_item(
+            "b-content",
+            ContextPriority::CodingStandards,
+            10,
+            Some("src/m_module.rs"),
+        ),
     ]);
 
     let result = apply_priority_truncation(items, tokens(1000));
@@ -1138,8 +1199,18 @@ fn test_apply_priority_truncation_greedy_fill_includes_partial_lower_priority_ti
             100,
             Some("src/interface.rs"),
         ),
-        make_item("std-a", ContextPriority::CodingStandards, 100, Some("src/a_std.rs")),
-        make_item("std-b", ContextPriority::CodingStandards, 100, Some("src/b_std.rs")),
+        make_item(
+            "std-a",
+            ContextPriority::CodingStandards,
+            100,
+            Some("src/a_std.rs"),
+        ),
+        make_item(
+            "std-b",
+            ContextPriority::CodingStandards,
+            100,
+            Some("src/b_std.rs"),
+        ),
     ]);
 
     let result = apply_priority_truncation(items, tokens(250));
@@ -1156,7 +1227,12 @@ fn test_apply_priority_truncation_higher_priority_item_always_included_before_lo
     // win over CodingStandards.
     let items = HoldoutFilteredItems(vec![
         make_item("std", ContextPriority::CodingStandards, 90, None),
-        make_item("iface", ContextPriority::CurrentInterfaceDefinition, 90, None),
+        make_item(
+            "iface",
+            ContextPriority::CurrentInterfaceDefinition,
+            90,
+            None,
+        ),
     ]);
 
     let result = apply_priority_truncation(items, tokens(100));
@@ -1269,9 +1345,12 @@ async fn test_assemble_context_cache_hit_for_affected_module_produces_context_it
     let result = assemble_context(&req, &cache, &packs, &[], tokens(10_000)).await;
 
     assert!(result.assembly_errors.is_empty());
-    assert!(result.items.iter().any(|i| {
-        i.source_path.as_ref().map(|p| p.as_str()) == Some(path)
-    }));
+    assert!(
+        result
+            .items
+            .iter()
+            .any(|i| { i.source_path.as_ref().map(|p| p.as_str()) == Some(path) })
+    );
 }
 
 #[tokio::test]
@@ -1284,7 +1363,10 @@ async fn test_assemble_context_interface_entries_included_as_current_interface_d
     let result = assemble_context(&req, &cache, &packs, &[iface], tokens(10_000)).await;
 
     assert!(
-        result.items.iter().any(|i| i.priority == ContextPriority::CurrentInterfaceDefinition),
+        result
+            .items
+            .iter()
+            .any(|i| i.priority == ContextPriority::CurrentInterfaceDefinition),
         "interface entries must appear as CurrentInterfaceDefinition items"
     );
 }
@@ -1304,7 +1386,10 @@ async fn test_assemble_context_non_empty_pack_guidance_included_as_context_pack_
     let result = assemble_context(&req, &cache, &packs, &[], tokens(10_000)).await;
 
     assert!(
-        result.items.iter().any(|i| i.priority == ContextPriority::ContextPackKnowledge),
+        result
+            .items
+            .iter()
+            .any(|i| i.priority == ContextPriority::ContextPackKnowledge),
         "non-empty pack guidance must produce a ContextPackKnowledge item"
     );
 }
@@ -1314,8 +1399,8 @@ async fn test_assemble_context_non_empty_pack_guidance_included_as_context_pack_
 #[tokio::test]
 async fn test_assemble_context_cache_error_records_assembly_error_and_sets_truncation() {
     let path = "src/broken.rs";
-    let cache = MockSummaryCache::new()
-        .with_error(path, SummaryLevel::Paragraph, "cache backend down");
+    let cache =
+        MockSummaryCache::new().with_error(path, SummaryLevel::Paragraph, "cache backend down");
 
     let req = make_request(NodeType::Llm, &[path], &[]);
     let packs = empty_loaded_packs();
@@ -1346,11 +1431,16 @@ async fn test_assemble_context_cache_error_on_one_artifact_does_not_fail_whole_a
 
     let result = assemble_context(&req, &cache, &packs, &[], tokens(10_000)).await;
 
-    assert_eq!(result.assembly_errors.len(), 1, "exactly one error for one failing artifact");
+    assert_eq!(
+        result.assembly_errors.len(),
+        1,
+        "exactly one error for one failing artifact"
+    );
     assert!(
-        result.items.iter().any(|i| {
-            i.source_path.as_ref().map(|p| p.as_str()) == Some(good_path)
-        }),
+        result
+            .items
+            .iter()
+            .any(|i| { i.source_path.as_ref().map(|p| p.as_str()) == Some(good_path) }),
         "successful artifact must still appear in context despite another failing"
     );
 }
@@ -1360,8 +1450,7 @@ async fn test_assemble_context_scenario_holdout_enforced_excludes_scenario_files
     // ASSERT-SCEN-002: scenario files must NEVER appear in assembled code-gen context.
     let scenario_path = "spec/scenarios/test-01.md";
     let code_path = "src/lib.rs";
-    let scenario_summary =
-        make_pyramid_summary(scenario_path, "Given a user logs in...", 30);
+    let scenario_summary = make_pyramid_summary(scenario_path, "Given a user logs in...", 30);
     let code_summary = make_pyramid_summary(code_path, "pub fn lib() {}", 20);
     let cache = MockSummaryCache::new()
         .with_hit(scenario_path, SummaryLevel::Paragraph, scenario_summary)
@@ -1377,9 +1466,10 @@ async fn test_assemble_context_scenario_holdout_enforced_excludes_scenario_files
     let result = assemble_context(&req, &cache, &packs, &[], tokens(10_000)).await;
 
     assert!(
-        result.items.iter().all(|i| {
-            i.source_path.as_ref().map(|p| p.as_str()) != Some(scenario_path)
-        }),
+        result
+            .items
+            .iter()
+            .all(|i| { i.source_path.as_ref().map(|p| p.as_str()) != Some(scenario_path) }),
         "ASSERT-SCEN-002 VIOLATION: scenario file must not appear in assembled context"
     );
 }
@@ -1388,8 +1478,7 @@ async fn test_assemble_context_scenario_holdout_enforced_excludes_scenario_files
 async fn test_assemble_context_required_artifacts_from_packs_included_in_context() {
     let req_path = "docs/spec/architecture.md";
     let req_summary = make_pyramid_summary(req_path, "Architecture overview", 40);
-    let cache =
-        MockSummaryCache::new().with_hit(req_path, SummaryLevel::Paragraph, req_summary);
+    let cache = MockSummaryCache::new().with_hit(req_path, SummaryLevel::Paragraph, req_summary);
 
     let req = make_request(NodeType::Llm, &[], &[]);
     let packs = loaded_packs_with_artifacts(vec![artifact(req_path)]);
@@ -1397,22 +1486,22 @@ async fn test_assemble_context_required_artifacts_from_packs_included_in_context
     let result = assemble_context(&req, &cache, &packs, &[], tokens(10_000)).await;
 
     assert!(
-        result.items.iter().any(|i| {
-            i.source_path.as_ref().map(|p| p.as_str()) == Some(req_path)
-        }),
+        result
+            .items
+            .iter()
+            .any(|i| { i.source_path.as_ref().map(|p| p.as_str()) == Some(req_path) }),
         "required artifact from pack must appear in assembled context"
     );
 }
 
 #[tokio::test]
 async fn test_assemble_context_same_path_in_affected_modules_and_required_artifacts_produces_one_item()
-{
+ {
     // ASSERT-CODE-007 corner case: the same path in both req.affected_modules
     // and packs.required_artifacts must not produce duplicate context items.
     let shared_path = "src/shared.rs";
     let summary = make_pyramid_summary(shared_path, "pub struct Shared;", 20);
-    let cache =
-        MockSummaryCache::new().with_hit(shared_path, SummaryLevel::Paragraph, summary);
+    let cache = MockSummaryCache::new().with_hit(shared_path, SummaryLevel::Paragraph, summary);
 
     let req = make_request(NodeType::Llm, &[shared_path], &[]);
     let packs = loaded_packs_with_artifacts(vec![artifact(shared_path)]);
