@@ -127,6 +127,7 @@ fn make_item(
         summary_level: SummaryLevel::Paragraph,
         priority,
         token_count: tokens(token_count),
+        required: false,
         source_path: source_path.map(artifact),
     }
 }
@@ -1065,15 +1066,17 @@ fn test_apply_priority_truncation_lowest_priority_item_dropped_when_budget_excee
 }
 
 #[test]
-fn test_apply_priority_truncation_single_item_exceeding_budget_still_included() {
-    // ASSERT-CODE-006 / required-artifact overflow: a single item that exceeds
+fn test_apply_priority_truncation_single_required_item_exceeding_budget_still_included() {
+    // ASSERT-CODE-006 / required-artifact overflow: a required item that exceeds
     // the entire budget must still be included (never silently dropped).
-    let items = HoldoutFilteredItems(vec![make_item(
+    let mut item = make_item(
         "huge-artifact",
-        ContextPriority::CurrentInterfaceDefinition,
+        ContextPriority::DirectDependencyOutput,
         10_000,
         Some("src/huge.rs"),
-    )]);
+    );
+    item.required = true;
+    let items = HoldoutFilteredItems(vec![item]);
 
     let result = apply_priority_truncation(items, tokens(100));
 
@@ -1081,6 +1084,55 @@ fn test_apply_priority_truncation_single_item_exceeding_budget_still_included() 
     assert!(
         result.truncation_applied,
         "budget overflow must set truncation_applied=true"
+    );
+}
+
+#[test]
+fn test_apply_priority_truncation_required_artifact_included_when_interface_defs_fill_budget() {
+    // Regression: required artifacts at DirectDependencyOutput (priority 1) were
+    // silently dropped when CurrentInterfaceDefinition items (priority 0) already
+    // exhausted the budget. The required flag must override the budget check.
+    let interface_item = make_item(
+        "iface-def",
+        ContextPriority::CurrentInterfaceDefinition,
+        90,
+        None,
+    );
+    let mut required_item = make_item(
+        "required-artifact",
+        ContextPriority::DirectDependencyOutput,
+        50,
+        Some("src/required.rs"),
+    );
+    required_item.required = true;
+    let ordinary_item = make_item(
+        "ordinary-artifact",
+        ContextPriority::TransitiveDependency,
+        50,
+        Some("src/ordinary.rs"),
+    );
+    // Budget = 100: interface_item (90) fits; required_item (50) would overflow but
+    // must be included; ordinary_item must be dropped.
+    let items = HoldoutFilteredItems(vec![interface_item, required_item, ordinary_item]);
+
+    let result = apply_priority_truncation(items, tokens(100));
+
+    let contents: Vec<&str> = result.items.iter().map(|i| i.content.as_str()).collect();
+    assert!(
+        contents.contains(&"iface-def"),
+        "interface definition must be included"
+    );
+    assert!(
+        contents.contains(&"required-artifact"),
+        "required artifact must be included even on overflow"
+    );
+    assert!(
+        !contents.contains(&"ordinary-artifact"),
+        "non-required ordinary artifact must be dropped"
+    );
+    assert!(
+        result.truncation_applied,
+        "overflow sets truncation_applied"
     );
 }
 

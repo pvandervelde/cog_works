@@ -160,6 +160,15 @@ pub struct ContextItem {
     /// budget enforcement; precision is not guaranteed).
     pub token_count: TokenCount,
 
+    /// `true` if this item must be included regardless of the token budget.
+    ///
+    /// Set to `true` for artifacts listed in
+    /// [`MergedGuidance::required_artifacts`]. [`apply_priority_truncation`]
+    /// will include required items even when the budget is already exceeded
+    /// by higher-priority non-required items.
+    #[serde(default)]
+    pub required: bool,
+
     /// The artifact this item was derived from; `None` for synthesised items.
     ///
     /// `None` examples: merged pack guidance text, sub-work-item description.
@@ -504,10 +513,15 @@ pub async fn assemble_context(
     let mut assembly_errors: Vec<String> = Vec::new();
 
     // Steps 1–2: collect unique artifact paths and fetch summaries.
+    // Required artifacts (from merged_guidance) are marked so apply_priority_truncation
+    // can include them even when the budget is exhausted by higher-priority items.
+    let required_set: std::collections::HashSet<&ArtifactPath> =
+        packs.merged_guidance.required_artifacts.iter().collect();
     let unique_paths = collect_unique_artifact_paths(packs, req);
     for path in &unique_paths {
+        let is_required = required_set.contains(path);
         match fetch_best_summary(summaries, path).await {
-            Ok(Some(item)) => items.push(item),
+            Ok(Some(item)) => items.push(summary_to_context_item(item, is_required)),
             Ok(None) => {}
             Err(msg) => assembly_errors.push(msg),
         }
@@ -527,6 +541,7 @@ pub async fn assemble_context(
             summary_level: SummaryLevel::Paragraph,
             priority: ContextPriority::ContextPackKnowledge,
             token_count: tc,
+            required: false,
             source_path: None,
         });
     }
@@ -579,16 +594,16 @@ pub fn apply_priority_truncation(
     let mut total = TokenCount::new(0);
     let mut truncation_applied = false;
 
-    for (idx, item) in items.into_iter().enumerate() {
+    for item in items {
         let new_total = total + item.token_count;
-        if idx == 0 && new_total > budget {
-            // Budget overflow: first item exceeds budget — include it anyway.
+        if new_total <= budget {
+            total = new_total;
+            included.push(item);
+        } else if item.required {
+            // Required artifacts are always included, even on budget overflow.
             total = new_total;
             included.push(item);
             truncation_applied = true;
-        } else if new_total <= budget {
-            total = new_total;
-            included.push(item);
         } else {
             truncation_applied = true;
         }
@@ -711,13 +726,14 @@ fn sort_context_items(items: &mut [ContextItem]) {
 
 /// Converts a [`PyramidSummary`] into a [`ContextItem`] at the
 /// `DirectDependencyOutput` priority tier.
-fn summary_to_context_item(summary: PyramidSummary) -> ContextItem {
+fn summary_to_context_item(summary: PyramidSummary, required: bool) -> ContextItem {
     ContextItem {
         priority: ContextPriority::DirectDependencyOutput,
         summary_level: summary.level,
         token_count: summary.token_count,
         source_path: Some(summary.path),
         content: summary.content,
+        required,
     }
 }
 
@@ -731,6 +747,7 @@ fn interface_to_context_item(iface: &InterfaceDefinition) -> ContextItem {
         summary_level: SummaryLevel::FullInterface,
         priority: ContextPriority::CurrentInterfaceDefinition,
         token_count,
+        required: false,
         source_path: None,
     }
 }
@@ -776,7 +793,7 @@ fn combine_domain_knowledge(packs: &LoadedContextPacks) -> String {
 async fn fetch_best_summary(
     summaries: &dyn SummaryCache,
     path: &ArtifactPath,
-) -> Result<Option<ContextItem>, String> {
+) -> Result<Option<PyramidSummary>, String> {
     const LEVELS: [SummaryLevel; 4] = [
         SummaryLevel::Source,
         SummaryLevel::FullInterface,
@@ -785,7 +802,7 @@ async fn fetch_best_summary(
     ];
     for level in LEVELS {
         match summaries.get_summary(path, level).await {
-            Ok(Some(summary)) => return Ok(Some(summary_to_context_item(summary))),
+            Ok(Some(summary)) => return Ok(Some(summary)),
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!(
