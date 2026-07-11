@@ -680,7 +680,10 @@ fn pack_trigger_matches(
     }
     glob_matches_any(
         &pack.trigger.component_tag_patterns,
-        classification.affected_modules.iter().map(ArtifactPath::as_str),
+        classification
+            .affected_modules
+            .iter()
+            .map(ArtifactPath::as_str),
     )
 }
 
