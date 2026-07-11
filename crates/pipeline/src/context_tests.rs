@@ -1493,3 +1493,166 @@ proptest! {
         });
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mutation kill tests — assemble_context helpers
+// (kills survivors in estimate_token_count and combine_domain_knowledge)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Survivor: estimate_token_count arithmetic formula ────────────────────────
+//
+// Mutants survived (context.rs:738):
+//   - replace `/` with `*`   → len * 4 + 1  (wrong for any len > 0)
+//   - replace `/` with `%`   → len % 4 + 1  (wrong when len divisible by 4)
+//   - replace `+` with `*`   → (len / 4) * 1 = len/4  (off by 1 for all len)
+//   - replace `+` with `-`   → len/4 - 1   (wrong; underflows when len < 4)
+//
+// Strategy: use a pack with domain_knowledge of exactly 4 bytes ("abcd").
+// Combined knowledge = "abcd" (len=4).
+// Correct:          4/4 + 1 = 2
+// `/` → `*`:        4*4 + 1 = 17   ≠ 2
+// `/` → `%`:        4%4 + 1 = 1    ≠ 2
+// `+` → `*`:        4/4 * 1 = 1    ≠ 2
+// `+` → `-`:        4/4 - 1 = 0    ≠ 2
+
+#[tokio::test]
+async fn test_assemble_context_domain_knowledge_token_count_matches_formula() {
+    // "abcd" is 4 bytes → token_count must be exactly 4/4 + 1 = 2.
+    let mut pack = make_pack("tok-pack", &[], &[], false);
+    pack.domain_knowledge = "abcd".to_string();
+    pack.safe_patterns = vec![];
+    pack.anti_patterns = vec![];
+    pack.required_artifacts = vec![];
+
+    let cache = MockSummaryCache::new();
+    let req = make_request(NodeType::Llm, &[], &[]);
+    let packs = loaded_packs_from(vec![pack]);
+
+    let result = assemble_context(&req, &cache, &packs, &[], tokens(100_000)).await;
+
+    let knowledge_item = result
+        .items
+        .iter()
+        .find(|i| i.priority == ContextPriority::ContextPackKnowledge)
+        .expect("a ContextPackKnowledge item must be present");
+
+    assert_eq!(
+        knowledge_item.token_count,
+        tokens(2),
+        "estimate_token_count(\"abcd\") must return 4/4+1 = 2, not a mutated value"
+    );
+}
+
+/// Larger input (12 bytes) to kill operators that survive the 4-byte boundary.
+///
+/// "123456789012" is 12 bytes.
+/// Correct:       12/4 + 1 = 4
+/// `/` → `*`:     12*4 + 1 = 49  ≠ 4
+/// `/` → `%`:     12%4 + 1 = 1   ≠ 4
+/// `+` → `*`:     12/4 * 1 = 3   ≠ 4
+/// `+` → `-`:     12/4 - 1 = 2   ≠ 4
+#[tokio::test]
+async fn test_assemble_context_domain_knowledge_token_count_twelve_bytes() {
+    let mut pack = make_pack("tok-pack-12", &[], &[], false);
+    pack.domain_knowledge = "123456789012".to_string(); // 12 bytes
+    pack.safe_patterns = vec![];
+    pack.anti_patterns = vec![];
+    pack.required_artifacts = vec![];
+
+    let cache = MockSummaryCache::new();
+    let req = make_request(NodeType::Llm, &[], &[]);
+    let packs = loaded_packs_from(vec![pack]);
+
+    let result = assemble_context(&req, &cache, &packs, &[], tokens(100_000)).await;
+
+    let knowledge_item = result
+        .items
+        .iter()
+        .find(|i| i.priority == ContextPriority::ContextPackKnowledge)
+        .expect("a ContextPackKnowledge item must be present");
+
+    assert_eq!(
+        knowledge_item.token_count,
+        tokens(4),
+        "estimate_token_count(12 bytes) must return 12/4+1 = 4"
+    );
+}
+
+// ─── Survivor: combine_domain_knowledge return value ─────────────────────────
+//
+// Mutant survived (context.rs:760):
+//   replace combine_domain_knowledge -> String with "xyzzy".into()
+//
+// Strategy: assert that the CONTENT of the ContextPackKnowledge item
+// contains the actual domain_knowledge text, not a placeholder.
+
+#[tokio::test]
+async fn test_assemble_context_domain_knowledge_item_content_matches_pack_knowledge() {
+    let mut pack = make_pack("content-pack", &[], &[], false);
+    pack.domain_knowledge = "Always prefer Result over unwrap.".to_string();
+    pack.safe_patterns = vec![];
+    pack.anti_patterns = vec![];
+    pack.required_artifacts = vec![];
+
+    let cache = MockSummaryCache::new();
+    let req = make_request(NodeType::Llm, &[], &[]);
+    let packs = loaded_packs_from(vec![pack]);
+
+    let result = assemble_context(&req, &cache, &packs, &[], tokens(100_000)).await;
+
+    let knowledge_item = result
+        .items
+        .iter()
+        .find(|i| i.priority == ContextPriority::ContextPackKnowledge)
+        .expect("a ContextPackKnowledge item must be present");
+
+    assert!(
+        knowledge_item
+            .content
+            .contains("Always prefer Result over unwrap."),
+        "domain knowledge item content must contain the pack's actual knowledge text, \
+         got: {:?}",
+        knowledge_item.content
+    );
+}
+
+/// Two packs → their domain knowledge strings must both appear, joined by `\n\n`.
+#[tokio::test]
+async fn test_assemble_context_two_packs_domain_knowledge_joined_with_double_newline() {
+    let mut pack_a = make_pack("pack-a", &[], &[], false);
+    pack_a.domain_knowledge = "Knowledge from A.".to_string();
+    pack_a.safe_patterns = vec![];
+    pack_a.anti_patterns = vec![];
+    pack_a.required_artifacts = vec![];
+
+    let mut pack_b = make_pack("pack-b", &[], &[], false);
+    pack_b.domain_knowledge = "Knowledge from B.".to_string();
+    pack_b.safe_patterns = vec![];
+    pack_b.anti_patterns = vec![];
+    pack_b.required_artifacts = vec![];
+
+    let cache = MockSummaryCache::new();
+    let req = make_request(NodeType::Llm, &[], &[]);
+    let packs = loaded_packs_from(vec![pack_a, pack_b]);
+
+    let result = assemble_context(&req, &cache, &packs, &[], tokens(100_000)).await;
+
+    let knowledge_item = result
+        .items
+        .iter()
+        .find(|i| i.priority == ContextPriority::ContextPackKnowledge)
+        .expect("a ContextPackKnowledge item must be present");
+
+    assert!(
+        knowledge_item.content.contains("Knowledge from A."),
+        "combined knowledge must contain pack A's text"
+    );
+    assert!(
+        knowledge_item.content.contains("Knowledge from B."),
+        "combined knowledge must contain pack B's text"
+    );
+    assert!(
+        knowledge_item.content.contains("\n\n"),
+        "combined knowledge from multiple packs must be separated by double newline"
+    );
+}
