@@ -489,7 +489,9 @@ pub fn merge_pack_guidance(packs: &[ContextPack]) -> MergedGuidance {
 /// # Algorithm (in order)
 ///
 /// 1. Convert `packs.merged_guidance.required_artifacts` + `req.affected_modules`
-///    into `ContextItem` values, selecting the finest summary level that fits.
+///    into `ContextItem` values. The finest **available** summary level is selected
+///    (`Source` first, then `FullInterface`, `Paragraph`, `OneLine`); budget-fitting
+///    is deferred to step 5.
 /// 2. Add `interface_entries` as `CurrentInterfaceDefinition` items.
 /// 3. Add merged pack guidance as a `ContextPackKnowledge` item.
 /// 4. Call `enforce_scenario_holdout` with `req.scenario_holdout_dirs`.
