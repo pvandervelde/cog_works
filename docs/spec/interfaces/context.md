@@ -354,7 +354,9 @@ Assembles a `ContextPackage` by:
 
 1. Converting every `LoadedContextPacks.merged_guidance.required_artifacts` plus
    `req.affected_modules` into `ContextItem` values. For each artifact, the finest
-   summary level that fits the remaining budget is selected by querying `SummaryCache`.
+   available summary level is selected by querying `SummaryCache` (trying `Source`
+   first, falling back to `FullInterface`, `Paragraph`, `OneLine`). Budget-fitting
+   is handled later by `apply_priority_truncation`, not here.
 2. Adding interface definitions as `CurrentInterfaceDefinition`-priority items
    (up to one item per `InterfaceDefinition` entry).
 3. Adding merged pack guidance text as a single `ContextPackKnowledge` item.

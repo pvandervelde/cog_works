@@ -809,10 +809,9 @@ fn evaluate_condition_inner(expr: &str, state: &PipelineState) -> Option<bool> {
     // Find the operator: try " == " first, then " != ".
     let (lhs, op, rhs) = if let Some(pos) = expr.find(" == ") {
         (&expr[..pos], "==", &expr[pos + 4..])
-    } else if let Some(pos) = expr.find(" != ") {
-        (&expr[..pos], "!=", &expr[pos + 4..])
     } else {
-        return None;
+        let pos = expr.find(" != ")?;
+        (&expr[..pos], "!=", &expr[pos + 4..])
     };
 
     // Navigate the JSON representation of PipelineState.
