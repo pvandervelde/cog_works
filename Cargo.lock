@@ -1628,9 +1628,9 @@ dependencies = [
 
 [[package]]
 name = "github-bot-sdk"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6070671937002947a0de18923edbf481ac52b2e3f3583cab503074f78df2ebc3"
+checksum = "266a58150104c5936f5964346e0a72996681f9620e641198864a85ed69ebb371"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2017,7 +2017,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -3277,7 +3277,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3316,7 +3316,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.61.2",
 ]
