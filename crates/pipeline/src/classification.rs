@@ -20,11 +20,10 @@
 //! See `docs/spec/interfaces/pipeline-execution.md` §Classification for the
 //! full contract, safety-override algorithm, and scope threshold rules.
 
-use globset::Glob;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::context::ClassificationResult;
+use crate::context::{glob_matches_any, ClassificationResult};
 
 // ─── Supporting types ────────────────────────────────────────────────────────
 
@@ -137,26 +136,14 @@ pub fn apply_safety_override(
     mut result: ClassificationResult,
     registry: &SafetyCriticalRegistry,
 ) -> ClassificationResult {
-    if result.safety_affecting {
-        return result;
-    }
-    let paths: Vec<&str> = result.affected_modules.iter().map(|p| p.as_str()).collect();
-    for pattern in &registry.patterns {
-        match Glob::new(pattern) {
-            Ok(glob) => {
-                let matcher = glob.compile_matcher();
-                if paths.iter().any(|p| matcher.is_match(p)) {
-                    result.safety_affecting = true;
-                    return result;
-                }
-            }
-            Err(_) => {
-                tracing::warn!(
-                    pattern = %pattern,
-                    "invalid glob pattern in safety-critical registry — skipped"
-                );
-            }
-        }
+    if !result.safety_affecting
+        && glob_matches_any(
+            &registry.patterns,
+            result.affected_modules.iter().map(|p| p.as_str()),
+            "safety-critical registry",
+        )
+    {
+        result.safety_affecting = true;
     }
     result
 }

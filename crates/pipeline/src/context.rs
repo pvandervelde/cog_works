@@ -657,8 +657,15 @@ pub fn enforce_scenario_holdout(
 /// Returns `true` if any glob in `patterns` matches any string in `values`.
 ///
 /// Invalid glob patterns are skipped with a `tracing::warn!` rather than
-/// panicking, to keep context assembly infallible.
-fn glob_matches_any<'a>(patterns: &[String], values: impl Iterator<Item = &'a str>) -> bool {
+/// panicking, to keep matching infallible.
+///
+/// `context_label` is included in the warning message to identify which
+/// configuration source produced the invalid pattern.
+pub(crate) fn glob_matches_any<'a>(
+    patterns: &[String],
+    values: impl Iterator<Item = &'a str>,
+    context_label: &str,
+) -> bool {
     let values: Vec<&str> = values.collect();
     for pattern in patterns {
         match Glob::new(pattern) {
@@ -671,7 +678,8 @@ fn glob_matches_any<'a>(patterns: &[String], values: impl Iterator<Item = &'a st
             Err(_) => {
                 tracing::warn!(
                     pattern = %pattern,
-                    "invalid glob pattern in context pack trigger — skipped"
+                    context = %context_label,
+                    "invalid glob pattern — skipped"
                 );
             }
         }
@@ -692,6 +700,7 @@ fn pack_trigger_matches(
     if glob_matches_any(
         &pack.trigger.label_patterns,
         active_labels.iter().map(String::as_str),
+        "context pack trigger",
     ) {
         return true;
     }
@@ -701,6 +710,7 @@ fn pack_trigger_matches(
             .affected_modules
             .iter()
             .map(ArtifactPath::as_str),
+        "context pack trigger",
     )
 }
 
