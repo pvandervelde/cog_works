@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::context::{glob_matches_any, ClassificationResult};
+use crate::identifiers::ArtifactPath;
 
 // ─── Supporting types ────────────────────────────────────────────────────────
 
@@ -46,7 +47,7 @@ use crate::context::{glob_matches_any, ClassificationResult};
 /// startup by the `PipelineConfigurationLoader` (see `knowledge` module). The
 /// `cli` crate constructs this value from the loaded configuration.
 ///
-/// See `docs/spec/interfaces/pipeline-execution.md` §SafetyCriticalRegistry.
+/// See `docs/spec/interfaces/pipeline-execution.md` §[`SafetyCriticalRegistry`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SafetyCriticalRegistry {
     /// Glob patterns for module paths that are safety-critical.
@@ -59,6 +60,7 @@ pub struct SafetyCriticalRegistry {
 
 impl SafetyCriticalRegistry {
     /// Creates an empty registry (no safety-critical modules).
+    #[must_use]
     pub fn empty() -> Self {
         Self::default()
     }
@@ -67,6 +69,7 @@ impl SafetyCriticalRegistry {
     ///
     /// Patterns are stored as-is; they are matched at call time by
     /// [`apply_safety_override`].
+    #[must_use]
     pub fn from_patterns(patterns: Vec<String>) -> Self {
         Self { patterns }
     }
@@ -81,7 +84,7 @@ impl SafetyCriticalRegistry {
 /// escalate with a message asking the author to split the work into smaller
 /// pieces before requeueing with the `cogworks:run` label.
 ///
-/// See `docs/spec/interfaces/pipeline-execution.md` §EscalationResult.
+/// See `docs/spec/interfaces/pipeline-execution.md` §[`EscalationResult`].
 #[derive(Debug, Clone, Error, Serialize, Deserialize)]
 #[error(
     "Work item scope ({estimated_scope}) exceeds the configured threshold ({threshold}); \
@@ -139,7 +142,7 @@ pub fn apply_safety_override(
     if !result.safety_affecting
         && glob_matches_any(
             &registry.patterns,
-            result.affected_modules.iter().map(|p| p.as_str()),
+            result.affected_modules.iter().map(ArtifactPath::as_str),
             "safety-critical registry",
         )
     {
@@ -153,7 +156,7 @@ pub fn apply_safety_override(
 /// Validates that the work item's estimated scope is within the configured
 /// single-work-item size limit.
 ///
-/// CogWorks is designed to process focused, well-scoped work items. Items
+/// `CogWorks` is designed to process focused, well-scoped work items. Items
 /// that are too large cannot be reviewed safely and should be split by the
 /// author before requeueing.
 ///
