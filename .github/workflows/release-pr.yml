@@ -42,7 +42,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install cargo binstall
-        uses: cargo-bins/cargo-binstall@44018a4d9c280bea4bd3f908fabe5a0909f89f92 # main
+        uses: cargo-bins/cargo-binstall@e00d2c94cc0067b77737821097a62d91c0301baa # main
 
       - name: Install Conventional Commits Next Version
         run: cargo binstall -y conventional_commits_next_version

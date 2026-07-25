@@ -103,7 +103,7 @@ jobs:
 
             - name: Install cargo binstall
               if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
-              uses: cargo-bins/cargo-binstall@44018a4d9c280bea4bd3f908fabe5a0909f89f92 # main
+              uses: cargo-bins/cargo-binstall@e00d2c94cc0067b77737821097a62d91c0301baa # main
 
             - name: Install tools
               if: steps.check_command.outputs.valid == 'true' && steps.validate.outputs.valid_pr == 'true'
