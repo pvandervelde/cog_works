@@ -23,7 +23,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::context::ClassificationResult;
+use crate::context::{ClassificationResult, glob_matches_any};
+use crate::identifiers::ArtifactPath;
 
 // ─── Supporting types ────────────────────────────────────────────────────────
 
@@ -46,7 +47,7 @@ use crate::context::ClassificationResult;
 /// startup by the `PipelineConfigurationLoader` (see `knowledge` module). The
 /// `cli` crate constructs this value from the loaded configuration.
 ///
-/// See `docs/spec/interfaces/pipeline-execution.md` §SafetyCriticalRegistry.
+/// See `docs/spec/interfaces/pipeline-execution.md` §[`SafetyCriticalRegistry`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SafetyCriticalRegistry {
     /// Glob patterns for module paths that are safety-critical.
@@ -59,6 +60,7 @@ pub struct SafetyCriticalRegistry {
 
 impl SafetyCriticalRegistry {
     /// Creates an empty registry (no safety-critical modules).
+    #[must_use]
     pub fn empty() -> Self {
         Self::default()
     }
@@ -67,6 +69,7 @@ impl SafetyCriticalRegistry {
     ///
     /// Patterns are stored as-is; they are matched at call time by
     /// [`apply_safety_override`].
+    #[must_use]
     pub fn from_patterns(patterns: Vec<String>) -> Self {
         Self { patterns }
     }
@@ -81,7 +84,7 @@ impl SafetyCriticalRegistry {
 /// escalate with a message asking the author to split the work into smaller
 /// pieces before requeueing with the `cogworks:run` label.
 ///
-/// See `docs/spec/interfaces/pipeline-execution.md` §EscalationResult.
+/// See `docs/spec/interfaces/pipeline-execution.md` §[`EscalationResult`].
 #[derive(Debug, Clone, Error, Serialize, Deserialize)]
 #[error(
     "Work item scope ({estimated_scope}) exceeds the configured threshold ({threshold}); \
@@ -133,10 +136,19 @@ impl EscalationResult {
 /// `docs/spec/interfaces/pipeline-execution.md §apply_safety_override`
 #[must_use]
 pub fn apply_safety_override(
-    _result: ClassificationResult,
-    _registry: &SafetyCriticalRegistry,
+    mut result: ClassificationResult,
+    registry: &SafetyCriticalRegistry,
 ) -> ClassificationResult {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §apply_safety_override")
+    if !result.safety_affecting
+        && glob_matches_any(
+            &registry.patterns,
+            result.affected_modules.iter().map(ArtifactPath::as_str),
+            "safety-critical registry",
+        )
+    {
+        result.safety_affecting = true;
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +156,7 @@ pub fn apply_safety_override(
 /// Validates that the work item's estimated scope is within the configured
 /// single-work-item size limit.
 ///
-/// CogWorks is designed to process focused, well-scoped work items. Items
+/// `CogWorks` is designed to process focused, well-scoped work items. Items
 /// that are too large cannot be reviewed safely and should be split by the
 /// author before requeueing.
 ///
@@ -168,8 +180,427 @@ pub fn apply_safety_override(
 ///
 /// `docs/spec/interfaces/pipeline-execution.md §check_scope_threshold`
 pub fn check_scope_threshold(
-    _result: ClassificationResult,
-    _threshold: u32,
+    result: ClassificationResult,
+    threshold: u32,
 ) -> Result<ClassificationResult, EscalationResult> {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §check_scope_threshold")
+    if result.estimated_scope <= threshold {
+        Ok(result)
+    } else {
+        Err(EscalationResult {
+            estimated_scope: result.estimated_scope,
+            threshold,
+        })
+    }
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::*;
+    use crate::context::TaskType;
+    use crate::identifiers::ArtifactPath;
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    fn ap(s: &str) -> ArtifactPath {
+        ArtifactPath::new(s).expect("test setup: valid ArtifactPath")
+    }
+
+    fn make_result(
+        safety_affecting: bool,
+        estimated_scope: u32,
+        affected_modules: Vec<ArtifactPath>,
+    ) -> ClassificationResult {
+        ClassificationResult {
+            task_type: TaskType::Feature,
+            safety_affecting,
+            estimated_scope,
+            affected_modules,
+        }
+    }
+
+    // ─── Tier 1: Specification Tests ─────────────────────────────────────────
+
+    /// ASSERT-CLASS-002: LLM says false + module matches registry → must be true.
+    #[test]
+    fn test_apply_safety_override_llm_false_registry_match_returns_true() {
+        let result = make_result(false, 3, vec![ap("safety/brake.rs")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/**".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            output.safety_affecting,
+            "ASSERT-CLASS-002: safety_affecting must be overridden to true when module matches registry"
+        );
+    }
+
+    /// ASSERT-CLASS-003: LLM says false + no modules match registry → must stay false.
+    #[test]
+    fn test_apply_safety_override_llm_false_no_registry_match_stays_false() {
+        let result = make_result(false, 3, vec![ap("docs/readme.md")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/**".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            !output.safety_affecting,
+            "ASSERT-CLASS-003: safety_affecting must stay false when no module matches registry"
+        );
+    }
+
+    /// ASSERT-CLASS-004: estimated scope exceeds threshold → Err(EscalationResult), not Ok.
+    #[test]
+    fn test_check_scope_threshold_scope_exceeds_threshold_produces_escalation() {
+        let result = make_result(false, 8, vec![]);
+
+        let output = check_scope_threshold(result, 5);
+
+        assert!(
+            output.is_err(),
+            "ASSERT-CLASS-004: must return Err(EscalationResult) when scope exceeds threshold"
+        );
+    }
+
+    // ─── Tier 2: Adversarial — apply_safety_override ─────────────────────────
+
+    /// Override is one-way: true must not be cleared even when no module matches.
+    #[test]
+    fn test_apply_safety_override_llm_true_no_match_stays_true() {
+        let result = make_result(true, 3, vec![ap("docs/readme.md")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/**".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            output.safety_affecting,
+            "override is one-way (false→true only): true must remain true when no module matches"
+        );
+    }
+
+    /// true stays true when a module matches (no toggling back to false via match).
+    #[test]
+    fn test_apply_safety_override_llm_true_with_match_stays_true() {
+        let result = make_result(true, 3, vec![ap("safety/brake.rs")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/**".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            output.safety_affecting,
+            "safety_affecting must remain true when already true and module matches"
+        );
+    }
+
+    /// Empty registry must never override any module path.
+    #[test]
+    fn test_apply_safety_override_empty_registry_false_stays_false() {
+        let result = make_result(false, 3, vec![ap("safety/brake.rs")]);
+        let registry = SafetyCriticalRegistry::empty();
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            !output.safety_affecting,
+            "empty registry must never override safety_affecting to true"
+        );
+    }
+
+    /// No affected modules means there is nothing to match against.
+    #[test]
+    fn test_apply_safety_override_empty_modules_false_stays_false() {
+        let result = make_result(false, 3, vec![]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/**".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            !output.safety_affecting,
+            "empty affected_modules list must never trigger safety override"
+        );
+    }
+
+    /// Multiple patterns: first doesn't match, second does → must still return true.
+    #[test]
+    fn test_apply_safety_override_multiple_patterns_only_second_matches_returns_true() {
+        let result = make_result(false, 3, vec![ap("critical/motor_controller.rs")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec![
+            "safety/**".to_string(),
+            "critical/**".to_string(),
+        ]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            output.safety_affecting,
+            "must set true when only the second of multiple patterns matches"
+        );
+    }
+
+    /// Invalid glob pattern must be skipped gracefully — no panic.
+    #[test]
+    fn test_apply_safety_override_invalid_glob_does_not_panic() {
+        let result = make_result(false, 3, vec![ap("safety/brake.rs")]);
+        // `[invalid` is an unclosed character class — not a valid glob.
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["[invalid".to_string()]);
+
+        // Must not panic; invalid patterns are skipped with tracing::warn!
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            !output.safety_affecting,
+            "invalid glob must be skipped; with no valid pattern matching, false stays false"
+        );
+    }
+
+    /// Invalid glob alongside a matching valid glob: valid one still triggers override.
+    #[test]
+    fn test_apply_safety_override_invalid_glob_valid_match_still_returns_true() {
+        let result = make_result(false, 3, vec![ap("safety/brake.rs")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec![
+            "[invalid".to_string(),
+            "safety/**".to_string(),
+        ]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            output.safety_affecting,
+            "a valid matching pattern must still trigger override even when another pattern is invalid"
+        );
+    }
+
+    /// `**` glob must match paths at arbitrary nesting depth.
+    #[test]
+    fn test_apply_safety_override_double_star_matches_nested_path() {
+        let result = make_result(false, 3, vec![ap("safety/subsystems/brake/controller.rs")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/**".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            output.safety_affecting,
+            "** pattern must match paths nested arbitrarily deep under the prefix"
+        );
+    }
+
+    /// Unrelated path must not match a safety pattern.
+    #[test]
+    fn test_apply_safety_override_non_matching_pattern_stays_false() {
+        let result = make_result(false, 3, vec![ap("src/utils/logging.rs")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/*".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            !output.safety_affecting,
+            "a path outside the safety/** subtree must not trigger override"
+        );
+    }
+
+    /// All non-safety fields are preserved verbatim when override fires.
+    #[test]
+    fn test_apply_safety_override_other_fields_preserved_on_override() {
+        let result = make_result(false, 7, vec![ap("safety/brake.rs"), ap("src/lib.rs")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/**".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert_eq!(
+            output.estimated_scope, 7,
+            "estimated_scope must not be modified"
+        );
+        assert_eq!(
+            output.task_type,
+            TaskType::Feature,
+            "task_type must not be modified"
+        );
+        assert_eq!(
+            output.affected_modules.len(),
+            2,
+            "affected_modules length must not be modified"
+        );
+        assert_eq!(
+            output.affected_modules[0].as_str(),
+            "safety/brake.rs",
+            "first module path must be unchanged"
+        );
+    }
+
+    /// All fields are preserved verbatim when no override fires.
+    #[test]
+    fn test_apply_safety_override_other_fields_preserved_when_not_overridden() {
+        let result = make_result(false, 4, vec![ap("docs/readme.md")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/**".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert_eq!(
+            output.estimated_scope, 4,
+            "estimated_scope must not be modified"
+        );
+        assert_eq!(
+            output.affected_modules[0].as_str(),
+            "docs/readme.md",
+            "module path must be unchanged"
+        );
+    }
+
+    /// Exact literal pattern (no wildcards) matches the exact same path.
+    #[test]
+    fn test_apply_safety_override_exact_path_match_returns_true() {
+        let result = make_result(false, 3, vec![ap("safety/brake.rs")]);
+        let registry = SafetyCriticalRegistry::from_patterns(vec!["safety/brake.rs".to_string()]);
+
+        let output = apply_safety_override(result, &registry);
+
+        assert!(
+            output.safety_affecting,
+            "exact literal pattern must match the exact path"
+        );
+    }
+
+    // ─── Tier 2: Adversarial — check_scope_threshold ─────────────────────────
+
+    /// scope strictly below threshold → Ok (proceed).
+    #[test]
+    fn test_check_scope_threshold_scope_below_threshold_returns_ok() {
+        let result = make_result(false, 4, vec![]);
+
+        let output = check_scope_threshold(result, 5);
+
+        assert!(output.is_ok(), "scope below threshold must return Ok");
+    }
+
+    /// scope == threshold (boundary) → Ok (≤ semantics, not <).
+    #[test]
+    fn test_check_scope_threshold_scope_at_threshold_returns_ok() {
+        let result = make_result(false, 5, vec![]);
+
+        let output = check_scope_threshold(result, 5);
+
+        assert!(
+            output.is_ok(),
+            "scope equal to threshold must return Ok (≤ semantics)"
+        );
+    }
+
+    /// scope == threshold + 1 → Err (stub-killing: hardcoded Ok would fail here).
+    #[test]
+    fn test_check_scope_threshold_scope_one_above_threshold_returns_err() {
+        let result = make_result(false, 6, vec![]);
+
+        let output = check_scope_threshold(result, 5);
+
+        assert!(output.is_err(), "scope one above threshold must return Err");
+    }
+
+    /// EscalationResult carries the actual input scope value, not a default.
+    #[test]
+    fn test_check_scope_threshold_escalation_has_correct_scope_field() {
+        let result = make_result(false, 8, vec![]);
+
+        let err =
+            check_scope_threshold(result, 5).expect_err("must be Err when scope exceeds threshold");
+
+        assert_eq!(
+            err.estimated_scope, 8,
+            "EscalationResult.estimated_scope must equal the input scope"
+        );
+    }
+
+    /// EscalationResult carries the actual threshold value, not a default.
+    #[test]
+    fn test_check_scope_threshold_escalation_has_correct_threshold_field() {
+        let result = make_result(false, 8, vec![]);
+
+        let err =
+            check_scope_threshold(result, 5).expect_err("must be Err when scope exceeds threshold");
+
+        assert_eq!(
+            err.threshold, 5,
+            "EscalationResult.threshold must equal the configured threshold"
+        );
+    }
+
+    /// threshold=0, scope=1 → Err: any nonzero scope exceeds a zero threshold.
+    #[test]
+    fn test_check_scope_threshold_zero_threshold_nonzero_scope_returns_err() {
+        let result = make_result(false, 1, vec![]);
+
+        let output = check_scope_threshold(result, 0);
+
+        assert!(
+            output.is_err(),
+            "any nonzero scope must exceed a zero threshold"
+        );
+    }
+
+    /// threshold=0, scope=0 → Ok: 0 ≤ 0 satisfies the invariant.
+    #[test]
+    fn test_check_scope_threshold_zero_threshold_zero_scope_returns_ok() {
+        let result = make_result(false, 0, vec![]);
+
+        let output = check_scope_threshold(result, 0);
+
+        assert!(
+            output.is_ok(),
+            "scope=0 with threshold=0 must return Ok (0 ≤ 0)"
+        );
+    }
+
+    /// Ok result is identical to the input — no fields are mutated.
+    #[test]
+    fn test_check_scope_threshold_ok_result_is_unchanged() {
+        let result = make_result(true, 3, vec![ap("src/lib.rs")]);
+
+        let ok = check_scope_threshold(result, 5).expect("must be Ok when scope ≤ threshold");
+
+        assert_eq!(
+            ok.estimated_scope, 3,
+            "Ok result must preserve estimated_scope"
+        );
+        assert!(
+            ok.safety_affecting,
+            "Ok result must preserve safety_affecting"
+        );
+        assert_eq!(
+            ok.affected_modules[0].as_str(),
+            "src/lib.rs",
+            "Ok result must preserve affected_modules"
+        );
+    }
+
+    /// EscalationResult::description() contains the numeric scope value.
+    #[test]
+    fn test_check_scope_threshold_escalation_description_mentions_scope_value() {
+        let result = make_result(false, 9, vec![]);
+
+        let err =
+            check_scope_threshold(result, 4).expect_err("must be Err when scope exceeds threshold");
+        let desc = err.description();
+
+        assert!(
+            desc.contains("9"),
+            "description must contain the scope value (9), got: {desc}"
+        );
+    }
+
+    /// EscalationResult::description() contains the numeric threshold value.
+    #[test]
+    fn test_check_scope_threshold_escalation_description_mentions_threshold_value() {
+        let result = make_result(false, 9, vec![]);
+
+        let err =
+            check_scope_threshold(result, 4).expect_err("must be Err when scope exceeds threshold");
+        let desc = err.description();
+
+        assert!(
+            desc.contains("4"),
+            "description must contain the threshold value (4), got: {desc}"
+        );
+    }
 }

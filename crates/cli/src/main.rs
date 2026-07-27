@@ -61,10 +61,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-// In opentelemetry_sdk 0.27.x, the concrete tracer provider struct is
-// `TracerProvider` in the `trace` module (renamed from `SdkTracerProvider` in
-// earlier 0.24–0.26 versions). Update this import if the SDK is upgraded.
-use opentelemetry_sdk::trace::TracerProvider;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 
 use pipeline::{BranchName, PipelineName, QueueEventConfig, WebhookConfig};
 
@@ -206,7 +203,7 @@ impl std::fmt::Debug for CogWorksConfig {
 ///
 /// ## Return Value
 ///
-/// Returns the [`TracerProvider`] so the caller can invoke
+/// Returns the [`SdkTracerProvider`] so the caller can invoke
 /// `.shutdown()` on clean exit to flush the final batch of spans.
 ///
 /// # Errors
@@ -215,7 +212,7 @@ impl std::fmt::Debug for CogWorksConfig {
 /// misconfigured `otlp_endpoint` or a missing `opentelemetry-otlp` feature).
 ///
 /// See `docs/spec/interfaces/infrastructure.md` §Observability Wiring.
-fn init_observability(_otlp_endpoint: &str) -> Result<TracerProvider> {
+fn init_observability(_otlp_endpoint: &str) -> Result<SdkTracerProvider> {
     todo!("init_observability — see docs/spec/interfaces/infrastructure.md §Observability Wiring")
 }
 
