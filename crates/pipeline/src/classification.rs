@@ -23,7 +23,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::context::{glob_matches_any, ClassificationResult};
+use crate::context::{ClassificationResult, glob_matches_any};
 use crate::identifiers::ArtifactPath;
 
 // ─── Supporting types ────────────────────────────────────────────────────────
