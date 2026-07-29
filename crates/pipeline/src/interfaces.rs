@@ -124,3 +124,7 @@ pub fn validate_cross_domain_constraints(
 ) -> Vec<ConstraintFinding> {
     todo!("See docs/spec/interfaces/pipeline-execution.md §validate_cross_domain_constraints")
 }
+
+#[cfg(test)]
+#[path = "interfaces_tests.rs"]
+mod tests;

@@ -218,3 +218,7 @@ pub fn aggregate_review_results(
 ) -> AggregateReviewDecision {
     todo!("See docs/spec/interfaces/pipeline-execution.md §aggregate_review_results")
 }
+
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod tests;
