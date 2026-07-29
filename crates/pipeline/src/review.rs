@@ -30,7 +30,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{execution::EscalationReason, identifiers::ArtifactPath, types::DiagnosticSeverity};
+use crate::{
+    execution::EscalationReason,
+    identifiers::{ArtifactPath, NodeId},
+    types::{DiagnosticSeverity, TokenCost},
+};
 
 // ─── Review types ─────────────────────────────────────────────────────────────
 
@@ -210,13 +214,87 @@ pub enum AggregateReviewDecision {
 /// `docs/spec/interfaces/pipeline-execution.md §aggregate_review_results`
 #[must_use]
 pub fn aggregate_review_results(
-    _quality: ReviewResult,
-    _architecture: ReviewResult,
-    _security: ReviewResult,
-    _remediation_count: u32,
-    _limit: u32,
+    quality: ReviewResult,
+    architecture: ReviewResult,
+    security: ReviewResult,
+    remediation_count: u32,
+    limit: u32,
 ) -> AggregateReviewDecision {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §aggregate_review_results")
+    let blocking: Vec<ReviewFinding> = quality
+        .findings
+        .into_iter()
+        .chain(architecture.findings)
+        .chain(security.findings)
+        .filter(|f| f.severity == DiagnosticSeverity::Blocking)
+        .collect();
+
+    if blocking.is_empty() {
+        return AggregateReviewDecision::Proceed;
+    }
+
+    if remediation_count >= limit {
+        AggregateReviewDecision::Escalate(build_escalation_reason(
+            &blocking,
+            remediation_count,
+            limit,
+        ))
+    } else {
+        AggregateReviewDecision::Remediate(blocking)
+    }
+}
+
+/// Placeholder node identifier used in [`EscalationReason::node_id`] when
+/// escalating from [`aggregate_review_results`].
+///
+/// ## Known spec gap
+///
+/// `aggregate_review_results` has no `NodeId` parameter to source the real
+/// review-gate node identity from (the function aggregates three independent
+/// `ReviewResult`s and is not itself scoped to a single node instance). Until
+/// an architecture decision supplies the caller's `NodeId`, this fixed literal
+/// stands in for "the review gate" so `EscalationReason` remains constructible
+/// without an `Option`. Non-empty by construction, so `NodeId::new` can never
+/// return `None` here.
+const REVIEW_GATE_NODE_ID: &str = "review-gate";
+
+/// Builds the [`EscalationReason`] returned when the rework budget is
+/// exhausted.
+///
+/// `description` lists every blocking finding (pass, severity, and
+/// description text) so a human reviewer has full context without needing to
+/// re-run the review passes. `node_id`, `attempt_count`, `rework_count`, and
+/// `cost_spent` have no equivalent input on `aggregate_review_results`'
+/// signature (see the module-level spec gap note); `rework_count` is
+/// populated from `remediation_count` since the two concepts are documented
+/// as equivalent ("rework cycles already applied"), while `attempt_count` and
+/// `cost_spent` fall back to their zero values.
+fn build_escalation_reason(
+    blocking: &[ReviewFinding],
+    remediation_count: u32,
+    limit: u32,
+) -> EscalationReason {
+    let listing = blocking
+        .iter()
+        .map(|f| format!("[{}/{:?}] {}", f.pass, f.severity, f.description))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let description = format!(
+        "Review escalated: {} blocking finding(s) remain after {remediation_count} remediation \
+         attempt(s) (limit {limit}): {listing}",
+        blocking.len(),
+    );
+
+    let Some(node_id) = NodeId::new(REVIEW_GATE_NODE_ID) else {
+        unreachable!("REVIEW_GATE_NODE_ID literal is never empty")
+    };
+
+    EscalationReason {
+        description,
+        node_id,
+        attempt_count: 0,
+        rework_count: remediation_count,
+        cost_spent: TokenCost::zero(),
+    }
 }
 
 #[cfg(test)]
