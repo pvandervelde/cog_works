@@ -26,6 +26,7 @@
 //! for the full contract, matching algorithm, and examples.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     domain_services::{InterfaceDefinition, InterfaceMap},
@@ -119,10 +120,113 @@ pub struct ConstraintFinding {
 /// `docs/spec/interfaces/pipeline-execution.md §validate_cross_domain_constraints`
 #[must_use]
 pub fn validate_cross_domain_constraints(
-    _contracts: &[InterfaceDefinition],
-    _extracted: &InterfaceMap,
+    contracts: &[InterfaceDefinition],
+    extracted: &InterfaceMap,
 ) -> Vec<ConstraintFinding> {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §validate_cross_domain_constraints")
+    contracts
+        .iter()
+        .flat_map(|contract| validate_single_contract(contract, extracted))
+        .collect()
+}
+
+/// Marker used as `parameter_name` when the whole interface is missing from
+/// `extracted`, or when a non-object schema mismatches as a whole (there is
+/// no single "field" to name in either case).
+const MISSING_INTERFACE_MARKER: &str = "<interface>";
+
+/// Marker used as `parameter_name` when a non-object (scalar/array/null)
+/// schema mismatches as a whole. See the module doc comment and
+/// `interfaces_tests.rs` for why non-object schemas have no defined "field".
+const WHOLE_SCHEMA_MARKER: &str = "<schema>";
+
+/// Sentinel `actual_value` for an interface or field that is absent from
+/// `extracted`.
+const NOT_PRESENT_MARKER: &str = "<not present>";
+
+/// Validates one registry contract against `extracted`, independently of any
+/// other contract (duplicate `InterfaceId`s in `contracts` are therefore each
+/// validated on their own, per the algorithm's "for each contracts[i]"
+/// wording).
+fn validate_single_contract(
+    contract: &InterfaceDefinition,
+    extracted: &InterfaceMap,
+) -> Vec<ConstraintFinding> {
+    let Some(found) = extracted.entries.iter().find(|e| e.id == contract.id) else {
+        return vec![missing_interface_finding(contract)];
+    };
+    compare_schemas(contract, found)
+}
+
+/// Builds the `Blocking` finding emitted when `contract`'s `InterfaceId` has
+/// no matching entry in `extracted`.
+fn missing_interface_finding(contract: &InterfaceDefinition) -> ConstraintFinding {
+    ConstraintFinding {
+        interface_id: contract.id.clone(),
+        parameter_name: MISSING_INTERFACE_MARKER.to_string(),
+        expected_value: contract.schema.to_string(),
+        actual_value: NOT_PRESENT_MARKER.to_string(),
+        owning_domain: contract.domain.clone(),
+        violating_domain: contract.domain.clone(),
+        severity: DiagnosticSeverity::Blocking,
+    }
+}
+
+/// Compares `contract.schema` against `found.schema`. For a JSON object,
+/// enumerates the contract's top-level keys and compares each one's value
+/// (a missing top-level key in `found.schema` is reported the same way as a
+/// missing interface). For any other JSON value kind (scalar, array, null),
+/// compares the whole value and emits at most one finding.
+fn compare_schemas(contract: &InterfaceDefinition, found: &InterfaceDefinition) -> Vec<ConstraintFinding> {
+    match &contract.schema {
+        Value::Object(fields) => fields
+            .iter()
+            .filter_map(|(key, expected)| field_mismatch(contract, found, key, expected))
+            .collect(),
+        expected if *expected == found.schema => vec![],
+        expected => vec![whole_schema_mismatch(contract, found, expected)],
+    }
+}
+
+/// Returns a finding when the top-level field `key` differs between
+/// `contract.schema` and `found.schema` (or is absent from `found.schema`);
+/// `None` when the field matches.
+fn field_mismatch(
+    contract: &InterfaceDefinition,
+    found: &InterfaceDefinition,
+    key: &str,
+    expected: &Value,
+) -> Option<ConstraintFinding> {
+    let actual = found.schema.get(key);
+    if actual == Some(expected) {
+        return None;
+    }
+    Some(ConstraintFinding {
+        interface_id: contract.id.clone(),
+        parameter_name: key.to_string(),
+        expected_value: expected.to_string(),
+        actual_value: actual.map_or_else(|| NOT_PRESENT_MARKER.to_string(), Value::to_string),
+        owning_domain: contract.domain.clone(),
+        violating_domain: found.domain.clone(),
+        severity: DiagnosticSeverity::Blocking,
+    })
+}
+
+/// Builds the finding emitted when a non-object `contract.schema` differs
+/// from `found.schema` as a whole.
+fn whole_schema_mismatch(
+    contract: &InterfaceDefinition,
+    found: &InterfaceDefinition,
+    expected: &Value,
+) -> ConstraintFinding {
+    ConstraintFinding {
+        interface_id: contract.id.clone(),
+        parameter_name: WHOLE_SCHEMA_MARKER.to_string(),
+        expected_value: expected.to_string(),
+        actual_value: found.schema.to_string(),
+        owning_domain: contract.domain.clone(),
+        violating_domain: found.domain.clone(),
+        severity: DiagnosticSeverity::Blocking,
+    }
 }
 
 #[cfg(test)]
