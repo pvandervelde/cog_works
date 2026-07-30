@@ -176,7 +176,10 @@ fn missing_interface_finding(contract: &InterfaceDefinition) -> ConstraintFindin
 /// (a missing top-level key in `found.schema` is reported the same way as a
 /// missing interface). For any other JSON value kind (scalar, array, null),
 /// compares the whole value and emits at most one finding.
-fn compare_schemas(contract: &InterfaceDefinition, found: &InterfaceDefinition) -> Vec<ConstraintFinding> {
+fn compare_schemas(
+    contract: &InterfaceDefinition,
+    found: &InterfaceDefinition,
+) -> Vec<ConstraintFinding> {
     match &contract.schema {
         Value::Object(fields) => fields
             .iter()
