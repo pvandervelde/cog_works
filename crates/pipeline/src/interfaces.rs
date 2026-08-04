@@ -160,13 +160,35 @@ fn validate_single_contract(
 /// Builds the `Blocking` finding emitted when `contract`'s `InterfaceId` has
 /// no matching entry in `extracted`.
 fn missing_interface_finding(contract: &InterfaceDefinition) -> ConstraintFinding {
+    blocking_finding(
+        contract,
+        &contract.domain,
+        MISSING_INTERFACE_MARKER,
+        contract.schema.to_string(),
+        NOT_PRESENT_MARKER.to_string(),
+    )
+}
+
+/// Constructs a [`DiagnosticSeverity::Blocking`] [`ConstraintFinding`]
+/// attributed to `contract`'s [`InterfaceId`], with `owning_domain` always
+/// `contract.domain` per the registry-is-authoritative rule. Shared by
+/// [`missing_interface_finding`], [`field_mismatch`], and
+/// [`whole_schema_mismatch`], which differ only in which domain violated the
+/// contract and how the mismatch is described.
+fn blocking_finding(
+    contract: &InterfaceDefinition,
+    violating_domain: &DomainServiceName,
+    parameter_name: &str,
+    expected_value: String,
+    actual_value: String,
+) -> ConstraintFinding {
     ConstraintFinding {
         interface_id: contract.id.clone(),
-        parameter_name: MISSING_INTERFACE_MARKER.to_string(),
-        expected_value: contract.schema.to_string(),
-        actual_value: NOT_PRESENT_MARKER.to_string(),
+        parameter_name: parameter_name.to_string(),
+        expected_value,
+        actual_value,
         owning_domain: contract.domain.clone(),
-        violating_domain: contract.domain.clone(),
+        violating_domain: violating_domain.clone(),
         severity: DiagnosticSeverity::Blocking,
     }
 }
@@ -203,15 +225,13 @@ fn field_mismatch(
     if actual == Some(expected) {
         return None;
     }
-    Some(ConstraintFinding {
-        interface_id: contract.id.clone(),
-        parameter_name: key.to_string(),
-        expected_value: expected.to_string(),
-        actual_value: actual.map_or_else(|| NOT_PRESENT_MARKER.to_string(), Value::to_string),
-        owning_domain: contract.domain.clone(),
-        violating_domain: found.domain.clone(),
-        severity: DiagnosticSeverity::Blocking,
-    })
+    Some(blocking_finding(
+        contract,
+        &found.domain,
+        key,
+        expected.to_string(),
+        actual.map_or_else(|| NOT_PRESENT_MARKER.to_string(), Value::to_string),
+    ))
 }
 
 /// Builds the finding emitted when a non-object `contract.schema` differs
@@ -221,15 +241,13 @@ fn whole_schema_mismatch(
     found: &InterfaceDefinition,
     expected: &Value,
 ) -> ConstraintFinding {
-    ConstraintFinding {
-        interface_id: contract.id.clone(),
-        parameter_name: WHOLE_SCHEMA_MARKER.to_string(),
-        expected_value: expected.to_string(),
-        actual_value: found.schema.to_string(),
-        owning_domain: contract.domain.clone(),
-        violating_domain: found.domain.clone(),
-        severity: DiagnosticSeverity::Blocking,
-    }
+    blocking_finding(
+        contract,
+        &found.domain,
+        WHOLE_SCHEMA_MARKER,
+        expected.to_string(),
+        found.schema.to_string(),
+    )
 }
 
 #[cfg(test)]
