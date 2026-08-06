@@ -148,6 +148,20 @@ fn test_review_result_blocking_findings_empty_iterator_when_no_blocking() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Contract tests — ReviewPass::Display
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Mutation-kill: `ReviewPass::fmt` must actually write the variant name, not
+/// silently succeed with an empty/default write. Pins the exact string for
+/// each variant so a no-op `Ok(Default::default())` implementation fails.
+#[test]
+fn test_review_pass_display_writes_variant_name() {
+    assert_eq!(ReviewPass::Quality.to_string(), "Quality");
+    assert_eq!(ReviewPass::Architecture.to_string(), "Architecture");
+    assert_eq!(ReviewPass::Security.to_string(), "Security");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Tier 1: Specification tests
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -375,6 +389,21 @@ fn test_aggregate_review_results_escalate_description_lists_all_blocking_finding
             assert!(
                 reason.description.contains("UNIQUE_SECURITY_MARKER"),
                 "description must mention the Security blocking finding: {}",
+                reason.description
+            );
+            assert!(
+                reason.description.contains("Quality"),
+                "description must name the originating pass (Quality): {}",
+                reason.description
+            );
+            assert!(
+                reason.description.contains("Architecture"),
+                "description must name the originating pass (Architecture): {}",
+                reason.description
+            );
+            assert!(
+                reason.description.contains("Security"),
+                "description must name the originating pass (Security): {}",
                 reason.description
             );
         }
