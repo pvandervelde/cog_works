@@ -27,6 +27,39 @@
 //! helpers it and `validate_single_contract` rely on): a ~10,000-level-deep
 //! nested `Value` in an `extracted: &InterfaceMap` schema crashes the process
 //! before any `catch_unwind` boundary can intervene.
+//!
+//! ## Scope and Follow-Up
+//!
+//! This is **defense-in-depth**, not the complete fix. The `pipeline` crate
+//! is I/O-free and only ever sees a `Value` after it has already been fully
+//! deserialized elsewhere, so the earliest this module can intervene is
+//! post-parse. The correct place to reject an adversarially deep payload is
+//! at the Extension API deserialization boundary — where raw bytes from a
+//! domain-service response first become a `Value` tree — in `extension-api`'s
+//! transport implementations (`HttpTransport::send`,
+//! `UnixSocketTransport::send`, `ExtensionApiClient::extract_interfaces`),
+//! and in the future `InterfaceRegistryLoader` file adapter. All of these are
+//! unimplemented (`todo!()`) as of this writing; when they are built, they
+//! should reuse [`MAX_SCHEMA_COMPARISON_DEPTH`] and [`exceeds_max_depth`] (or
+//! an equivalent streaming/depth-aware deserializer) to reject oversized
+//! payloads before a full `Value` tree is even materialized.
+//!
+//! Two related risks are explicitly **out of scope** for this module and left
+//! to that future boundary-level fix:
+//! - **Width-based exhaustion**: a wide-but-shallow value (e.g. millions of
+//!   sibling keys, all depth 0) passes this guard trivially but can still
+//!   consume significant memory. This module only bounds depth, not node
+//!   count or payload size; the boundary fix should also enforce a maximum
+//!   payload size.
+//! - **Recursive `Drop`**: `serde_json::Value`'s `Drop` implementation is
+//!   also recursive and is not covered by this guard — a `Value` that this
+//!   guard never inspects deeply (because no code path calls
+//!   `exceeds_max_depth` on it) can still crash on deallocation if
+//!   constructed deep enough. There is currently no live call site that
+//!   constructs such a `Value` from untrusted input (the boundary code above
+//!   is still stubbed), so this is not presently exploitable — but the
+//!   eventual boundary fix must stop oversized payloads at deserialization
+//!   time, not merely guard comparisons after the fact, to close this too.
 
 use serde_json::Value;
 
