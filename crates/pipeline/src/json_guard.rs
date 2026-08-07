@@ -60,17 +60,42 @@ pub const MAX_SCHEMA_COMPARISON_DEPTH: usize = 64;
 /// guard against. It must terminate and return correctly (never panic, never
 /// loop forever) even for a `value` nested millions of levels deep.
 ///
-/// # Panics
+/// ## Short-Circuiting
 ///
-/// Always panics (`todo!()`) — this is an unimplemented RED-phase stub.
+/// Traversal order is a plain LIFO stack pop (no guaranteed visitation
+/// order), which is sufficient because only the *maximum* level reached is
+/// meaningful. As soon as a popped `(node, level)` pair has `level >
+/// max_depth`, the function returns `true` immediately: a non-leaf node at
+/// that level would only push children at even greater levels, and a leaf
+/// node at that level already witnesses the exceeded depth. This bounds
+/// work on adversarial single-branch chains (e.g. a million-deep object) to
+/// roughly `max_depth` steps rather than the full input size.
 ///
 /// # See also
 ///
 /// `crate::interfaces::compare_schemas`,
 /// `crate::interfaces::missing_interface_finding`
 #[must_use]
-pub fn exceeds_max_depth(_value: &Value, _max_depth: usize) -> bool {
-    todo!("Iterative (non-recursive) depth check — see module doc comment")
+pub fn exceeds_max_depth(value: &Value, max_depth: usize) -> bool {
+    let mut stack: Vec<(&Value, usize)> = vec![(value, 0)];
+
+    while let Some((current, level)) = stack.pop() {
+        if level > max_depth {
+            return true;
+        }
+
+        match current {
+            Value::Object(map) if !map.is_empty() => {
+                stack.extend(map.values().map(|child| (child, level + 1)));
+            }
+            Value::Array(items) if !items.is_empty() => {
+                stack.extend(items.iter().map(|child| (child, level + 1)));
+            }
+            _ => {}
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]

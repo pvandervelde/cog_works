@@ -31,6 +31,7 @@
 //! | [`classification`] | Safety override and scope threshold: `apply_safety_override`, `check_scope_threshold` |
 //! | [`review`] | Review aggregation: `ReviewPass`, `ReviewFinding`, `aggregate_review_results` |
 //! | [`interfaces`] | Cross-domain constraint validation: `ConstraintFinding`, `validate_cross_domain_constraints` |
+//! | [`json_guard`] | Iterative JSON nesting-depth guard: `exceeds_max_depth`, `MAX_SCHEMA_COMPARISON_DEPTH` |
 //! | [`scenarios`] | Scenario satisfaction scoring: `PerScenarioScore`, `ScenarioSatisfactionResult`, `compute_satisfaction` |
 //! | [`alignment`] | Alignment verification: `AlignmentFinding`, `AlignmentResult`, `run_deterministic_alignment` |
 //! | [`traceability`] | Traceability matrix: `TraceabilityMatrix`, `extract_requirements`, `update_traceability_matrix` |
@@ -59,6 +60,7 @@ pub mod github;
 pub mod graph;
 pub mod identifiers;
 pub mod interfaces;
+pub mod json_guard;
 pub mod knowledge;
 pub mod labels;
 pub mod observability;
