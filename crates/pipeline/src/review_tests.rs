@@ -30,7 +30,9 @@
 
 use proptest::prelude::*;
 
-use super::{AggregateReviewDecision, ReviewFinding, ReviewPass, ReviewResult, aggregate_review_results};
+use super::{
+    AggregateReviewDecision, ReviewFinding, ReviewPass, ReviewResult, aggregate_review_results,
+};
 use crate::types::DiagnosticSeverity;
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
@@ -83,7 +85,10 @@ fn severity_strategy() -> impl Strategy<Value = DiagnosticSeverity> {
     ]
 }
 
-fn review_result_from_severities(pass: ReviewPass, severities: &[DiagnosticSeverity]) -> ReviewResult {
+fn review_result_from_severities(
+    pass: ReviewPass,
+    severities: &[DiagnosticSeverity],
+) -> ReviewResult {
     let findings = severities
         .iter()
         .enumerate()
@@ -100,7 +105,10 @@ fn review_result_from_severities(pass: ReviewPass, severities: &[DiagnosticSever
 fn test_review_result_has_blocking_true_when_blocking_present() {
     let result = review_result(
         ReviewPass::Quality,
-        vec![warning(ReviewPass::Quality, "w"), blocking(ReviewPass::Quality, "b")],
+        vec![
+            warning(ReviewPass::Quality, "w"),
+            blocking(ReviewPass::Quality, "b"),
+        ],
     );
     assert!(result.has_blocking());
 }
@@ -143,7 +151,10 @@ fn test_review_result_blocking_findings_filters_only_blocking_severity() {
 
 #[test]
 fn test_review_result_blocking_findings_empty_iterator_when_no_blocking() {
-    let result = review_result(ReviewPass::Security, vec![warning(ReviewPass::Security, "w")]);
+    let result = review_result(
+        ReviewPass::Security,
+        vec![warning(ReviewPass::Security, "w")],
+    );
     assert_eq!(result.blocking_findings().count(), 0);
 }
 
@@ -204,7 +215,10 @@ fn test_aggregate_review_results_all_warning_and_informational_returns_proceed()
 
 #[test]
 fn test_aggregate_review_results_blocking_in_quality_only_returns_remediate() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q-block")]);
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q-block")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -233,7 +247,10 @@ fn test_aggregate_review_results_blocking_in_architecture_only_returns_remediate
 
 #[test]
 fn test_aggregate_review_results_blocking_in_security_only_returns_remediate() {
-    let security = review_result(ReviewPass::Security, vec![blocking(ReviewPass::Security, "s-block")]);
+    let security = review_result(
+        ReviewPass::Security,
+        vec![blocking(ReviewPass::Security, "s-block")],
+    );
     let decision = aggregate_review_results(
         empty_pass(ReviewPass::Quality),
         empty_pass(ReviewPass::Architecture),
@@ -247,12 +264,18 @@ fn test_aggregate_review_results_blocking_in_security_only_returns_remediate() {
 /// Blocking findings from all three passes must all be combined into one Remediate vec.
 #[test]
 fn test_aggregate_review_results_blocking_in_all_three_passes_combines_into_remediate() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let architecture = review_result(
         ReviewPass::Architecture,
         vec![blocking(ReviewPass::Architecture, "a")],
     );
-    let security = review_result(ReviewPass::Security, vec![blocking(ReviewPass::Security, "s")]);
+    let security = review_result(
+        ReviewPass::Security,
+        vec![blocking(ReviewPass::Security, "s")],
+    );
 
     let decision = aggregate_review_results(quality, architecture, security, 0, 3);
 
@@ -285,7 +308,11 @@ fn test_aggregate_review_results_remediate_excludes_non_blocking_findings() {
 
     match decision {
         AggregateReviewDecision::Remediate(findings) => {
-            assert_eq!(findings.len(), 1, "only the blocking finding may be present");
+            assert_eq!(
+                findings.len(),
+                1,
+                "only the blocking finding may be present"
+            );
             assert_eq!(findings[0].description, "b");
         }
         other => panic!("expected Remediate, got {other:?}"),
@@ -295,19 +322,29 @@ fn test_aggregate_review_results_remediate_excludes_non_blocking_findings() {
 /// Remediate ordering: Quality findings first, then Architecture, then Security.
 #[test]
 fn test_aggregate_review_results_remediate_orders_quality_before_architecture_before_security() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let architecture = review_result(
         ReviewPass::Architecture,
         vec![blocking(ReviewPass::Architecture, "a")],
     );
-    let security = review_result(ReviewPass::Security, vec![blocking(ReviewPass::Security, "s")]);
+    let security = review_result(
+        ReviewPass::Security,
+        vec![blocking(ReviewPass::Security, "s")],
+    );
 
     let decision = aggregate_review_results(quality, architecture, security, 0, 3);
 
     match decision {
         AggregateReviewDecision::Remediate(findings) => {
             let ranks: Vec<u8> = findings.iter().map(|f| pass_rank(f.pass)).collect();
-            assert_eq!(ranks, vec![0, 1, 2], "expected Quality, Architecture, Security order");
+            assert_eq!(
+                ranks,
+                vec![0, 1, 2],
+                "expected Quality, Architecture, Security order"
+            );
         }
         other => panic!("expected Remediate, got {other:?}"),
     }
@@ -316,7 +353,10 @@ fn test_aggregate_review_results_remediate_orders_quality_before_architecture_be
 /// Boundary N: `remediation_count == limit` with a blocking finding → Escalate.
 #[test]
 fn test_aggregate_review_results_remediation_count_at_limit_returns_escalate() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -330,7 +370,10 @@ fn test_aggregate_review_results_remediation_count_at_limit_returns_escalate() {
 /// Boundary N+1: `remediation_count > limit` with a blocking finding → Escalate.
 #[test]
 fn test_aggregate_review_results_remediation_count_above_limit_returns_escalate() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -344,7 +387,10 @@ fn test_aggregate_review_results_remediation_count_above_limit_returns_escalate(
 /// Boundary N-1: `remediation_count < limit` with a blocking finding → Remediate.
 #[test]
 fn test_aggregate_review_results_remediation_count_below_limit_returns_remediate() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -365,7 +411,10 @@ fn test_aggregate_review_results_escalate_description_lists_all_blocking_finding
     );
     let architecture = review_result(
         ReviewPass::Architecture,
-        vec![blocking(ReviewPass::Architecture, "UNIQUE_ARCHITECTURE_MARKER")],
+        vec![blocking(
+            ReviewPass::Architecture,
+            "UNIQUE_ARCHITECTURE_MARKER",
+        )],
     );
     let security = review_result(
         ReviewPass::Security,
@@ -446,8 +495,12 @@ fn test_aggregate_review_results_blocking_dominates_regardless_of_non_blocking_v
 /// Boundary: `remediation_count == limit == 0` with a blocking finding → Escalate
 /// (0 >= 0 is true; the rework budget was never available in the first place).
 #[test]
-fn test_aggregate_review_results_zero_remediation_count_zero_limit_with_blocking_returns_escalate() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+fn test_aggregate_review_results_zero_remediation_count_zero_limit_with_blocking_returns_escalate()
+{
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -459,8 +512,12 @@ fn test_aggregate_review_results_zero_remediation_count_zero_limit_with_blocking
 }
 
 #[test]
-fn test_aggregate_review_results_zero_remediation_count_positive_limit_with_blocking_returns_remediate() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+fn test_aggregate_review_results_zero_remediation_count_positive_limit_with_blocking_returns_remediate()
+ {
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -549,7 +606,10 @@ fn test_aggregate_review_results_cannot_hardcode_escalate_when_no_blocking_prese
 /// any blocking finding exists.
 #[test]
 fn test_aggregate_review_results_cannot_hardcode_escalate_when_blocking_present() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -564,7 +624,10 @@ fn test_aggregate_review_results_cannot_hardcode_escalate_when_blocking_present(
 /// Escalate, not Remediate. Kills a stub that always remediates regardless of budget.
 #[test]
 fn test_aggregate_review_results_cannot_hardcode_remediate_when_limit_exhausted() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -578,8 +641,12 @@ fn test_aggregate_review_results_cannot_hardcode_remediate_when_limit_exhausted(
 /// Large-value boundary using values near `u32::MAX` to catch overflow bugs in
 /// a naive `remediation_count + 1 >= limit` or similar off-by-one implementation.
 #[test]
-fn test_aggregate_review_results_u32_max_remediation_count_and_limit_equal_with_blocking_returns_escalate() {
-    let quality = review_result(ReviewPass::Quality, vec![blocking(ReviewPass::Quality, "q")]);
+fn test_aggregate_review_results_u32_max_remediation_count_and_limit_equal_with_blocking_returns_escalate()
+ {
+    let quality = review_result(
+        ReviewPass::Quality,
+        vec![blocking(ReviewPass::Quality, "q")],
+    );
     let decision = aggregate_review_results(
         quality,
         empty_pass(ReviewPass::Architecture),
@@ -625,7 +692,10 @@ fn test_aggregate_review_results_preserves_relative_order_within_same_pass() {
 #[test]
 fn test_aggregate_review_results_only_security_pass_has_blocking_others_empty_returns_remediate_with_single_finding()
  {
-    let security = review_result(ReviewPass::Security, vec![blocking(ReviewPass::Security, "s-only")]);
+    let security = review_result(
+        ReviewPass::Security,
+        vec![blocking(ReviewPass::Security, "s-only")],
+    );
     let decision = aggregate_review_results(
         empty_pass(ReviewPass::Quality),
         empty_pass(ReviewPass::Architecture),

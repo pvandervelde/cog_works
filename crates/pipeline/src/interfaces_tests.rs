@@ -95,7 +95,11 @@ fn test_validate_cross_domain_constraints_matching_contract_and_extracted_return
 
 #[test]
 fn test_validate_cross_domain_constraints_missing_interface_in_extracted_emits_blocking_finding() {
-    let contracts = vec![definition("iface-missing", "rust", json!({"type": "string"}))];
+    let contracts = vec![definition(
+        "iface-missing",
+        "rust",
+        json!({"type": "string"}),
+    )];
     let extracted = map_of(vec![]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
@@ -107,7 +111,11 @@ fn test_validate_cross_domain_constraints_missing_interface_in_extracted_emits_b
 
 #[test]
 fn test_validate_cross_domain_constraints_missing_interface_actual_value_is_not_present_marker() {
-    let contracts = vec![definition("iface-missing", "rust", json!({"type": "string"}))];
+    let contracts = vec![definition(
+        "iface-missing",
+        "rust",
+        json!({"type": "string"}),
+    )];
     let extracted = map_of(vec![]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
@@ -116,7 +124,8 @@ fn test_validate_cross_domain_constraints_missing_interface_actual_value_is_not_
 }
 
 #[test]
-fn test_validate_cross_domain_constraints_missing_interface_expected_value_reflects_contract_schema() {
+fn test_validate_cross_domain_constraints_missing_interface_expected_value_reflects_contract_schema()
+ {
     let contracts = vec![definition(
         "iface-missing",
         "rust",
@@ -136,18 +145,33 @@ fn test_validate_cross_domain_constraints_missing_interface_expected_value_refle
 #[test]
 fn test_validate_cross_domain_constraints_field_value_mismatch_emits_blocking_finding() {
     let contracts = vec![definition("iface-a", "rust", json!({"type": "string"}))];
-    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "integer"}))]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        json!({"type": "integer"}),
+    )]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
-    assert!(!findings.is_empty(), "a field-value mismatch must be reported");
-    assert!(findings.iter().all(|f| f.severity == DiagnosticSeverity::Blocking));
+    assert!(
+        !findings.is_empty(),
+        "a field-value mismatch must be reported"
+    );
+    assert!(
+        findings
+            .iter()
+            .all(|f| f.severity == DiagnosticSeverity::Blocking)
+    );
 }
 
 #[test]
 fn test_validate_cross_domain_constraints_field_mismatch_parameter_name_identifies_the_field() {
     let contracts = vec![definition("iface-a", "rust", json!({"type": "string"}))];
-    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "integer"}))]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        json!({"type": "integer"}),
+    )]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
@@ -158,7 +182,8 @@ fn test_validate_cross_domain_constraints_field_mismatch_parameter_name_identifi
 }
 
 #[test]
-fn test_validate_cross_domain_constraints_extra_extracted_interface_with_no_contract_not_reported() {
+fn test_validate_cross_domain_constraints_extra_extracted_interface_with_no_contract_not_reported()
+{
     let schema = json!({"type": "string"});
     let contracts = vec![definition("iface-a", "rust", schema.clone())];
     let extracted = map_of(vec![
@@ -176,7 +201,11 @@ fn test_validate_cross_domain_constraints_extra_extracted_interface_with_no_cont
 
 #[test]
 fn test_validate_cross_domain_constraints_owning_and_violating_domain_populated() {
-    let contracts = vec![definition("iface-a", "rust-service", json!({"type": "string"}))];
+    let contracts = vec![definition(
+        "iface-a",
+        "rust-service",
+        json!({"type": "string"}),
+    )];
     let extracted = map_of(vec![definition(
         "iface-a",
         "kicad-service",
@@ -280,7 +309,9 @@ fn test_validate_cross_domain_constraints_severity_is_always_blocking_for_missin
 
     assert!(!findings.is_empty());
     assert!(
-        findings.iter().all(|f| f.severity == DiagnosticSeverity::Blocking),
+        findings
+            .iter()
+            .all(|f| f.severity == DiagnosticSeverity::Blocking),
         "per doc comment, structural incompatibilities are always Blocking: {findings:?}"
     );
 }
@@ -291,10 +322,15 @@ fn test_validate_cross_domain_constraints_severity_is_always_blocking_for_missin
 /// a mismatched extracted entry must yield two findings, not one deduplicated
 /// finding.
 #[test]
-fn test_validate_cross_domain_constraints_duplicate_interface_ids_in_contracts_each_produce_own_finding() {
+fn test_validate_cross_domain_constraints_duplicate_interface_ids_in_contracts_each_produce_own_finding()
+ {
     let dup = definition("iface-dup", "rust", json!({"type": "string"}));
     let contracts = vec![dup.clone(), dup];
-    let extracted = map_of(vec![definition("iface-dup", "kicad", json!({"type": "integer"}))]);
+    let extracted = map_of(vec![definition(
+        "iface-dup",
+        "kicad",
+        json!({"type": "integer"}),
+    )]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
@@ -319,8 +355,16 @@ fn test_validate_cross_domain_constraints_extracted_interface_id_absent_from_con
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
-    assert!(findings.iter().any(|f| f.interface_id == iid("iface-known")));
-    assert!(!findings.iter().any(|f| f.interface_id == iid("iface-unregistered")));
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.interface_id == iid("iface-known"))
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.interface_id == iid("iface-unregistered"))
+    );
 }
 
 /// Findings must reference contracts in the same relative order they were
@@ -343,15 +387,23 @@ fn test_validate_cross_domain_constraints_result_order_matches_contracts_order()
 #[test]
 fn test_validate_cross_domain_constraints_non_object_schema_scalar_equal_values_returns_empty() {
     let contracts = vec![definition("iface-a", "rust", json!("just-a-string-schema"))];
-    let extracted = map_of(vec![definition("iface-a", "kicad", json!("just-a-string-schema"))]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        json!("just-a-string-schema"),
+    )]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
-    assert!(findings.is_empty(), "identical non-object schemas must conform, got {findings:?}");
+    assert!(
+        findings.is_empty(),
+        "identical non-object schemas must conform, got {findings:?}"
+    );
 }
 
 #[test]
-fn test_validate_cross_domain_constraints_non_object_schema_scalar_mismatched_values_returns_nonempty() {
+fn test_validate_cross_domain_constraints_non_object_schema_scalar_mismatched_values_returns_nonempty()
+ {
     let contracts = vec![definition("iface-a", "rust", json!("schema-v1"))];
     let extracted = map_of(vec![definition("iface-a", "kicad", json!("schema-v2"))]);
 
@@ -366,7 +418,11 @@ fn test_validate_cross_domain_constraints_non_object_schema_scalar_mismatched_va
 #[test]
 fn test_validate_cross_domain_constraints_schema_is_json_array_does_not_panic() {
     let contracts = vec![definition("iface-a", "rust", json!(["a", "b", "c"]))];
-    let extracted = map_of(vec![definition("iface-a", "kicad", json!(["a", "b", "different"]))]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        json!(["a", "b", "different"]),
+    )]);
 
     let _findings = validate_cross_domain_constraints(&contracts, &extracted);
 }
@@ -374,7 +430,11 @@ fn test_validate_cross_domain_constraints_schema_is_json_array_does_not_panic() 
 #[test]
 fn test_validate_cross_domain_constraints_schema_is_json_null_does_not_panic() {
     let contracts = vec![definition("iface-a", "rust", serde_json::Value::Null)];
-    let extracted = map_of(vec![definition("iface-a", "kicad", serde_json::Value::Null)]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        serde_json::Value::Null,
+    )]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
@@ -382,7 +442,8 @@ fn test_validate_cross_domain_constraints_schema_is_json_null_does_not_panic() {
 }
 
 #[test]
-fn test_validate_cross_domain_constraints_empty_extracted_with_nonempty_contracts_reports_all_missing() {
+fn test_validate_cross_domain_constraints_empty_extracted_with_nonempty_contracts_reports_all_missing()
+ {
     let contracts = vec![
         definition("iface-a", "rust", json!({"type": "string"})),
         definition("iface-b", "rust", json!({"type": "integer"})),
@@ -424,7 +485,10 @@ fn test_validate_cross_domain_constraints_nested_json_object_identical_returns_e
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
-    assert!(findings.is_empty(), "identical nested schemas must conform, got {findings:?}");
+    assert!(
+        findings.is_empty(),
+        "identical nested schemas must conform, got {findings:?}"
+    );
 }
 
 /// Stub-killing: a stub that always returns `vec![]` must fail when real
@@ -436,13 +500,17 @@ fn test_validate_cross_domain_constraints_cannot_hardcode_empty_vec_when_violati
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
-    assert!(!findings.is_empty(), "a stub returning vec![] unconditionally must fail this test");
+    assert!(
+        !findings.is_empty(),
+        "a stub returning vec![] unconditionally must fail this test"
+    );
 }
 
 /// Stub-killing: a stub that always returns exactly one finding must fail when
 /// multiple independent violations exist.
 #[test]
-fn test_validate_cross_domain_constraints_cannot_hardcode_single_finding_when_multiple_violations_exist() {
+fn test_validate_cross_domain_constraints_cannot_hardcode_single_finding_when_multiple_violations_exist()
+ {
     let contracts = vec![
         definition("iface-a", "rust", json!({"type": "string"})),
         definition("iface-b", "rust", json!({"type": "boolean"})),
@@ -452,7 +520,11 @@ fn test_validate_cross_domain_constraints_cannot_hardcode_single_finding_when_mu
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
-    assert_eq!(findings.len(), 3, "a stub returning exactly one finding must fail this test");
+    assert_eq!(
+        findings.len(),
+        3,
+        "a stub returning exactly one finding must fail this test"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -673,7 +745,11 @@ fn test_validate_cross_domain_constraints_contract_schema_exceeds_max_depth_emit
  {
     let deep_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 36); // depth 100
     let contracts = vec![definition("iface-a", "rust", deep_schema)];
-    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "string"}))]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        json!({"type": "string"}),
+    )]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
@@ -710,7 +786,11 @@ fn test_validate_cross_domain_constraints_depth_exceeded_finding_values_are_shor
  {
     let deep_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 36);
     let contracts = vec![definition("iface-a", "rust", deep_schema)];
-    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "string"}))]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        json!({"type": "string"}),
+    )]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
@@ -747,7 +827,11 @@ fn test_validate_cross_domain_constraints_depth_exceeded_finding_values_do_not_s
         "rust",
         nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 336), // depth 400
     )];
-    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "string"}))]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        json!({"type": "string"}),
+    )]);
 
     let findings_100 = validate_cross_domain_constraints(&contracts_100, &extracted);
     let findings_400 = validate_cross_domain_constraints(&contracts_400, &extracted);
@@ -794,7 +878,7 @@ fn test_validate_cross_domain_constraints_missing_interface_with_deep_contract_s
 
 #[test]
 fn test_validate_cross_domain_constraints_schema_at_exact_configured_limit_still_compared_normally()
- {
+{
     let boundary_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH);
     let contracts = vec![definition("iface-a", "rust", boundary_schema.clone())];
     let extracted = map_of(vec![definition("iface-a", "kicad", boundary_schema)]);
@@ -834,7 +918,11 @@ fn test_validate_cross_domain_constraints_schema_one_level_beyond_limit_triggers
 fn test_validate_cross_domain_constraints_shallow_schema_field_mismatch_still_uses_full_stringified_values_not_depth_marker()
  {
     let contracts = vec![definition("iface-a", "rust", json!({"type": "string"}))];
-    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "integer"}))]);
+    let extracted = map_of(vec![definition(
+        "iface-a",
+        "kicad",
+        json!({"type": "integer"}),
+    )]);
 
     let findings = validate_cross_domain_constraints(&contracts, &extracted);
 
