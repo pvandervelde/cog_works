@@ -336,8 +336,8 @@ proptest! {
     ) {
         let value = nested_object(depth);
         let (lo, hi) = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
-        if !exceeds_max_depth(&value, hi) {
-            prop_assert!(!exceeds_max_depth(&value, lo));
+        if !exceeds_max_depth(&value, lo) {
+            prop_assert!(!exceeds_max_depth(&value, hi));
         }
     }
 }
