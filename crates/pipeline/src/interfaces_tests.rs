@@ -615,3 +615,234 @@ fn test_constraint_finding_all_fields_are_publicly_constructible_and_readable() 
     assert_eq!(f.violating_domain, domain("violator"));
     assert_eq!(f.severity, DiagnosticSeverity::Blocking);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Depth-guard hardening tests (DoS mitigation)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A Security Reviewer found that `compare_schemas`/`field_mismatch`/
+// `whole_schema_mismatch`/`missing_interface_finding` call
+// `serde_json::Value::to_string()`/`==` on `extracted`-sourced schema
+// content, both of which are implemented recursively by `serde_json` over
+// arbitrary nesting depth. An adversarial domain-service response
+// containing a deeply nested schema can therefore stack-overflow the whole
+// orchestrator process (an uncatchable `STATUS_STACK_OVERFLOW` — Rust
+// cannot `catch_unwind` a stack overflow). These tests pin the
+// depth-bounded short-circuit that must guard every recursive
+// `serde_json` operation on untrusted schema content.
+//
+// The schema depths used below (100, 400) are chosen to be safely below any
+// real stack-overflow threshold on the *unguarded* code path — so that,
+// until the guard is wired into `interfaces.rs`, these tests fail cleanly
+// with an ordinary assertion mismatch rather than crashing the test binary
+// — while still comfortably exceeding the guard's configured limit
+// (mirrored here as `ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH`, since this file
+// must compile independently of whether `crate::json_guard` has been wired
+// into `lib.rs` yet). Proving survival at extreme (~1,000,000-level) depths
+// is `json_guard_tests.rs`'s responsibility, exercising `exceeds_max_depth`
+// directly.
+
+/// Mirrors `json_guard::MAX_SCHEMA_COMPARISON_DEPTH`. Duplicated (not
+/// imported) because this file must compile before the Coder wires
+/// `pub mod json_guard;` into `lib.rs`.
+const ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH: usize = 64;
+
+/// Fixed `parameter_name` marker expected on the depth-guard short-circuit
+/// finding, mirroring the design's proposed
+/// `"<schema exceeds maximum comparison depth>"` constant.
+const DEPTH_EXCEEDED_PARAMETER_MARKER: &str = "<schema exceeds maximum comparison depth>";
+
+/// Builds a JSON object nested `depth` levels deep via direct, iterative
+/// `Map`/`Value` construction (a `for` loop — never recursion, and never
+/// the `json!` macro applied to a variable expression, which round-trips
+/// through `Serialize` and would itself recurse over the growing value on
+/// every iteration). Depth 0 is a bare scalar; `{"a": <depth-1>}` is depth
+/// N for N >= 1.
+fn nested_object_schema(depth: usize) -> serde_json::Value {
+    let mut value = serde_json::Value::from(1);
+    for _ in 0..depth {
+        let mut map = serde_json::Map::new();
+        map.insert("a".to_string(), value);
+        value = serde_json::Value::Object(map);
+    }
+    value
+}
+
+#[test]
+fn test_validate_cross_domain_constraints_contract_schema_exceeds_max_depth_emits_single_blocking_marker_finding()
+ {
+    let deep_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 36); // depth 100
+    let contracts = vec![definition("iface-a", "rust", deep_schema)];
+    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "string"}))]);
+
+    let findings = validate_cross_domain_constraints(&contracts, &extracted);
+
+    assert_eq!(
+        findings.len(),
+        1,
+        "an over-depth contract schema must short-circuit to exactly one finding, not a \
+         field-by-field comparison, got {findings:?}"
+    );
+    assert_eq!(findings[0].severity, DiagnosticSeverity::Blocking);
+    assert_eq!(findings[0].parameter_name, DEPTH_EXCEEDED_PARAMETER_MARKER);
+}
+
+#[test]
+fn test_validate_cross_domain_constraints_extracted_schema_exceeds_max_depth_emits_single_blocking_marker_finding()
+ {
+    let deep_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 36); // depth 100
+    let contracts = vec![definition("iface-a", "rust", json!({"type": "string"}))];
+    let extracted = map_of(vec![definition("iface-a", "kicad", deep_schema)]);
+
+    let findings = validate_cross_domain_constraints(&contracts, &extracted);
+
+    assert_eq!(
+        findings.len(),
+        1,
+        "an over-depth extracted schema must short-circuit to exactly one finding, got {findings:?}"
+    );
+    assert_eq!(findings[0].severity, DiagnosticSeverity::Blocking);
+    assert_eq!(findings[0].parameter_name, DEPTH_EXCEEDED_PARAMETER_MARKER);
+}
+
+#[test]
+fn test_validate_cross_domain_constraints_depth_exceeded_finding_values_are_short_fixed_markers_not_stringified_schema()
+ {
+    let deep_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 36);
+    let contracts = vec![definition("iface-a", "rust", deep_schema)];
+    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "string"}))]);
+
+    let findings = validate_cross_domain_constraints(&contracts, &extracted);
+
+    assert_eq!(findings.len(), 1);
+    assert!(
+        findings[0].expected_value.len() < 200,
+        "expected_value must be a short fixed marker, not the stringified deep schema (len={})",
+        findings[0].expected_value.len()
+    );
+    assert!(
+        findings[0].actual_value.len() < 200,
+        "actual_value must be a short fixed marker, not the stringified deep schema (len={})",
+        findings[0].actual_value.len()
+    );
+}
+
+/// The strongest anti-cheat assertion: build the *same* scenario at two very
+/// different depths (100 vs. 400) and assert the emitted finding's
+/// `expected_value`/`actual_value` are byte-for-byte identical between the
+/// two runs. A fixed marker is depth-invariant by construction; any
+/// implementation that still calls `.to_string()` somewhere (even if it
+/// happens not to crash the test machine's stack at these depths) would
+/// produce longer output for the deeper input and fail this test.
+#[test]
+fn test_validate_cross_domain_constraints_depth_exceeded_finding_values_do_not_scale_with_input_size()
+ {
+    let contracts_100 = vec![definition(
+        "iface-a",
+        "rust",
+        nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 36), // depth 100
+    )];
+    let contracts_400 = vec![definition(
+        "iface-a",
+        "rust",
+        nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 336), // depth 400
+    )];
+    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "string"}))]);
+
+    let findings_100 = validate_cross_domain_constraints(&contracts_100, &extracted);
+    let findings_400 = validate_cross_domain_constraints(&contracts_400, &extracted);
+
+    assert_eq!(findings_100.len(), 1);
+    assert_eq!(findings_400.len(), 1);
+    assert_eq!(
+        findings_100[0].expected_value, findings_400[0].expected_value,
+        "a fixed marker must not vary with input depth"
+    );
+    assert_eq!(
+        findings_100[0].actual_value, findings_400[0].actual_value,
+        "a fixed marker must not vary with input depth"
+    );
+}
+
+#[test]
+fn test_validate_cross_domain_constraints_missing_interface_with_deep_contract_schema_uses_marker_not_full_stringification()
+ {
+    let deep_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 36); // depth 100
+    let contracts = vec![definition("iface-missing-deep", "rust", deep_schema)];
+    let extracted = map_of(vec![]);
+
+    let findings = validate_cross_domain_constraints(&contracts, &extracted);
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, DiagnosticSeverity::Blocking);
+    assert_eq!(
+        findings[0].parameter_name, "<interface>",
+        "a missing interface keeps the existing MISSING_INTERFACE_MARKER; only \
+         expected_value's source (schema.to_string() vs. the depth marker) changes"
+    );
+    assert_eq!(
+        findings[0].actual_value, "<not present>",
+        "the missing-interface actual_value marker is unaffected by the depth guard"
+    );
+    assert!(
+        findings[0].expected_value.len() < 200,
+        "expected_value must be a short fixed marker, not schema.to_string() on the deep \
+         contract schema (len={})",
+        findings[0].expected_value.len()
+    );
+}
+
+#[test]
+fn test_validate_cross_domain_constraints_schema_at_exact_configured_limit_still_compared_normally()
+ {
+    let boundary_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH);
+    let contracts = vec![definition("iface-a", "rust", boundary_schema.clone())];
+    let extracted = map_of(vec![definition("iface-a", "kicad", boundary_schema)]);
+
+    let findings = validate_cross_domain_constraints(&contracts, &extracted);
+
+    assert!(
+        findings.is_empty(),
+        "a schema exactly at the configured max depth (not exceeding it) must still be \
+         compared normally and conform when identical, got {findings:?}"
+    );
+}
+
+#[test]
+fn test_validate_cross_domain_constraints_schema_one_level_beyond_limit_triggers_guard_even_when_schemas_are_identical()
+ {
+    let over_schema = nested_object_schema(ASSUMED_MAX_SCHEMA_COMPARISON_DEPTH + 1);
+    let contracts = vec![definition("iface-a", "rust", over_schema.clone())];
+    let extracted = map_of(vec![definition("iface-a", "kicad", over_schema)]);
+
+    let findings = validate_cross_domain_constraints(&contracts, &extracted);
+
+    assert_eq!(
+        findings.len(),
+        1,
+        "exactly one level beyond the configured max depth must trigger the guard even for \
+         byte-for-byte identical schemas — the guard must run before any equality check, not \
+         only when a mismatch would otherwise be reported, got {findings:?}"
+    );
+    assert_eq!(findings[0].parameter_name, DEPTH_EXCEEDED_PARAMETER_MARKER);
+}
+
+/// Regression pin: the depth guard must not alter behaviour for well-formed,
+/// shallow schemas — they still get the pre-existing full field-by-field
+/// `.to_string()` comparison, not the depth-exceeded marker.
+#[test]
+fn test_validate_cross_domain_constraints_shallow_schema_field_mismatch_still_uses_full_stringified_values_not_depth_marker()
+ {
+    let contracts = vec![definition("iface-a", "rust", json!({"type": "string"}))];
+    let extracted = map_of(vec![definition("iface-a", "kicad", json!({"type": "integer"}))]);
+
+    let findings = validate_cross_domain_constraints(&contracts, &extracted);
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].parameter_name, "type",
+        "a shallow field mismatch must still name the field, not the depth-exceeded marker"
+    );
+    assert_eq!(findings[0].expected_value, json!("string").to_string());
+    assert_eq!(findings[0].actual_value, json!("integer").to_string());
+}
