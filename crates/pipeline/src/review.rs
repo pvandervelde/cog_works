@@ -170,9 +170,11 @@ pub enum AggregateReviewDecision {
     /// At least one blocking finding exists and the rework budget allows
     /// another cycle.
     ///
-    /// The attached findings are all blocking items from all passes, deduplicated
-    /// and ordered by pass (Quality → Architecture → Security). These are passed
-    /// back to the Code Generation node as the rework guidance payload.
+    /// The attached findings are all blocking items from all passes, ordered by
+    /// pass (Quality → Architecture → Security). No deduplication is performed:
+    /// if two passes (or the same pass) independently emit structurally
+    /// identical findings, both appear here. These are passed back to the Code
+    /// Generation node as the rework guidance payload.
     Remediate(Vec<ReviewFinding>),
 
     /// The rework budget is exhausted (`remediation_count >= limit`); escalate
