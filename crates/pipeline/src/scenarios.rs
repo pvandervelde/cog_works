@@ -37,7 +37,7 @@ use crate::{domain_services::TrajectoryResult, types::SatisfactionScore};
 /// One `PerScenarioScore` is produced for each distinct `scenario_id` found
 /// across the trajectory results passed to [`compute_satisfaction`].
 ///
-/// See `docs/spec/interfaces/advanced-features.md` §PerScenarioScore.
+/// See `docs/spec/interfaces/advanced-features.md` §`PerScenarioScore`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerScenarioScore {
     /// Identifier matching [`crate::Scenario::id`].
@@ -75,7 +75,7 @@ pub struct PerScenarioScore {
 /// Produced by [`compute_satisfaction`] from a flat slice of
 /// [`TrajectoryResult`] values.
 ///
-/// See `docs/spec/interfaces/advanced-features.md` §ScenarioSatisfactionResult.
+/// See `docs/spec/interfaces/advanced-features.md` §`ScenarioSatisfactionResult`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScenarioSatisfactionResult {
     /// Per-scenario score breakdown; one entry per distinct `scenario_id`.
@@ -154,7 +154,8 @@ pub struct ScenarioSatisfactionResult {
 /// assert!(result.passed);
 /// ```
 ///
-/// See `docs/spec/interfaces/advanced-features.md` §compute_satisfaction.
+/// See `docs/spec/interfaces/advanced-features.md` §`compute_satisfaction`.
+#[must_use]
 pub fn compute_satisfaction(
     trajectory_results: &[TrajectoryResult],
     threshold: SatisfactionScore,
