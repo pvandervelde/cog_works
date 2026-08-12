@@ -156,22 +156,131 @@ pub struct ScenarioSatisfactionResult {
 ///
 /// See `docs/spec/interfaces/advanced-features.md` §compute_satisfaction.
 pub fn compute_satisfaction(
-    _trajectory_results: &[TrajectoryResult],
-    _threshold: SatisfactionScore,
+    trajectory_results: &[TrajectoryResult],
+    threshold: SatisfactionScore,
 ) -> ScenarioSatisfactionResult {
-    todo!("See docs/spec/interfaces/advanced-features.md §Scenario Satisfaction")
+    let groups = build_scenario_groups(trajectory_results);
+
+    let mut per_scenario = Vec::with_capacity(groups.len());
+    let mut explicit_failure_violations = Vec::new();
+
+    for (scenario_id, group) in &groups {
+        let score = score_from_fraction(group.satisfied, group.total);
+        let passed = score >= threshold;
+
+        if group.has_explicit_failure && !group.explicit_failure_observed {
+            explicit_failure_violations.push(scenario_id.clone());
+        }
+
+        per_scenario.push(PerScenarioScore {
+            scenario_id: scenario_id.clone(),
+            satisfied_trajectories: group.satisfied,
+            total_trajectories: group.total,
+            score,
+            passed,
+            explicit_failure: group.has_explicit_failure,
+        });
+    }
+
+    let scores: Vec<SatisfactionScore> = per_scenario.iter().map(|entry| entry.score).collect();
+    let overall_score = mean_score(&scores);
+    let passed =
+        per_scenario.iter().all(|entry| entry.passed) && explicit_failure_violations.is_empty();
+
+    ScenarioSatisfactionResult {
+        per_scenario,
+        overall_score,
+        passed,
+        explicit_failure_violations,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Groups trajectory results by scenario_id for scoring.
+/// Per-scenario accumulator used while grouping trajectory results by
+/// `scenario_id`.
+#[derive(Debug, Default)]
+struct ScenarioGroup {
+    /// Count of trajectories in the group with `passed == true`.
+    satisfied: u32,
+    /// Total count of trajectories in the group.
+    total: u32,
+    /// `true` when at least one trajectory in the group has
+    /// `expected_failure == true` (presence-based, independent of whether the
+    /// failure was observed).
+    has_explicit_failure: bool,
+    /// `true` when at least one `expected_failure == true` trajectory in the
+    /// group also has `passed == true` (the expected failure was observed).
+    explicit_failure_observed: bool,
+}
+
+/// Groups trajectory results by `scenario_id`, accumulating satisfied/total
+/// counts and explicit-failure presence/observation flags for each group.
+fn build_scenario_groups(results: &[TrajectoryResult]) -> HashMap<String, ScenarioGroup> {
+    let mut groups: HashMap<String, ScenarioGroup> = HashMap::new();
+
+    for result in results {
+        let group = groups.entry(result.scenario_id.clone()).or_default();
+        group.total += 1;
+        if result.passed {
+            group.satisfied += 1;
+        }
+        if result.expected_failure {
+            group.has_explicit_failure = true;
+            if result.passed {
+                group.explicit_failure_observed = true;
+            }
+        }
+    }
+
+    groups
+}
+
+/// Computes `numerator / denominator` as a [`SatisfactionScore`], treating a
+/// zero denominator as vacuously satisfied (`1.0`).
 ///
-/// Returns a map from scenario_id → (satisfied_count, total_count, has_explicit_failure).
-#[allow(dead_code)]
-fn group_by_scenario(_results: &[TrajectoryResult]) -> HashMap<String, (u32, u32, bool)> {
-    todo!("See docs/spec/interfaces/advanced-features.md §compute_satisfaction internals")
+/// # Panics
+///
+/// Never panics in practice: `numerator` is always `<= denominator` by
+/// construction in this module, so the resulting ratio is always within
+/// `[0.0, 1.0]`. The `unreachable!` below only guards against that invariant
+/// being violated in the future.
+fn score_from_fraction(numerator: u32, denominator: u32) -> SatisfactionScore {
+    let ratio = if denominator == 0 {
+        1.0
+    } else {
+        f64::from(numerator) / f64::from(denominator)
+    };
+
+    SatisfactionScore::new(ratio).unwrap_or_else(|| {
+        unreachable!(
+            "ratio {ratio} out of [0.0, 1.0] for numerator={numerator}, denominator={denominator}"
+        )
+    })
+}
+
+/// Computes the unweighted arithmetic mean of `scores`, treating an empty
+/// slice as vacuously satisfied (`1.0`).
+///
+/// # Panics
+///
+/// Never panics in practice: every [`SatisfactionScore`] is already within
+/// `[0.0, 1.0]`, so their arithmetic mean is too. The `unreachable!` below
+/// only guards against that invariant being violated in the future.
+#[allow(clippy::cast_precision_loss)] // score count is one-per-scenario, far below f64's exact-integer limit
+fn mean_score(scores: &[SatisfactionScore]) -> SatisfactionScore {
+    if scores.is_empty() {
+        return score_from_fraction(1, 1);
+    }
+
+    let sum: f64 = scores.iter().map(|entry| entry.as_f64()).sum();
+    let mean = sum / scores.len() as f64;
+
+    SatisfactionScore::new(mean).unwrap_or_else(|| {
+        unreachable!("mean {mean} out of [0.0, 1.0] for {} scores", scores.len())
+    })
 }
 
 #[cfg(test)]
