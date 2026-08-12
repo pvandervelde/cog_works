@@ -239,6 +239,25 @@ fn build_scenario_groups(results: &[TrajectoryResult]) -> HashMap<String, Scenar
     groups
 }
 
+/// Constructs a [`SatisfactionScore`] from an already-validated `[0.0, 1.0]`
+/// value, panicking with a contextual message if the invariant was violated.
+///
+/// Shared by [`score_from_fraction`] and [`mean_score`], both of which compute
+/// a value that is mathematically guaranteed to fall within `[0.0, 1.0]` given
+/// their own invariants, but need a descriptive panic message (rather than a
+/// bare `unwrap`) if that guarantee is ever broken by a future change.
+///
+/// # Panics
+///
+/// Never panics in practice: callers only pass values already proven to lie
+/// within `[0.0, 1.0]`. The `unreachable!` below only guards against that
+/// invariant being violated in the future; `context` is evaluated lazily so
+/// the (rarely needed) message formatting has no cost on the success path.
+fn score_or_panic(value: f64, context: impl FnOnce() -> String) -> SatisfactionScore {
+    SatisfactionScore::new(value)
+        .unwrap_or_else(|| unreachable!("{value} out of [0.0, 1.0]: {}", context()))
+}
+
 /// Computes `numerator / denominator` as a [`SatisfactionScore`], treating a
 /// zero denominator as vacuously satisfied (`1.0`).
 ///
@@ -246,8 +265,7 @@ fn build_scenario_groups(results: &[TrajectoryResult]) -> HashMap<String, Scenar
 ///
 /// Never panics in practice: `numerator` is always `<= denominator` by
 /// construction in this module, so the resulting ratio is always within
-/// `[0.0, 1.0]`. The `unreachable!` below only guards against that invariant
-/// being violated in the future.
+/// `[0.0, 1.0]`. See [`score_or_panic`] for the invariant guard.
 fn score_from_fraction(numerator: u32, denominator: u32) -> SatisfactionScore {
     let ratio = if denominator == 0 {
         1.0
@@ -255,10 +273,8 @@ fn score_from_fraction(numerator: u32, denominator: u32) -> SatisfactionScore {
         f64::from(numerator) / f64::from(denominator)
     };
 
-    SatisfactionScore::new(ratio).unwrap_or_else(|| {
-        unreachable!(
-            "ratio {ratio} out of [0.0, 1.0] for numerator={numerator}, denominator={denominator}"
-        )
+    score_or_panic(ratio, || {
+        format!("numerator={numerator}, denominator={denominator}")
     })
 }
 
@@ -268,8 +284,8 @@ fn score_from_fraction(numerator: u32, denominator: u32) -> SatisfactionScore {
 /// # Panics
 ///
 /// Never panics in practice: every [`SatisfactionScore`] is already within
-/// `[0.0, 1.0]`, so their arithmetic mean is too. The `unreachable!` below
-/// only guards against that invariant being violated in the future.
+/// `[0.0, 1.0]`, so their arithmetic mean is too. See [`score_or_panic`] for
+/// the invariant guard.
 #[allow(clippy::cast_precision_loss)] // score count is one-per-scenario, far below f64's exact-integer limit
 fn mean_score(scores: &[SatisfactionScore]) -> SatisfactionScore {
     if scores.is_empty() {
@@ -279,9 +295,7 @@ fn mean_score(scores: &[SatisfactionScore]) -> SatisfactionScore {
     let sum: f64 = scores.iter().map(|entry| entry.as_f64()).sum();
     let mean = sum / scores.len() as f64;
 
-    SatisfactionScore::new(mean).unwrap_or_else(|| {
-        unreachable!("mean {mean} out of [0.0, 1.0] for {} scores", scores.len())
-    })
+    score_or_panic(mean, || format!("{} scores", scores.len()))
 }
 
 #[cfg(test)]
