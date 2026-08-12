@@ -26,10 +26,12 @@
 //! for the full contract, matching algorithm, and examples.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     domain_services::{InterfaceDefinition, InterfaceMap},
     identifiers::{DomainServiceName, InterfaceId},
+    json_guard::{MAX_SCHEMA_COMPARISON_DEPTH, exceeds_max_depth},
     types::DiagnosticSeverity,
 };
 
@@ -119,8 +121,200 @@ pub struct ConstraintFinding {
 /// `docs/spec/interfaces/pipeline-execution.md §validate_cross_domain_constraints`
 #[must_use]
 pub fn validate_cross_domain_constraints(
-    _contracts: &[InterfaceDefinition],
-    _extracted: &InterfaceMap,
+    contracts: &[InterfaceDefinition],
+    extracted: &InterfaceMap,
 ) -> Vec<ConstraintFinding> {
-    todo!("See docs/spec/interfaces/pipeline-execution.md §validate_cross_domain_constraints")
+    contracts
+        .iter()
+        .flat_map(|contract| validate_single_contract(contract, extracted))
+        .collect()
 }
+
+/// Marker used as `parameter_name` when the whole interface is missing from
+/// `extracted`, or when a non-object schema mismatches as a whole (there is
+/// no single "field" to name in either case).
+const MISSING_INTERFACE_MARKER: &str = "<interface>";
+
+/// Marker used as `parameter_name` when a non-object (scalar/array/null)
+/// schema mismatches as a whole. See the module doc comment and
+/// `interfaces_tests.rs` for why non-object schemas have no defined "field".
+const WHOLE_SCHEMA_MARKER: &str = "<schema>";
+
+/// Sentinel `actual_value` for an interface or field that is absent from
+/// `extracted`.
+const NOT_PRESENT_MARKER: &str = "<not present>";
+
+/// Marker used as `parameter_name` on the [`compare_schemas`] depth-guard
+/// short-circuit finding, emitted when either schema's nesting depth exceeds
+/// [`MAX_SCHEMA_COMPARISON_DEPTH`]. See the "Security Hardening" section of
+/// `crate::json_guard`'s module doc comment for why this guard exists.
+const DEPTH_EXCEEDED_PARAMETER_MARKER: &str = "<schema exceeds maximum comparison depth>";
+
+/// Fixed marker substituted for a schema value's stringified representation
+/// whenever that schema exceeds [`MAX_SCHEMA_COMPARISON_DEPTH`], so that
+/// `serde_json::Value::to_string()` — recursive over arbitrary nesting depth
+/// — is never invoked on untrusted, potentially adversarial schema content.
+const DEPTH_EXCEEDED_VALUE_MARKER: &str = "<schema exceeds maximum comparison depth>";
+
+/// Validates one registry contract against `extracted`, independently of any
+/// other contract (duplicate `InterfaceId`s in `contracts` are therefore each
+/// validated on their own, per the algorithm's "for each contracts[i]"
+/// wording).
+fn validate_single_contract(
+    contract: &InterfaceDefinition,
+    extracted: &InterfaceMap,
+) -> Vec<ConstraintFinding> {
+    let Some(found) = extracted.entries.iter().find(|e| e.id == contract.id) else {
+        return vec![missing_interface_finding(contract)];
+    };
+    compare_schemas(contract, found)
+}
+
+/// Builds the `Blocking` finding emitted when `contract`'s `InterfaceId` has
+/// no matching entry in `extracted`.
+///
+/// Guards against the same depth-based DoS as [`compare_schemas`]: if
+/// `contract.schema` exceeds [`MAX_SCHEMA_COMPARISON_DEPTH`],
+/// `expected_value` is [`DEPTH_EXCEEDED_VALUE_MARKER`] instead of
+/// `contract.schema.to_string()` (a recursive `serde_json` operation over
+/// untrusted content). `parameter_name` is unaffected and stays
+/// [`MISSING_INTERFACE_MARKER`] — the interface is missing regardless of
+/// schema depth, so that marker's meaning still applies.
+fn missing_interface_finding(contract: &InterfaceDefinition) -> ConstraintFinding {
+    let expected_value = if exceeds_max_depth(&contract.schema, MAX_SCHEMA_COMPARISON_DEPTH) {
+        DEPTH_EXCEEDED_VALUE_MARKER.to_string()
+    } else {
+        contract.schema.to_string()
+    };
+    blocking_finding(
+        contract,
+        &contract.domain,
+        MISSING_INTERFACE_MARKER,
+        expected_value,
+        NOT_PRESENT_MARKER.to_string(),
+    )
+}
+
+/// Constructs a [`DiagnosticSeverity::Blocking`] [`ConstraintFinding`]
+/// attributed to `contract`'s [`InterfaceId`], with `owning_domain` always
+/// `contract.domain` per the registry-is-authoritative rule. Shared by
+/// [`missing_interface_finding`], [`field_mismatch`], and
+/// [`whole_schema_mismatch`], which differ only in which domain violated the
+/// contract and how the mismatch is described.
+fn blocking_finding(
+    contract: &InterfaceDefinition,
+    violating_domain: &DomainServiceName,
+    parameter_name: &str,
+    expected_value: String,
+    actual_value: String,
+) -> ConstraintFinding {
+    ConstraintFinding {
+        interface_id: contract.id.clone(),
+        parameter_name: parameter_name.to_string(),
+        expected_value,
+        actual_value,
+        owning_domain: contract.domain.clone(),
+        violating_domain: violating_domain.clone(),
+        severity: DiagnosticSeverity::Blocking,
+    }
+}
+
+/// Compares `contract.schema` against `found.schema`. For a JSON object,
+/// enumerates the contract's top-level keys and compares each one's value
+/// (a missing top-level key in `found.schema` is reported the same way as a
+/// missing interface). For any other JSON value kind (scalar, array, null),
+/// compares the whole value and emits at most one finding.
+///
+/// ## Depth Guard (Security Hardening)
+///
+/// Before any comparison is attempted, both `contract.schema` and
+/// `found.schema` are checked against [`MAX_SCHEMA_COMPARISON_DEPTH`] via
+/// [`exceeds_max_depth`]. `found.schema` in particular is sourced from an
+/// untrusted domain-service response; the field-by-field and whole-value
+/// comparisons below call `serde_json::Value::to_string()`/`==`, both
+/// implemented recursively over arbitrary nesting depth, so an adversarially
+/// deep schema could otherwise stack-overflow the whole orchestrator process
+/// (see `crate::json_guard`'s module doc comment). If either schema exceeds
+/// the limit, this short-circuits to a single finding carrying
+/// [`DEPTH_EXCEEDED_PARAMETER_MARKER`] and never touches the offending
+/// `Value` with a recursive operation. This check runs unconditionally,
+/// before the equality check, so it also catches the case where both
+/// over-depth schemas would otherwise have compared equal.
+fn compare_schemas(
+    contract: &InterfaceDefinition,
+    found: &InterfaceDefinition,
+) -> Vec<ConstraintFinding> {
+    if exceeds_max_depth(&contract.schema, MAX_SCHEMA_COMPARISON_DEPTH)
+        || exceeds_max_depth(&found.schema, MAX_SCHEMA_COMPARISON_DEPTH)
+    {
+        return vec![depth_exceeded_finding(contract, found)];
+    }
+
+    match &contract.schema {
+        Value::Object(fields) => fields
+            .iter()
+            .filter_map(|(key, expected)| field_mismatch(contract, found, key, expected))
+            .collect(),
+        expected if *expected == found.schema => vec![],
+        expected => vec![whole_schema_mismatch(contract, found, expected)],
+    }
+}
+
+/// Builds the `Blocking` finding emitted when either `contract.schema` or
+/// `found.schema` exceeds [`MAX_SCHEMA_COMPARISON_DEPTH`]. Uses fixed marker
+/// strings for `expected_value`/`actual_value` rather than
+/// `Value::to_string()` — see [`compare_schemas`]'s doc comment.
+fn depth_exceeded_finding(
+    contract: &InterfaceDefinition,
+    found: &InterfaceDefinition,
+) -> ConstraintFinding {
+    blocking_finding(
+        contract,
+        &found.domain,
+        DEPTH_EXCEEDED_PARAMETER_MARKER,
+        DEPTH_EXCEEDED_VALUE_MARKER.to_string(),
+        DEPTH_EXCEEDED_VALUE_MARKER.to_string(),
+    )
+}
+
+/// Returns a finding when the top-level field `key` differs between
+/// `contract.schema` and `found.schema` (or is absent from `found.schema`);
+/// `None` when the field matches.
+fn field_mismatch(
+    contract: &InterfaceDefinition,
+    found: &InterfaceDefinition,
+    key: &str,
+    expected: &Value,
+) -> Option<ConstraintFinding> {
+    let actual = found.schema.get(key);
+    if actual == Some(expected) {
+        return None;
+    }
+    Some(blocking_finding(
+        contract,
+        &found.domain,
+        key,
+        expected.to_string(),
+        actual.map_or_else(|| NOT_PRESENT_MARKER.to_string(), Value::to_string),
+    ))
+}
+
+/// Builds the finding emitted when a non-object `contract.schema` differs
+/// from `found.schema` as a whole.
+fn whole_schema_mismatch(
+    contract: &InterfaceDefinition,
+    found: &InterfaceDefinition,
+    expected: &Value,
+) -> ConstraintFinding {
+    blocking_finding(
+        contract,
+        &found.domain,
+        WHOLE_SCHEMA_MARKER,
+        expected.to_string(),
+        found.schema.to_string(),
+    )
+}
+
+#[cfg(test)]
+#[path = "interfaces_tests.rs"]
+mod tests;

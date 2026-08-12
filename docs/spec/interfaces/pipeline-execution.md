@@ -584,9 +584,16 @@ pub fn aggregate_review_results(
 | Yes | No | `Remediate(blocking_findings)` |
 | Yes | Yes | `Escalate(reason)` |
 
-The `EscalationReason` in `Escalate` has `node_id` set to the Code Generation node ID
-(passed in via `EscalationReason` construction by the caller), and `description` listing
-all blocking findings.
+The `EscalationReason` in `Escalate` has `description` listing all blocking findings
+(pass, severity, and text), `rework_count` set to `remediation_count`, and
+`attempt_count`/`cost_spent` defaulted to zero (`aggregate_review_results` has no input
+for either).
+
+`node_id` is **not** sourced from the Code Generation node. `aggregate_review_results`
+has no `NodeId` parameter and constructs the complete `EscalationReason` itself, so it
+currently sets `node_id` to a fixed placeholder, `"review-gate"`. See
+ADR-0007 for the deferred decision on how the real Code Generation `NodeId` should be
+threaded through once the `nodes` crate wires the Review node's orchestration.
 
 ---
 
@@ -676,6 +683,9 @@ comment).
 
 ### `aggregate_review_results` finding order
 
-Findings passed back in `Remediate` are ordered: Quality findings first, then
-Architecture, then Security. Within each pass, `Blocking` findings precede `Warning`
-findings. The Code Generation node uses this ordering to structure its rework prompt.
+`Remediate` carries only `Blocking` findings — `Warning` and `Informational` findings
+are filtered out and never appear in it (see the Decision Algorithm above). The
+retained `Blocking` findings are ordered: Quality findings first, then Architecture,
+then Security, with no reordering within a pass (source order is preserved) and no
+deduplication. The Code Generation node uses this ordering to structure its rework
+prompt.

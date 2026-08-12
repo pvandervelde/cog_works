@@ -61,6 +61,10 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+// In opentelemetry_sdk 0.28+ (workspace pins 0.32), the concrete tracer
+// provider struct is `SdkTracerProvider` in the `trace` module (renamed from
+// `TracerProvider` in earlier 0.24–0.27 versions). Update this import if the
+// SDK is downgraded.
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
 use pipeline::{BranchName, PipelineName, QueueEventConfig, WebhookConfig};
