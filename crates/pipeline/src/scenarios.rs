@@ -173,3 +173,7 @@ pub fn compute_satisfaction(
 fn group_by_scenario(_results: &[TrajectoryResult]) -> HashMap<String, (u32, u32, bool)> {
     todo!("See docs/spec/interfaces/advanced-features.md §compute_satisfaction internals")
 }
+
+#[cfg(test)]
+#[path = "scenarios_tests.rs"]
+mod tests;
