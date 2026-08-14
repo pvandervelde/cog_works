@@ -96,7 +96,12 @@ const EPSILON: f64 = 1e-9;
 
 /// Builds a [`TrajectoryResult`] with the given fields; `diagnostics` is always
 /// empty (irrelevant to `compute_satisfaction`'s contract).
-fn traj(scenario_id: &str, passed: bool, satisfaction_score: f64, expected_failure: bool) -> TrajectoryResult {
+fn traj(
+    scenario_id: &str,
+    passed: bool,
+    satisfaction_score: f64,
+    expected_failure: bool,
+) -> TrajectoryResult {
     TrajectoryResult {
         scenario_id: scenario_id.to_string(),
         passed,
@@ -254,7 +259,11 @@ fn test_compute_satisfaction_empty_trajectories_returns_vacuous_pass() {
     let result = compute_satisfaction(&[], score(0.9));
 
     assert!(result.per_scenario.is_empty());
-    assert_close(result.overall_score.as_f64(), 1.0, "empty input overall_score");
+    assert_close(
+        result.overall_score.as_f64(),
+        1.0,
+        "empty input overall_score",
+    );
     assert!(result.passed);
     assert!(result.explicit_failure_violations.is_empty());
 }
@@ -541,7 +550,10 @@ fn test_compute_satisfaction_ordering_independence_reversed_input_same_result() 
     for id in ["sc-a", "sc-b", "sc-c"] {
         let f = find(&forward, id);
         let b = find(&backward, id);
-        assert_eq!(f.satisfied_trajectories, b.satisfied_trajectories, "id={id}");
+        assert_eq!(
+            f.satisfied_trajectories, b.satisfied_trajectories,
+            "id={id}"
+        );
         assert_eq!(f.total_trajectories, b.total_trajectories, "id={id}");
         assert_eq!(f.passed, b.passed, "id={id}");
         assert_eq!(f.explicit_failure, b.explicit_failure, "id={id}");
@@ -623,8 +635,16 @@ fn test_compute_satisfaction_single_trajectory_scenario_score_matches_passed_fla
     let passing = compute_satisfaction(&[traj("sc-p", true, 1.0, false)], score(0.5));
     let failing = compute_satisfaction(&[traj("sc-f", false, 0.0, false)], score(0.5));
 
-    assert_close(find(&passing, "sc-p").score.as_f64(), 1.0, "single passing trajectory");
-    assert_close(find(&failing, "sc-f").score.as_f64(), 0.0, "single failing trajectory");
+    assert_close(
+        find(&passing, "sc-p").score.as_f64(),
+        1.0,
+        "single passing trajectory",
+    );
+    assert_close(
+        find(&failing, "sc-f").score.as_f64(),
+        0.0,
+        "single failing trajectory",
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -652,7 +672,9 @@ fn trajectory_strategy() -> impl Strategy<Value = TrajectoryResult> {
 fn oracle_stats(trajectories: &[TrajectoryResult]) -> BTreeMap<String, (u32, u32, bool, bool)> {
     let mut map: BTreeMap<String, (u32, u32, bool, bool)> = BTreeMap::new();
     for t in trajectories {
-        let entry = map.entry(t.scenario_id.clone()).or_insert((0, 0, false, false));
+        let entry = map
+            .entry(t.scenario_id.clone())
+            .or_insert((0, 0, false, false));
         entry.1 += 1;
         if t.passed {
             entry.0 += 1;
