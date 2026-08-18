@@ -45,9 +45,10 @@ pub struct PerScenarioScore {
 
     /// Count of trajectories that met all acceptance criteria.
     ///
-    /// For explicit-failure scenarios this counts trajectories where the
-    /// expected failure was observed (`TrajectoryResult::satisfied == true` in
-    /// combination with `TrajectoryResult::expected_failure == true`).
+    /// This counts every trajectory in the group with `TrajectoryResult::passed
+    /// == true`, whether it is a normal-scenario pass or an observed
+    /// expected-failure pass (`TrajectoryResult::expected_failure == true`
+    /// combined with `passed == true`).
     pub satisfied_trajectories: u32,
 
     /// Total number of trajectories executed for this scenario.

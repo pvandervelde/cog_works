@@ -73,7 +73,7 @@ score calculated from the trajectory results.
 | `total_trajectories` | `u32` | Total number of trajectories executed for this scenario |
 | `score` | `SatisfactionScore` | `satisfied_trajectories / total_trajectories`, clamped to `[0.0, 1.0]` |
 | `passed` | `bool` | `true` when `score >= threshold` passed to [`compute_satisfaction`] |
-| `explicit_failure` | `bool` | `true` if any trajectory was an explicit-failure scenario and passed (i.e. the expected failure was observed) |
+| `explicit_failure` | `bool` | `true` if any trajectory in the group has `expected_failure == true` (presence-based — independent of whether the failure was actually observed; see `explicit_failure_violations` for observation-based tracking) |
 
 ### ScenarioSatisfactionResult
 
