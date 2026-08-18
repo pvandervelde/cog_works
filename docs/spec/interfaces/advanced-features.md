@@ -85,7 +85,7 @@ Aggregated result for all scenarios executed in one simulation pass.
 |-------|------|-------------|
 | `per_scenario` | `Vec<PerScenarioScore>` | Per-scenario breakdown |
 | `overall_score` | `SatisfactionScore` | Unweighted mean of per-scenario scores |
-| `passed` | `bool` | `true` when all non-explicit-failure scenarios pass and all expected-failure scenarios were observed |
+| `passed` | `bool` | `true` when every per-scenario `passed` is `true` (explicit-failure scenarios must also meet their own threshold) **and** `explicit_failure_violations` is empty |
 | `explicit_failure_violations` | `Vec<String>` | Scenario IDs of expected-failure scenarios whose failure was *not* observed |
 
 ### `fn compute_satisfaction`
